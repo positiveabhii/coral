@@ -566,7 +566,10 @@ fn apply_pagination_query_pairs(
             params.push((name, state.page.to_string()));
         }
         ValidatedPaginationMode::Offset(offset) => {
-            params.push((offset.param.clone(), state.offset.to_string()));
+            if let Some(param) = &offset.param {
+                params.push((param.clone(), state.offset.to_string()));
+            }
+            // body_path offsets are applied in apply_pagination_body_fields
         }
     }
 
@@ -609,6 +612,9 @@ fn apply_pagination_body_fields(
     state: &PageState,
     page_size: Option<usize>,
 ) -> Result<()> {
+    let needs_offset_body =
+        matches!(&pagination.mode, ValidatedPaginationMode::Offset(o) if !o.body_path.is_empty());
+
     if body.is_none()
         && pagination
             .page_size
@@ -617,6 +623,7 @@ fn apply_pagination_body_fields(
         && !(matches!(pagination.mode, ValidatedPaginationMode::CursorBody)
             && !table.pagination.cursor_body_path.is_empty()
             && state.cursor.is_some())
+        && !needs_offset_body
     {
         return Ok(());
     }
@@ -630,6 +637,12 @@ fn apply_pagination_body_fields(
         && !spec.body_path.is_empty()
     {
         set_path_value(root, &spec.body_path, json!(page_size))?;
+    }
+
+    if let ValidatedPaginationMode::Offset(offset) = &pagination.mode
+        && !offset.body_path.is_empty()
+    {
+        set_path_value(root, &offset.body_path, json!(state.offset))?;
     }
 
     if matches!(pagination.mode, ValidatedPaginationMode::CursorBody)

@@ -1,0 +1,782 @@
+dsl_version: 3
+name: attio
+version: 0.1.0
+description: CRM platform for tracking people, companies, deals, notes, and tasks
+backend: http
+base_url: https://api.attio.com
+auth:
+  required_secrets:
+    - ATTIO_API_KEY
+  headers:
+    - name: Authorization
+      from: template
+      template: Bearer {{secret.ATTIO_API_KEY}}
+
+tables:
+  # ── Records ──────────────────────────────────────────────────────────────
+  # Attio record values are arrays of attribute objects. Scalar attributes
+  # (text, number) nest their value under an item-level `value` key; typed
+  # attributes (personal-name, email-address) flatten their fields directly
+  # onto the array item. Use first_array_item_path accordingly.
+  #
+  # Pagination: the records query endpoint accepts limit/offset in the POST
+  # body. All record tables page at 500 records per request.
+
+  - name: people
+    description: People records in the workspace
+    request:
+      method: POST
+      path: /v2/objects/people/records/query
+    response:
+      rows_path:
+        - data
+    pagination:
+      mode: offset
+      offset_body_path:
+        - offset
+      offset_start: 0
+      offset_step: 500
+      page_size:
+        default: 500
+        max: 500
+        body_path:
+          - limit
+    columns:
+      - name: record_id
+        type: Utf8
+        nullable: false
+        description: Unique record ID
+        expr:
+          kind: path
+          path:
+            - id
+            - record_id
+      - name: object_id
+        type: Utf8
+        nullable: true
+        description: Object type ID
+        expr:
+          kind: path
+          path:
+            - id
+            - object_id
+      - name: created_at
+        type: Utf8
+        nullable: true
+        description: Record creation timestamp (ISO 8601)
+        expr:
+          kind: path
+          path:
+            - created_at
+      - name: web_url
+        type: Utf8
+        nullable: true
+        description: Link to this record in the Attio UI
+        expr:
+          kind: path
+          path:
+            - web_url
+      - name: full_name
+        type: Utf8
+        nullable: true
+        description: Full name
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - name
+          item_path:
+            - full_name
+      - name: first_name
+        type: Utf8
+        nullable: true
+        description: First name
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - name
+          item_path:
+            - first_name
+      - name: last_name
+        type: Utf8
+        nullable: true
+        description: Last name
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - name
+          item_path:
+            - last_name
+      - name: email_address
+        type: Utf8
+        nullable: true
+        description: Primary email address
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - email_addresses
+          item_path:
+            - email_address
+      - name: phone_number
+        type: Utf8
+        nullable: true
+        description: Primary phone number (E.164 format)
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - phone_numbers
+          item_path:
+            - phone_number
+      - name: job_title
+        type: Utf8
+        nullable: true
+        description: Job title
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - job_title
+          item_path:
+            - value
+      - name: description
+        type: Utf8
+        nullable: true
+        description: Description / bio
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - description
+          item_path:
+            - value
+
+  - name: companies
+    description: Company records in the workspace
+    request:
+      method: POST
+      path: /v2/objects/companies/records/query
+    response:
+      rows_path:
+        - data
+    pagination:
+      mode: offset
+      offset_body_path:
+        - offset
+      offset_start: 0
+      offset_step: 500
+      page_size:
+        default: 500
+        max: 500
+        body_path:
+          - limit
+    columns:
+      - name: record_id
+        type: Utf8
+        nullable: false
+        description: Unique record ID
+        expr:
+          kind: path
+          path:
+            - id
+            - record_id
+      - name: object_id
+        type: Utf8
+        nullable: true
+        description: Object type ID
+        expr:
+          kind: path
+          path:
+            - id
+            - object_id
+      - name: created_at
+        type: Utf8
+        nullable: true
+        description: Record creation timestamp (ISO 8601)
+        expr:
+          kind: path
+          path:
+            - created_at
+      - name: web_url
+        type: Utf8
+        nullable: true
+        description: Link to this record in the Attio UI
+        expr:
+          kind: path
+          path:
+            - web_url
+      - name: name
+        type: Utf8
+        nullable: true
+        description: Company name
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - name
+          item_path:
+            - value
+      - name: domain
+        type: Utf8
+        nullable: true
+        description: Primary website domain
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - domains
+          item_path:
+            - domain
+      - name: description
+        type: Utf8
+        nullable: true
+        description: Company description
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - description
+          item_path:
+            - value
+      - name: employee_count
+        type: Int64
+        nullable: true
+        description: Number of employees
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - employee_count
+          item_path:
+            - value
+      - name: annual_revenue
+        type: Float64
+        nullable: true
+        description: Annual revenue
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - annual_revenue
+          item_path:
+            - value
+      - name: industry
+        type: Utf8
+        nullable: true
+        description: Industry
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - industry
+          item_path:
+            - value
+      - name: location_city
+        type: Utf8
+        nullable: true
+        description: City
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - primary_location
+          item_path:
+            - city
+      - name: location_country
+        type: Utf8
+        nullable: true
+        description: Country code
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - primary_location
+          item_path:
+            - country_code
+
+  - name: deals
+    description: Deal records in the workspace
+    request:
+      method: POST
+      path: /v2/objects/deals/records/query
+    response:
+      rows_path:
+        - data
+    pagination:
+      mode: offset
+      offset_body_path:
+        - offset
+      offset_start: 0
+      offset_step: 500
+      page_size:
+        default: 500
+        max: 500
+        body_path:
+          - limit
+    columns:
+      - name: record_id
+        type: Utf8
+        nullable: false
+        description: Unique record ID
+        expr:
+          kind: path
+          path:
+            - id
+            - record_id
+      - name: created_at
+        type: Utf8
+        nullable: true
+        description: Record creation timestamp (ISO 8601)
+        expr:
+          kind: path
+          path:
+            - created_at
+      - name: web_url
+        type: Utf8
+        nullable: true
+        description: Link to this record in the Attio UI
+        expr:
+          kind: path
+          path:
+            - web_url
+      - name: name
+        type: Utf8
+        nullable: true
+        description: Deal name
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - name
+          item_path:
+            - value
+      - name: status
+        type: Utf8
+        nullable: true
+        description: Deal status (e.g. open, won, lost)
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - status
+          item_path:
+            - status
+      - name: value_amount
+        type: Float64
+        nullable: true
+        description: Deal value amount
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - value
+          item_path:
+            - value
+            - currency_value
+      - name: value_currency
+        type: Utf8
+        nullable: true
+        description: Deal value currency code (ISO 4217)
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - value
+          item_path:
+            - value
+            - currency_code
+      - name: close_date
+        type: Utf8
+        nullable: true
+        description: Expected close date
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - close_date
+          item_path:
+            - value
+      - name: owner_id
+        type: Utf8
+        nullable: true
+        description: Owner workspace member ID
+        expr:
+          kind: first_array_item_path
+          path:
+            - values
+            - owner
+          item_path:
+            - referenced_actor_id
+
+  # ── Activity ──────────────────────────────────────────────────────────────
+
+  - name: notes
+    description: Notes attached to records in the workspace
+    request:
+      method: GET
+      path: /v2/notes
+    response:
+      rows_path:
+        - data
+    pagination:
+      mode: offset
+      page_size:
+        default: 500
+        max: 500
+        query_param: limit
+      offset_param: offset
+      offset_start: 0
+    columns:
+      - name: note_id
+        type: Utf8
+        nullable: false
+        description: Unique note ID
+        expr:
+          kind: path
+          path:
+            - id
+            - note_id
+      - name: parent_object
+        type: Utf8
+        nullable: true
+        description: Slug of the parent object type (e.g. people, companies)
+        expr:
+          kind: path
+          path:
+            - parent_object
+      - name: parent_record_id
+        type: Utf8
+        nullable: true
+        description: ID of the record this note is attached to
+        expr:
+          kind: path
+          path:
+            - parent_record_id
+      - name: title
+        type: Utf8
+        nullable: true
+        description: Note title
+        expr:
+          kind: path
+          path:
+            - title
+      - name: content_plaintext
+        type: Utf8
+        nullable: true
+        description: Note body as plain text
+        expr:
+          kind: path
+          path:
+            - content_plaintext
+      - name: created_at
+        type: Utf8
+        nullable: true
+        description: Creation timestamp (ISO 8601)
+        expr:
+          kind: path
+          path:
+            - created_at
+      - name: created_by_actor_type
+        type: Utf8
+        nullable: true
+        description: Type of actor who created the note
+        expr:
+          kind: path
+          path:
+            - created_by_actor
+            - type
+      - name: created_by_actor_id
+        type: Utf8
+        nullable: true
+        description: ID of actor who created the note
+        expr:
+          kind: path
+          path:
+            - created_by_actor
+            - id
+
+  - name: tasks
+    description: Tasks in the workspace
+    request:
+      method: GET
+      path: /v2/tasks
+    response:
+      rows_path:
+        - data
+    pagination:
+      mode: offset
+      page_size:
+        default: 500
+        max: 500
+        query_param: limit
+      offset_param: offset
+      offset_start: 0
+    columns:
+      - name: task_id
+        type: Utf8
+        nullable: false
+        description: Unique task ID
+        expr:
+          kind: path
+          path:
+            - id
+            - task_id
+      - name: content_plaintext
+        type: Utf8
+        nullable: true
+        description: Task description as plain text
+        expr:
+          kind: path
+          path:
+            - content_plaintext
+      - name: is_completed
+        type: Boolean
+        nullable: false
+        description: Whether the task is completed
+        expr:
+          kind: path
+          path:
+            - is_completed
+      - name: deadline_at
+        type: Utf8
+        nullable: true
+        description: Task deadline (ISO 8601), null if no deadline
+        expr:
+          kind: path
+          path:
+            - deadline_at
+      - name: created_at
+        type: Utf8
+        nullable: true
+        description: Creation timestamp (ISO 8601)
+        expr:
+          kind: path
+          path:
+            - created_at
+      - name: created_by_actor_type
+        type: Utf8
+        nullable: true
+        description: Type of actor who created the task
+        expr:
+          kind: path
+          path:
+            - created_by_actor
+            - type
+      - name: created_by_actor_id
+        type: Utf8
+        nullable: true
+        description: ID of actor who created the task
+        expr:
+          kind: path
+          path:
+            - created_by_actor
+            - id
+
+  - name: list_entries
+    description: Entries in an Attio list. Requires a list_id filter.
+    filters:
+      - name: list_id
+        required: true
+        mode: equality
+    request:
+      method: POST
+      path: /v2/lists/{{filter.list_id}}/entries/query
+    response:
+      rows_path:
+        - data
+    pagination:
+      mode: offset
+      offset_body_path:
+        - offset
+      offset_start: 0
+      offset_step: 500
+      page_size:
+        default: 500
+        max: 500
+        body_path:
+          - limit
+    columns:
+      - name: entry_id
+        type: Utf8
+        nullable: false
+        description: Unique entry ID
+        expr:
+          kind: path
+          path:
+            - id
+            - entry_id
+      - name: list_id
+        type: Utf8
+        nullable: false
+        description: List this entry belongs to
+        expr:
+          kind: from_filter
+          key: list_id
+      - name: record_id
+        type: Utf8
+        nullable: true
+        description: ID of the parent record (company, person, etc.)
+        expr:
+          kind: path
+          path:
+            - parent_record_id
+      - name: parent_object
+        type: Utf8
+        nullable: true
+        description: Object type of the parent record (e.g. companies, people)
+        expr:
+          kind: path
+          path:
+            - parent_object
+      - name: stage
+        type: Utf8
+        nullable: true
+        description: Stage/status title for this entry
+        expr:
+          kind: first_array_item_path
+          path:
+            - entry_values
+            - stage
+          item_path:
+            - status
+            - title
+      - name: created_at
+        type: Utf8
+        nullable: true
+        description: When this entry was added to the list
+        expr:
+          kind: path
+          path:
+            - created_at
+
+  # ── Workspace metadata ────────────────────────────────────────────────────
+
+  - name: lists
+    description: Lists configured in the workspace
+    request:
+      method: GET
+      path: /v2/lists
+    response:
+      rows_path:
+        - data
+    columns:
+      - name: list_id
+        type: Utf8
+        nullable: false
+        description: Unique list ID
+        expr:
+          kind: path
+          path:
+            - id
+            - list_id
+      - name: api_slug
+        type: Utf8
+        nullable: false
+        description: API slug used to reference this list
+        expr:
+          kind: path
+          path:
+            - api_slug
+      - name: name
+        type: Utf8
+        nullable: false
+        description: List display name
+        expr:
+          kind: path
+          path:
+            - name
+      - name: parent_object
+        type: Utf8
+        nullable: true
+        description: Parent object slugs (comma-separated)
+        expr:
+          kind: join_array
+          path:
+            - parent_object
+          separator: ", "
+      - name: workspace_access
+        type: Utf8
+        nullable: true
+        description: Workspace-level access (full-access, read-and-write, read-only)
+        expr:
+          kind: path
+          path:
+            - workspace_access
+      - name: created_at
+        type: Utf8
+        nullable: false
+        description: Creation timestamp (ISO 8601)
+        expr:
+          kind: path
+          path:
+            - created_at
+
+  - name: workspace_members
+    description: Members of the workspace
+    request:
+      method: GET
+      path: /v2/workspace_members
+    response:
+      rows_path:
+        - data
+    columns:
+      - name: workspace_member_id
+        type: Utf8
+        nullable: false
+        description: Unique workspace member ID
+        expr:
+          kind: path
+          path:
+            - id
+            - workspace_member_id
+      - name: first_name
+        type: Utf8
+        nullable: true
+        description: First name
+        expr:
+          kind: path
+          path:
+            - first_name
+      - name: last_name
+        type: Utf8
+        nullable: true
+        description: Last name
+        expr:
+          kind: path
+          path:
+            - last_name
+      - name: email_address
+        type: Utf8
+        nullable: false
+        description: Email address
+        expr:
+          kind: path
+          path:
+            - email_address
+      - name: access_level
+        type: Utf8
+        nullable: false
+        description: Access level (admin, member, suspended)
+        expr:
+          kind: path
+          path:
+            - access_level
+      - name: avatar_url
+        type: Utf8
+        nullable: true
+        description: Avatar image URL
+        expr:
+          kind: path
+          path:
+            - avatar_url
+      - name: created_at
+        type: Utf8
+        nullable: true
+        description: Creation timestamp (ISO 8601)
+        expr:
+          kind: path
+          path:
+            - created_at

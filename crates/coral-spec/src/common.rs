@@ -257,6 +257,8 @@ pub struct PaginationSpec {
     #[serde(default)]
     pub offset_param: Option<String>,
     #[serde(default)]
+    pub offset_body_path: Vec<String>,
+    #[serde(default)]
     pub offset_start: i64,
     #[serde(default)]
     pub offset_step: Option<i64>,
@@ -278,6 +280,7 @@ impl Default for PaginationSpec {
             page_start: 0,
             page_step: default_page_step(),
             offset_param: None,
+            offset_body_path: Vec::new(),
             offset_start: 0,
             offset_step: None,
             link_header_require_results: false,
@@ -309,7 +312,10 @@ pub enum ValidatedPaginationMode {
 /// Validated typed offset-pagination settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OffsetPagination {
-    pub param: String,
+    /// Query-parameter name for the offset (mutually exclusive with `body_path`).
+    pub param: Option<String>,
+    /// JSON body path for the offset (mutually exclusive with `param`).
+    pub body_path: Vec<String>,
     pub start: i64,
     step: OffsetStep,
 }
@@ -385,11 +391,18 @@ impl PaginationSpec {
                 Ok(ValidatedPaginationMode::Page)
             }
             PaginationMode::Offset => {
-                let param = self.offset_param.clone().ok_or_else(|| {
-                    ManifestError::validation(format!(
-                        "{schema}.{table} pagination.mode=offset requires offset_param"
-                    ))
-                })?;
+                let has_param = self.offset_param.is_some();
+                let has_body = !self.offset_body_path.is_empty();
+                if !has_param && !has_body {
+                    return Err(ManifestError::validation(format!(
+                        "{schema}.{table} pagination.mode=offset requires offset_param or offset_body_path"
+                    )));
+                }
+                if has_param && has_body {
+                    return Err(ManifestError::validation(format!(
+                        "{schema}.{table} pagination.mode=offset cannot define both offset_param and offset_body_path"
+                    )));
+                }
                 let step = match self.offset_step {
                     Some(offset_step) if offset_step > 0 => OffsetStep::Explicit(offset_step),
                     Some(_) => {
@@ -405,7 +418,8 @@ impl PaginationSpec {
                     }
                 };
                 Ok(ValidatedPaginationMode::Offset(OffsetPagination {
-                    param,
+                    param: self.offset_param.clone(),
+                    body_path: self.offset_body_path.clone(),
                     start: self.offset_start,
                     step,
                 }))
@@ -779,7 +793,7 @@ mod tests {
             panic!("expected typed offset pagination");
         };
 
-        assert_eq!(offset.param, "offset");
+        assert_eq!(offset.param, Some("offset".to_string()));
         assert_eq!(offset.start, 50);
         assert_eq!(offset.resolve_step(None, "demo", "items").unwrap(), 25);
         assert!(validated.page_size.is_none());
@@ -804,7 +818,7 @@ mod tests {
             panic!("expected typed offset pagination");
         };
 
-        assert_eq!(offset.param, "start");
+        assert_eq!(offset.param, Some("start".to_string()));
         assert_eq!(offset.start, 0);
         assert_eq!(offset.resolve_step(Some(20), "demo", "items").unwrap(), 20);
         assert_eq!(validated.page_size.unwrap().default, 20);
