@@ -42,11 +42,13 @@ tables:
     allow_404_empty: false
     row_strategy: direct
   pagination:
-    mode: auto
-    page_start: 0
-    page_step: 1
+    mode: offset
+    offset_param: offset
+    page_size:
+      default: 100
+      max: 100
+      query_param: limit
     offset_start: 0
-    link_header_require_results: false
   columns:
   - name: _create_in_folder
     type: Utf8
@@ -446,11 +448,13 @@ tables:
     allow_404_empty: false
     row_strategy: direct
   pagination:
-    mode: auto
-    page_start: 0
-    page_step: 1
+    mode: offset
+    offset_param: offset
+    page_size:
+      default: 100
+      max: 100
+      query_param: limit
     offset_start: 0
-    link_header_require_results: false
   columns:
   - name: condition
     type: Utf8
@@ -12299,11 +12303,13 @@ tables:
     allow_404_empty: false
     row_strategy: direct
   pagination:
-    mode: auto
-    page_start: 0
-    page_step: 1
+    mode: offset
+    offset_param: offset
+    page_size:
+      default: 100
+      max: 100
+      query_param: limit
     offset_start: 0
-    link_header_require_results: false
   columns:
   - name: category
     type: Utf8
@@ -21605,11 +21611,13 @@ tables:
     allow_404_empty: false
     row_strategy: direct
   pagination:
-    mode: auto
-    page_start: 0
-    page_step: 1
+    mode: offset
+    offset_param: offset
+    page_size:
+      default: 100
+      max: 100
+      query_param: limit
     offset_start: 0
-    link_header_require_results: false
   columns:
   - name: category
     type: Utf8
