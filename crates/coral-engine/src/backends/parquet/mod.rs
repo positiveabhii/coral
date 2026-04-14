@@ -290,8 +290,12 @@ fn build_object_store(
 
             let mut builder = AmazonS3Builder::new().with_bucket_name(bucket);
 
-            if let Some(region) = region {
-                builder = builder.with_region(region);
+            // Apply explicit region from source secrets, then fall back to env var.
+            let effective_region = region
+                .or_else(|| std::env::var("AWS_DEFAULT_REGION").ok())
+                .or_else(|| std::env::var("AWS_REGION").ok());
+            if let Some(r) = effective_region {
+                builder = builder.with_region(r);
             }
 
             if let (Some(access_key_id), Some(secret_access_key)) =
@@ -301,9 +305,19 @@ fn build_object_store(
                     .with_access_key_id(access_key_id)
                     .with_secret_access_key(secret_access_key);
             } else if !use_instance_profile {
-                return Err(DataFusionError::Plan(format!(
-                    "parquet source '{source_schema}' must define aws_access_key_id and aws_secret_access_key, or set use_instance_profile"
-                )));
+                // Fall back to environment variable credentials (env vars, IRSA, etc.)
+                // so callers don't need to configure credentials explicitly when the
+                // standard AWS credential chain is available.
+                if let Ok(key_id) = std::env::var("AWS_ACCESS_KEY_ID") {
+                    builder = builder.with_access_key_id(key_id);
+                    if let Ok(secret) = std::env::var("AWS_SECRET_ACCESS_KEY") {
+                        builder = builder.with_secret_access_key(secret);
+                    }
+                    if let Ok(token) = std::env::var("AWS_SESSION_TOKEN") {
+                        builder = builder.with_token(token);
+                    }
+                }
+                // If no env credentials found, object_store will try instance metadata/IRSA.
             }
 
             if let Some(session_token) = session_token {
