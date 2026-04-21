@@ -43,6 +43,7 @@ pub(crate) use server::CoralMcpServer;
 /// lifecycle.
 pub async fn run_stdio_with_client(app: AppClient) -> Result<(), McpError> {
     let server = CoralMcpServer::new(&app)
+        .await
         .serve((tokio::io::stdin(), tokio::io::stdout()))
         .await?;
     let _ = server.waiting().await?;

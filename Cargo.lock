@@ -824,6 +824,7 @@ dependencies = [
  "coral-mcp",
  "coral-spec",
  "dialoguer",
+ "directories",
  "rmcp",
  "serde_json",
  "tempfile",

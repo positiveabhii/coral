@@ -5,11 +5,32 @@ use coral_api::v1::{Source, Table};
 use rmcp::model::{AnnotateAble, RawResource, Resource};
 use serde_json::{Value, json};
 
-static INITIAL_INSTRUCTIONS: &str = "You are connected to Coral. Read `coral://guide` for query patterns, use `list_tables` to inspect queryable tables, and use `sql` against `coral.tables` and `coral.columns` for discovery.";
+static FALLBACK_INSTRUCTIONS: &str = "You are connected to Coral. Read `coral://guide` for query patterns, use `list_tables` to inspect queryable tables, and use `sql` against `coral.tables` and `coral.columns` for discovery.";
 static GUIDE_TEMPLATE: &str = include_str!("../guide_template.md");
 
-pub(crate) fn initial_instructions() -> &'static str {
-    INITIAL_INSTRUCTIONS
+pub(crate) fn fallback_instructions() -> &'static str {
+    FALLBACK_INSTRUCTIONS
+}
+
+pub(crate) fn build_initial_instructions(sources: &[Source]) -> String {
+    let names = source_names(sources);
+    if names.is_empty() {
+        return "You are connected to Coral. No sources are currently configured — run `coral sources add <type>` to add one. Read `coral://guide` for query patterns.".to_string();
+    }
+    let list = names.join(", ");
+    format!(
+        "You are connected to Coral with {count} configured source(s): {list}. Use `list_tables` to discover queryable tables across these sources, and `sql` to run read-only queries. Read `coral://guide` for query patterns.",
+        count = names.len()
+    )
+}
+
+pub(super) fn source_names(sources: &[Source]) -> Vec<&str> {
+    sources
+        .iter()
+        .map(|source| source.name.as_str())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 pub(crate) fn guide_resource(sources: &[Source], tables: &[Table]) -> Resource {
@@ -136,7 +157,7 @@ fn first_visible_table(tables: &[Table]) -> Option<(&str, &str)> {
 mod tests {
     use coral_api::v1::{Source, Table, Workspace};
 
-    use super::guide_resource_content;
+    use super::{build_initial_instructions, guide_resource_content};
 
     fn source(name: &str) -> Source {
         Source {
@@ -184,5 +205,23 @@ mod tests {
         assert!(content.contains("Visible source schemas:"));
         assert!(content.contains("- slack"));
         assert!(content.contains("Fully qualify tables in SQL, for example `slack.messages`."));
+    }
+
+    #[test]
+    fn initial_instructions_list_configured_sources() {
+        let instructions =
+            build_initial_instructions(&[source("linear"), source("slack"), source("github")]);
+        assert!(instructions.contains("3 configured source(s)"));
+        assert!(instructions.contains("github, linear, slack"));
+        assert!(instructions.contains("`list_tables`"));
+        assert!(instructions.contains("`sql`"));
+    }
+
+    #[test]
+    fn initial_instructions_handle_empty_sources_with_onboarding_hint() {
+        let instructions = build_initial_instructions(&[]);
+        assert!(instructions.contains("No sources are currently configured"));
+        assert!(instructions.contains("coral sources add"));
+        assert!(!instructions.contains("configured source(s):"));
     }
 }

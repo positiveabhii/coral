@@ -7,7 +7,7 @@ use rmcp::{
 };
 use serde_json::{Map, Value, json};
 
-use super::resources::{visible_schema_count, visible_table_count};
+use super::resources::{source_names, visible_schema_count, visible_table_count};
 
 pub(crate) fn sql_tool(sources: &[Source], tables: &[Table]) -> Tool {
     Tool::new(
@@ -33,10 +33,10 @@ pub(crate) fn sql_tool(sources: &[Source], tables: &[Table]) -> Tool {
     )
 }
 
-pub(crate) fn list_tables_tool(tables: &[Table]) -> Tool {
+pub(crate) fn list_tables_tool(sources: &[Source], tables: &[Table]) -> Tool {
     Tool::new(
         "list_tables",
-        list_tables_description(tables),
+        list_tables_description(sources, tables),
         json_object_schema(&json!({
             "type": "object",
             "properties": {}
@@ -75,24 +75,34 @@ pub(crate) fn build_tool_result(value: Value) -> Result<CallToolResult, ErrorDat
 }
 
 fn sql_tool_description(sources: &[Source], tables: &[Table]) -> String {
+    let source_clause = sources_clause(sources);
     if tables.is_empty() {
         format!(
-            "Run a SQL query against local Coral sources. {} configured source(s), but no visible SQL schemas are currently available.",
-            sources.len()
+            "Run a SQL query against local Coral sources. {source_clause}, but no visible SQL schemas are currently available."
         )
     } else {
         format!(
-            "Run a SQL query against local Coral sources. {} visible SQL schema(s) are currently available.",
+            "Run a SQL query against local Coral sources. {source_clause}. {} visible SQL schema(s) are currently available.",
             visible_schema_count(tables)
         )
     }
 }
 
-fn list_tables_description(tables: &[Table]) -> String {
+fn list_tables_description(sources: &[Source], tables: &[Table]) -> String {
     format!(
-        "List queryable fully qualified tables. {} table(s) are currently visible.",
+        "List queryable fully qualified tables. {}. {} table(s) are currently visible.",
+        sources_clause(sources),
         visible_table_count(tables)
     )
+}
+
+fn sources_clause(sources: &[Source]) -> String {
+    let names = source_names(sources);
+    if names.is_empty() {
+        "0 configured source(s)".to_string()
+    } else {
+        format!("{} configured source(s): {}", names.len(), names.join(", "))
+    }
 }
 
 fn json_object_schema(value: &Value) -> Arc<Map<String, Value>> {

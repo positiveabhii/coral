@@ -18,24 +18,30 @@ use serde_json::Value;
 use tonic::Request;
 
 use crate::surface::{
-    build_tool_result, guide_resource, guide_resource_content, initial_instructions,
-    internal_status, list_tables_tool, list_tables_value, required_string_argument, sql_tool,
-    status_to_error_data, tables_resource, tables_resource_content, tool_error_from_status,
-    tool_error_result,
+    build_initial_instructions, build_tool_result, fallback_instructions, guide_resource,
+    guide_resource_content, internal_status, list_tables_tool, list_tables_value,
+    required_string_argument, sql_tool, status_to_error_data, tables_resource,
+    tables_resource_content, tool_error_from_status, tool_error_result,
 };
 
 #[derive(Clone)]
 pub(crate) struct CoralMcpServer {
     source_client: SourceClient,
     query_client: QueryClient,
+    instructions: String,
 }
 
 impl CoralMcpServer {
-    pub(crate) fn new(app: &AppClient) -> Self {
-        Self {
+    pub(crate) async fn new(app: &AppClient) -> Self {
+        let mut instance = Self {
             source_client: app.source_client(),
             query_client: app.query_client(),
+            instructions: fallback_instructions().to_string(),
+        };
+        if let Ok(sources) = instance.load_sources().await {
+            instance.instructions = build_initial_instructions(&sources);
         }
+        instance
     }
 
     async fn load_sources(&self) -> Result<Vec<Source>, tonic::Status> {
@@ -95,7 +101,7 @@ impl ServerHandler for CoralMcpServer {
                 .build(),
         )
         .with_server_info(Implementation::new("coral", env!("CARGO_PKG_VERSION")))
-        .with_instructions(initial_instructions())
+        .with_instructions(self.instructions.as_str())
     }
 
     async fn list_tools(
@@ -109,7 +115,7 @@ impl ServerHandler for CoralMcpServer {
             .map_err(|status| status_to_error_data(&status))?;
         Ok(ListToolsResult::with_all_items(vec![
             sql_tool(&sources, &tables),
-            list_tables_tool(&tables),
+            list_tables_tool(&sources, &tables),
         ]))
     }
 

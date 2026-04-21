@@ -55,20 +55,18 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             .collect::<Vec<_>>(),
         vec!["sql", "list_tables"]
     );
-    assert!(
-        tools[0]
-            .description
-            .as_deref()
-            .expect("sql description")
-            .contains("1 visible SQL schema(s) are currently available")
-    );
-    assert!(
-        tools[1]
-            .description
-            .as_deref()
-            .expect("list_tables description")
-            .contains("1 table(s) are currently visible")
-    );
+    let sql_description = tools[0]
+        .description
+        .as_deref()
+        .expect("sql description");
+    assert!(sql_description.contains("1 visible SQL schema(s) are currently available"));
+    assert!(sql_description.contains("2 configured source(s): github, jira"));
+    let list_tables_description = tools[1]
+        .description
+        .as_deref()
+        .expect("list_tables description");
+    assert!(list_tables_description.contains("1 table(s) are currently visible"));
+    assert!(list_tables_description.contains("2 configured source(s): github, jira"));
 
     let resources = client.list_all_resources().await?;
     assert_eq!(

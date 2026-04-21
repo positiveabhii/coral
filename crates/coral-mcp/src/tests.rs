@@ -109,7 +109,10 @@ async fn start_session(temp: &TempDir) -> TestSession {
 
     let (server_transport, client_transport) = tokio::io::duplex(4096);
     let mcp_server_task = tokio::spawn(async move {
-        let server = CoralMcpServer::new(&app).serve(server_transport).await?;
+        let server = CoralMcpServer::new(&app)
+            .await
+            .serve(server_transport)
+            .await?;
         server.waiting().await?;
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     });
@@ -191,20 +194,18 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     add_demo_source(&mut session.source_client, manifest_yaml).await;
 
     let updated_tools = client.list_all_tools().await.expect("updated tools");
-    assert!(
-        updated_tools[0]
-            .description
-            .as_deref()
-            .expect("sql description")
-            .contains("1 visible SQL schema(s) are currently available")
-    );
-    assert!(
-        updated_tools[1]
-            .description
-            .as_deref()
-            .expect("tables description")
-            .contains("1 table(s) are currently visible")
-    );
+    let updated_sql_description = updated_tools[0]
+        .description
+        .as_deref()
+        .expect("sql description");
+    assert!(updated_sql_description.contains("1 visible SQL schema(s) are currently available"));
+    assert!(updated_sql_description.contains("1 configured source(s): local_messages"));
+    let updated_list_tables_description = updated_tools[1]
+        .description
+        .as_deref()
+        .expect("tables description");
+    assert!(updated_list_tables_description.contains("1 table(s) are currently visible"));
+    assert!(updated_list_tables_description.contains("1 configured source(s): local_messages"));
 
     let updated_resources = client
         .list_all_resources()

@@ -10,6 +10,7 @@ mod bootstrap;
 mod branding;
 mod onboard;
 mod query_error;
+mod skill;
 mod source_ops;
 
 use std::path::PathBuf;
@@ -43,6 +44,8 @@ enum Command {
     Onboard,
     /// Start the MCP server over stdio
     McpStdio,
+    /// Install or manage the Coral Claude Code skill
+    Skill(skill::SkillArgs),
 }
 
 #[derive(Debug, Args)]
@@ -109,9 +112,16 @@ enum OutputFormat {
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     let cli = Cli::parse();
+    match cli.command {
+        Command::Skill(args) => skill::run(&args),
+        command => run_with_bootstrap(command).await,
+    }
+}
+
+async fn run_with_bootstrap(command: Command) -> Result<(), anyhow::Error> {
     let bootstrap = bootstrap().await?;
 
-    match cli.command {
+    match command {
         Command::Sql(args) => {
             let response = match bootstrap
                 .app
@@ -182,6 +192,7 @@ async fn main() -> Result<(), anyhow::Error> {
         Command::McpStdio => {
             coral_mcp::run_stdio_with_client(bootstrap.app).await?;
         }
+        Command::Skill(_) => unreachable!("skill is dispatched before bootstrap"),
     }
 
     Ok(())
