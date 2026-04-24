@@ -13,7 +13,7 @@ use tonic::{Request, Response, Status};
 use crate::bootstrap::app_status;
 use crate::query::manager::QueryManager;
 use crate::sources::SourceName;
-use crate::sources::manager::SourceManager;
+use crate::sources::manager::{CreateSourceBindings, SourceManager};
 use crate::sources::model::{
     CandidateSource, CandidateSourceInput, CandidateSourceInputKind, InstalledSource, SourceOrigin,
 };
@@ -109,9 +109,10 @@ impl SourceServiceApi for SourceService {
         let request = request.into_inner();
         let workspace_name = workspace_name_from_proto(request.workspace.as_ref())?;
         let bundled_name = SourceName::parse(&request.name).map_err(app_status)?;
+        let bindings = create_source_bindings_from_proto(request.variables, request.secrets)?;
         let installed = self
             .sources
-            .create_bundled_source(&workspace_name, &bundled_name, &request)
+            .create_bundled_source(&workspace_name, &bundled_name, bindings)
             .map_err(app_status)?;
         Ok(Response::new(installed_source_to_proto(
             &workspace_name,
@@ -125,9 +126,10 @@ impl SourceServiceApi for SourceService {
     ) -> Result<Response<Source>, Status> {
         let request = request.into_inner();
         let workspace_name = workspace_name_from_proto(request.workspace.as_ref())?;
+        let bindings = create_source_bindings_from_proto(request.variables, request.secrets)?;
         let installed = self
             .sources
-            .import_source(&workspace_name, &request)
+            .import_source(&workspace_name, &request.manifest_yaml, bindings)
             .map_err(app_status)?;
         Ok(Response::new(installed_source_to_proto(
             &workspace_name,
@@ -223,6 +225,19 @@ fn candidate_source_input_to_proto(input: CandidateSourceInput) -> SourceInputSp
         default_value: input.default_value,
         hint: input.hint.unwrap_or_default(),
     }
+}
+
+fn create_source_bindings_from_proto(
+    variables: Vec<SourceVariable>,
+    secrets: Vec<SourceSecret>,
+) -> Result<CreateSourceBindings, Status> {
+    CreateSourceBindings::new(
+        variables
+            .into_iter()
+            .map(|variable| (variable.key, variable.value)),
+        secrets.into_iter().map(|secret| (secret.key, secret.value)),
+    )
+    .map_err(app_status)
 }
 
 fn proto_candidate_input_kind(kind: CandidateSourceInputKind) -> SourceInputKind {

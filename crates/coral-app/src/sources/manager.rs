@@ -2,10 +2,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use coral_api::v1::{
-    CreateBundledSourceRequest, ImportSourceRequest, SourceSecret, SourceVariable,
-};
-
 use crate::bootstrap::AppError;
 use crate::sources::SourceName;
 use crate::sources::catalog::{
@@ -23,6 +19,28 @@ pub(crate) struct SourceManager {
     config_store: ConfigStore,
     secret_store: SecretStore,
     layout: AppStateLayout,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CreateSourceBindings {
+    variables: BTreeMap<String, String>,
+    secrets: BTreeMap<String, String>,
+}
+
+impl CreateSourceBindings {
+    pub(crate) fn new(
+        variables: impl IntoIterator<Item = (String, String)>,
+        secrets: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<Self, AppError> {
+        Ok(Self {
+            variables: collect_unique_bindings(
+                "source variable key",
+                "source variable",
+                variables,
+            )?,
+            secrets: collect_unique_bindings("source secret key", "source secret", secrets)?,
+        })
+    }
 }
 
 struct ValidatedBindings {
@@ -120,11 +138,11 @@ impl SourceManager {
         &self,
         workspace_name: &WorkspaceName,
         bundled_name: &SourceName,
-        request: &CreateBundledSourceRequest,
+        bindings: CreateSourceBindings,
     ) -> Result<InstalledSource, AppError> {
         let bundled = load_bundled_source(bundled_name)?;
         let candidate = self.describe_bundled_source(workspace_name, &bundled.manifest_yaml)?;
-        let bindings = validate_bindings(&candidate, &request.variables, &request.secrets)?;
+        let bindings = validate_bindings(&candidate, bindings)?;
         self.persist_source(
             workspace_name,
             PersistSourceRequest {
@@ -139,17 +157,17 @@ impl SourceManager {
     pub(crate) fn import_source(
         &self,
         workspace_name: &WorkspaceName,
-        request: &ImportSourceRequest,
+        manifest_yaml: &str,
+        bindings: CreateSourceBindings,
     ) -> Result<InstalledSource, AppError> {
-        let mut candidate =
-            describe_manifest(&request.manifest_yaml, SourceOrigin::Imported, false)?;
+        let mut candidate = describe_manifest(manifest_yaml, SourceOrigin::Imported, false)?;
         candidate.installed = self.source_exists(workspace_name, &candidate.name)?;
-        let bindings = validate_bindings(&candidate, &request.variables, &request.secrets)?;
+        let bindings = validate_bindings(&candidate, bindings)?;
         self.persist_source(
             workspace_name,
             PersistSourceRequest {
                 candidate: &candidate,
-                manifest_yaml: Some(&request.manifest_yaml),
+                manifest_yaml: Some(manifest_yaml),
                 bindings,
                 origin: SourceOrigin::Imported,
             },
@@ -373,11 +391,10 @@ impl SourceManager {
 
 fn validate_bindings(
     candidate: &CandidateSource,
-    variables: &[SourceVariable],
-    secrets: &[SourceSecret],
+    bindings: CreateSourceBindings,
 ) -> Result<ValidatedBindings, AppError> {
-    let mut variable_values = collect_unique_variables(variables)?;
-    let secret_values = collect_unique_secrets(secrets)?;
+    let mut variable_values = bindings.variables;
+    let secret_values = bindings.secrets;
     let expected_variables = candidate
         .inputs
         .iter()
@@ -443,28 +460,17 @@ fn validate_bindings(
     })
 }
 
-fn collect_unique_variables(
-    variables: &[SourceVariable],
+fn collect_unique_bindings(
+    key_label: &str,
+    binding_label: &str,
+    bindings: impl IntoIterator<Item = (String, String)>,
 ) -> Result<BTreeMap<String, String>, AppError> {
     let mut values = BTreeMap::new();
-    for variable in variables {
-        let key = normalize_binding_key("source variable key", &variable.key)?;
-        if values.insert(key.clone(), variable.value.clone()).is_some() {
+    for (key, value) in bindings {
+        let key = normalize_binding_key(key_label, &key)?;
+        if values.insert(key.clone(), value).is_some() {
             return Err(AppError::InvalidInput(format!(
-                "source variable '{key}' is repeated"
-            )));
-        }
-    }
-    Ok(values)
-}
-
-fn collect_unique_secrets(secrets: &[SourceSecret]) -> Result<BTreeMap<String, String>, AppError> {
-    let mut values = BTreeMap::new();
-    for secret in secrets {
-        let key = normalize_binding_key("source secret key", &secret.key)?;
-        if values.insert(key.clone(), secret.value.clone()).is_some() {
-            return Err(AppError::InvalidInput(format!(
-                "source secret '{key}' is repeated"
+                "{binding_label} '{key}' is repeated"
             )));
         }
     }
@@ -515,13 +521,11 @@ fn cleanup_empty_parent(root: &std::path::Path, path: Option<&std::path::Path>) 
 
 #[cfg(test)]
 mod tests {
-    use coral_api::v1::{ImportSourceRequest, SourceSecret, SourceVariable};
     use tempfile::TempDir;
 
-    use super::{SourceManager, normalize_binding_key};
+    use super::{CreateSourceBindings, SourceManager, normalize_binding_key};
     use crate::sources::SourceName;
     use crate::state::{AppStateLayout, ConfigStore, SecretStore};
-    use crate::transport::workspace_to_proto;
     use crate::workspaces::WorkspaceName;
 
     fn default_workspace() -> WorkspaceName {
@@ -561,6 +565,21 @@ tables:
         .to_string()
     }
 
+    fn create_source_bindings(
+        variables: impl IntoIterator<Item = (&'static str, &'static str)>,
+        secrets: impl IntoIterator<Item = (&'static str, &'static str)>,
+    ) -> CreateSourceBindings {
+        CreateSourceBindings::new(
+            variables
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string())),
+            secrets
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string())),
+        )
+        .expect("source bindings")
+    }
+
     #[test]
     fn import_restores_prior_state_when_secret_persistence_fails() {
         let temp = TempDir::new().expect("temp dir");
@@ -582,18 +601,11 @@ tables:
         let error = manager
             .import_source(
                 &default_workspace(),
-                &ImportSourceRequest {
-                    workspace: Some(workspace_to_proto(&default_workspace())),
-                    manifest_yaml: manifest_with_secret(),
-                    variables: vec![SourceVariable {
-                        key: "API_BASE".to_string(),
-                        value: "https://example.com".to_string(),
-                    }],
-                    secrets: vec![SourceSecret {
-                        key: "API_TOKEN".to_string(),
-                        value: "secret-token".to_string(),
-                    }],
-                },
+                &manifest_with_secret(),
+                create_source_bindings(
+                    [("API_BASE", "https://example.com")],
+                    [("API_TOKEN", "secret-token")],
+                ),
             )
             .expect_err("secret persistence should fail");
 
@@ -665,15 +677,8 @@ tables:
         let source = manager
             .import_source(
                 &default_workspace(),
-                &ImportSourceRequest {
-                    workspace: Some(workspace_to_proto(&default_workspace())),
-                    manifest_yaml: manifest_with_secret(),
-                    variables: vec![],
-                    secrets: vec![SourceSecret {
-                        key: "API_TOKEN".to_string(),
-                        value: "secret-token".to_string(),
-                    }],
-                },
+                &manifest_with_secret(),
+                create_source_bindings([], [("API_TOKEN", "secret-token")]),
             )
             .expect("import source");
 
