@@ -8,8 +8,8 @@ use coral_client::{
 };
 use rmcp::{
     RoleClient, ServiceExt,
-    model::{CallToolRequestParams, ReadResourceRequestParams},
-    service::RunningService,
+    model::{CallToolRequestParams, ErrorCode, ReadResourceRequestParams},
+    service::{RunningService, ServiceError},
 };
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
@@ -158,6 +158,20 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .expect("sql description")
             .contains("0 configured source")
     );
+    let list_tables_tool = &initial_tools[1];
+    let list_tables_properties = list_tables_tool
+        .input_schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("list_tables properties");
+    assert_eq!(list_tables_properties["schema"]["type"], "string");
+    let list_tables_description = list_tables_tool
+        .description
+        .as_deref()
+        .expect("list_tables description");
+    assert!(list_tables_description.contains("exact schema"));
+    assert!(list_tables_description.contains("coral.tables"));
+    assert!(list_tables_description.contains("coral.columns"));
 
     let initial_resources = client
         .list_all_resources()
@@ -236,6 +250,14 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     assert!(updated_guide_text.contains("- coral: System metadata schema."));
     assert!(updated_guide_text.contains("- local_messages"));
     assert!(!updated_guide_text.contains("## Visible SQL Schemas"));
+    assert!(
+        updated_guide_text
+            .contains("SELECT schema_name, table_name, description, required_filters")
+    );
+    assert!(updated_guide_text.contains("FROM coral.tables"));
+    assert!(updated_guide_text.contains("LIKE"));
+    assert!(updated_guide_text.contains("DESCRIBE local_messages.messages"));
+    assert!(updated_guide_text.contains("is_required_filter"));
     assert!(updated_guide_text.contains(
         "FROM coral.columns WHERE schema_name = 'local_messages' AND table_name = 'messages'"
     ));
@@ -249,6 +271,53 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         "local_messages.messages"
     );
     assert_eq!(tables.is_error, Some(false));
+
+    let filtered_tables = client
+        .call_tool(
+            CallToolRequestParams::new("list_tables").with_arguments(json_object(&json!({
+                "schema": "local_messages"
+            }))),
+        )
+        .await
+        .expect("list filtered tables");
+    assert_eq!(
+        filtered_tables
+            .structured_content
+            .expect("structured content")["tables"][0]["name"],
+        "local_messages.messages"
+    );
+    assert_eq!(filtered_tables.is_error, Some(false));
+
+    let missing_tables = client
+        .call_tool(
+            CallToolRequestParams::new("list_tables").with_arguments(json_object(&json!({
+                "schema": "missing"
+            }))),
+        )
+        .await
+        .expect("list missing schema tables");
+    assert!(
+        missing_tables
+            .structured_content
+            .expect("structured content")["tables"]
+            .as_array()
+            .expect("tables array")
+            .is_empty()
+    );
+    assert_eq!(missing_tables.is_error, Some(false));
+
+    let invalid_schema_error = client
+        .call_tool(
+            CallToolRequestParams::new("list_tables").with_arguments(json_object(&json!({
+                "schema": 123
+            }))),
+        )
+        .await
+        .expect_err("non-string schema should be invalid params");
+    match invalid_schema_error {
+        ServiceError::McpError(error) => assert_eq!(error.code, ErrorCode::INVALID_PARAMS),
+        other => panic!("expected MCP invalid params error, got {other:?}"),
+    }
 
     session.shutdown().await;
 }
