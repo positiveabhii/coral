@@ -39,6 +39,20 @@ List sources currently installed.
 coral source list
 ```
 
+### `coral source info <NAME>`
+
+Show metadata for a source: whether it is installed, its origin, version, description, and inputs. Works for bundled sources and imported sources installed via `coral source add --file`.
+
+```shellscript
+coral source info datadog
+```
+
+Pass `-v/--verbose` for more detailed output.
+
+```shellscript
+coral source info datadog --verbose
+```
+
 ### `coral source add <NAME>`
 
 Add a bundled source or update its credentials.
@@ -116,3 +130,17 @@ This server exposes:
 | Tool     | `list_tables`    | List all available tables        |
 | Resource | `coral://guide`  | Usage guide for agents           |
 | Resource | `coral://tables` | Schema for all installed sources |
+
+## `coral completion <SHELL>`
+
+Generate a shell completion script and write it to standard output. Supported shells are `bash`, `zsh`, `fish`, `elvish`, and `powershell`.
+
+```shellscript
+coral completion zsh > ~/.zsh/completions/_coral
+```
+
+To enable completions in the current shell without installing them:
+
+```shellscript
+source <(coral completion bash)
+```

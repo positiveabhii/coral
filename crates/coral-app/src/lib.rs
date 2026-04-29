@@ -32,6 +32,7 @@
 //!
 /// Bootstrap entrypoints and local server assembly.
 pub mod bootstrap;
+mod identity;
 mod query;
 mod sources;
 mod state;
@@ -40,5 +41,8 @@ mod transport;
 mod workspaces;
 
 pub use bootstrap::{AppError, RunningServer, ServerBuilder};
-pub use query::extensions::{EngineExtensionsProvider, NoopEngineExtensionsProvider};
+pub use coral_engine::{EngineExtensions, QuerySource};
+pub use query::extensions::{
+    AwsEngineExtensionsProvider, EngineExtensionsProvider, NoopEngineExtensionsProvider,
+};
 pub use workspaces::DEFAULT_WORKSPACE_ID;

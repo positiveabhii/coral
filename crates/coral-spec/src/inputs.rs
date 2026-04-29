@@ -8,7 +8,7 @@
 //! the variable or secret store. Manifests that take no interactive inputs
 //! may omit the block entirely.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::proto::v1 as specv1;
 use crate::{ManifestError, ParsedTemplate, Result, TemplateNamespace};
@@ -38,6 +38,30 @@ pub struct ManifestInputSpec {
     pub default_value: String,
     /// Optional authored hint shown to the user when collecting the input.
     pub hint: Option<String>,
+}
+
+/// Merge user-provided secrets and variables with manifest defaults into one
+/// runtime-ready input map.
+#[must_use]
+pub fn resolve_inputs(
+    declared: &[ManifestInputSpec],
+    source_secrets: &BTreeMap<String, String>,
+    source_variables: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut resolved = BTreeMap::new();
+    for input in declared {
+        let value = match input.kind {
+            ManifestInputKind::Secret => source_secrets.get(&input.key).cloned(),
+            ManifestInputKind::Variable => source_variables
+                .get(&input.key)
+                .cloned()
+                .or_else(|| (!input.required).then(|| input.default_value.clone())),
+        };
+        if let Some(value) = value {
+            resolved.insert(input.key.clone(), value);
+        }
+    }
+    resolved
 }
 
 /// Collect interactive source inputs from a generated source manifest proto.
@@ -110,8 +134,9 @@ fn validate_input_references_proto(
     let declared: BTreeSet<String> = inputs.iter().map(|input| input.key.clone()).collect();
     validate_template(&manifest.base_url, &declared)?;
     if let Some(auth) = &manifest.auth {
-        validate_headers_proto(&auth.headers, &declared)?;
+        validate_auth_inputs_proto(auth, &declared)?;
     }
+    validate_headers_proto(&manifest.request_headers, &declared)?;
     for table in &manifest.tables {
         validate_request_proto(table.request.as_ref(), &declared)?;
         for route in &table.requests {
@@ -119,6 +144,60 @@ fn validate_input_references_proto(
         }
     }
     Ok(())
+}
+
+fn validate_auth_inputs_proto(
+    auth: &specv1::AuthSpec,
+    declared: &BTreeSet<String>,
+) -> Result<()> {
+    let Some(kind) = auth.kind.as_ref() else {
+        return Ok(());
+    };
+    match kind {
+        specv1::auth_spec::Kind::Basic(spec) => {
+            validate_template(&spec.username, declared)?;
+            validate_template(&spec.password, declared)?;
+        }
+        specv1::auth_spec::Kind::Header(spec) => validate_headers_proto(&spec.headers, declared)?,
+        specv1::auth_spec::Kind::Custom(spec) => {
+            validate_template_inputs_in_json(&spec.config_json, declared)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_template_inputs_in_json(
+    raw: &str,
+    declared: &BTreeSet<String>,
+) -> Result<()> {
+    if raw.is_empty() {
+        return Ok(());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(raw).map_err(ManifestError::deserialize)?;
+    walk_json_strings(&value, declared)
+}
+
+fn walk_json_strings(
+    value: &serde_json::Value,
+    declared: &BTreeSet<String>,
+) -> Result<()> {
+    match value {
+        serde_json::Value::String(string) => validate_template(string, declared),
+        serde_json::Value::Array(items) => {
+            for item in items {
+                walk_json_strings(item, declared)?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values() {
+                walk_json_strings(value, declared)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
 }
 
 fn validate_headers_proto(
@@ -143,8 +222,17 @@ fn validate_request_proto(
     for param in &request.query {
         validate_value_source_proto(param.value.as_ref(), declared)?;
     }
-    for field in &request.body {
-        validate_value_source_proto(field.value.as_ref(), declared)?;
+    if let Some(shape) = request.body.as_ref().and_then(|body| body.shape.as_ref()) {
+        match shape {
+            specv1::body_spec::Shape::Json(json) => {
+                for field in &json.fields {
+                    validate_value_source_proto(field.value.as_ref(), declared)?;
+                }
+            }
+            specv1::body_spec::Shape::Text(text) => {
+                validate_value_source_proto(text.content.as_ref(), declared)?;
+            }
+        }
     }
     Ok(())
 }
@@ -162,6 +250,7 @@ fn validate_value_source_proto(
         specv1::value_source::Kind::Literal(_)
         | specv1::value_source::Kind::Filter(_)
         | specv1::value_source::Kind::FilterInt(_)
+        | specv1::value_source::Kind::FilterBool(_)
         | specv1::value_source::Kind::State(_)
         | specv1::value_source::Kind::NowEpochMinusSeconds(_) => Ok(()),
     }
@@ -221,6 +310,7 @@ inputs:
     hint: Run `gh auth token` or create a PAT
 base_url: "{{input.GITHUB_API_BASE}}"
 auth:
+  type: HeaderAuth
   headers:
     - name: Authorization
       from: template
@@ -263,6 +353,7 @@ inputs:
   GITHUB_TOKEN:
     kind: secret
 auth:
+  type: HeaderAuth
   headers:
     - name: Authorization
       from: input

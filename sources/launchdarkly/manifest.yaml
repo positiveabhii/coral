@@ -18,13 +18,15 @@ inputs:
       See [LaunchDarkly API token docs](https://launchdarkly.com/docs/home/account/api-create).
 base_url: "{{input.LAUNCHDARKLY_API_BASE}}"
 auth:
+  type: HeaderAuth
   headers:
     - name: Authorization
       from: input
       key: LAUNCHDARKLY_TOKEN
-    - name: Content-Type
-      from: literal
-      value: application/json
+request_headers:
+  - name: Content-Type
+    from: literal
+    value: application/json
 test_queries:
   - SELECT * FROM launchdarkly.projects LIMIT 1
 tables:

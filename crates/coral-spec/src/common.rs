@@ -11,7 +11,9 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::{ManifestError, ParsedTemplate, Result};
@@ -79,13 +81,6 @@ pub enum ManifestDataType {
     /// `json_get_str`, `json_as_text`, etc.); the JSON functions also
     /// work on plain `Utf8` columns whose values happen to be JSON.
     Json,
-}
-
-/// Source-level authentication requirements for HTTP-backed source specs.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct AuthSpec {
-    #[serde(default)]
-    pub headers: Vec<HeaderSpec>,
 }
 
 /// One request or auth header declared in the source spec.
@@ -160,7 +155,7 @@ pub struct RequestSpec {
     #[serde(default)]
     pub query: Vec<QueryParamSpec>,
     #[serde(default)]
-    pub body: Vec<BodyFieldSpec>,
+    pub body: BodySpec,
     #[serde(default)]
     pub headers: Vec<HeaderSpec>,
 }
@@ -202,6 +197,97 @@ pub struct BodyFieldSpec {
     pub value: ValueSourceSpec,
 }
 
+/// How the request body is shaped before being sent.
+///
+/// Accepts two YAML forms for backwards compatibility:
+/// - The legacy array form (`body: [{ path, from, ... }]`) is treated as the
+///   `Json` variant.
+/// - The tagged object form (`body: { format: json|text, ... }`) opts into a
+///   specific shape.
+#[derive(Debug, Clone)]
+pub enum BodySpec {
+    /// Build a JSON object from a list of path-addressed fields.
+    Json { fields: Vec<BodyFieldSpec> },
+    /// Send a raw text body rendered from a single value source. Intended for
+    /// SQL-over-HTTP and similar APIs that accept a free-form string body.
+    Text { content: ValueSourceSpec },
+}
+
+impl Default for BodySpec {
+    fn default() -> Self {
+        Self::Json { fields: Vec::new() }
+    }
+}
+
+impl BodySpec {
+    /// Returns true when this body has no content to send.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Self::Json { fields } => fields.is_empty(),
+            Self::Text { .. } => false,
+        }
+    }
+
+    /// Returns the JSON body fields if this is a JSON body, otherwise empty.
+    #[must_use]
+    pub fn json_fields(&self) -> &[BodyFieldSpec] {
+        match self {
+            Self::Json { fields } => fields,
+            Self::Text { .. } => &[],
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BodySpec {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Array(Vec<BodyFieldSpec>),
+            Tagged(TaggedBody),
+        }
+
+        #[derive(Deserialize)]
+        #[serde(tag = "format", rename_all = "snake_case", deny_unknown_fields)]
+        enum TaggedBody {
+            Json {
+                #[serde(default)]
+                fields: Vec<BodyFieldSpec>,
+            },
+            Text {
+                content: ValueSourceSpec,
+            },
+        }
+
+        match Raw::deserialize(deserializer).map_err(D::Error::custom)? {
+            Raw::Array(fields) | Raw::Tagged(TaggedBody::Json { fields }) => {
+                Ok(BodySpec::Json { fields })
+            }
+            Raw::Tagged(TaggedBody::Text { content }) => Ok(BodySpec::Text { content }),
+        }
+    }
+}
+
+impl Serialize for BodySpec {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        match self {
+            Self::Json { fields } => {
+                let mut state = serializer.serialize_struct("BodySpec", 2)?;
+                state.serialize_field("format", "json")?;
+                state.serialize_field("fields", fields)?;
+                state.end()
+            }
+            Self::Text { content } => {
+                let mut state = serializer.serialize_struct("BodySpec", 2)?;
+                state.serialize_field("format", "text")?;
+                state.serialize_field("content", content)?;
+                state.end()
+            }
+        }
+    }
+}
+
 /// How a source-spec request value is populated at runtime.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "from", rename_all = "snake_case")]
@@ -222,6 +308,11 @@ pub enum ValueSourceSpec {
         #[serde(default)]
         default: Option<i64>,
     },
+    FilterBool {
+        key: String,
+        #[serde(default)]
+        default: Option<bool>,
+    },
     Input {
         key: String,
     },
@@ -237,6 +328,8 @@ pub enum ValueSourceSpec {
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ResponseSpec {
     #[serde(default)]
+    pub format: ResponseBodyFormat,
+    #[serde(default)]
     pub rows_path: Vec<String>,
     #[serde(default)]
     pub ok_path: Vec<String>,
@@ -246,6 +339,19 @@ pub struct ResponseSpec {
     pub allow_404_empty: bool,
     #[serde(default)]
     pub row_strategy: RowStrategy,
+}
+
+/// How the raw response body is decoded before row extraction runs.
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseBodyFormat {
+    /// Standard JSON document (the response is parsed once).
+    #[default]
+    Json,
+    /// Newline-delimited JSON (e.g. `ClickHouse`'s `JSONEachRow` format).
+    /// Each non-empty line is parsed as one JSON value and collected into an
+    /// array before row extraction.
+    JsonEachRow,
 }
 
 /// How the engine converts a selected response value into logical rows.
@@ -678,7 +784,7 @@ mod tests {
                 method: HttpMethod::GET,
                 path: ParsedTemplate::parse("/items").expect("template"),
                 query: vec![],
-                body: vec![],
+                body: BodySpec::default(),
                 headers: vec![],
             },
         );
@@ -700,7 +806,7 @@ mod tests {
                 method: HttpMethod::GET,
                 path: ParsedTemplate::parse("/items").expect("template"),
                 query: vec![],
-                body: vec![],
+                body: BodySpec::default(),
                 headers: vec![],
             },
         );
@@ -710,7 +816,7 @@ mod tests {
                 method: HttpMethod::GET,
                 path: ParsedTemplate::parse("/items/{{filter.id}}").expect("template"),
                 query: vec![],
-                body: vec![],
+                body: BodySpec::default(),
                 headers: vec![],
             },
         }];
@@ -741,7 +847,7 @@ mod tests {
                 method: HttpMethod::GET,
                 path: ParsedTemplate::parse("/items").expect("template"),
                 query: vec![],
-                body: vec![],
+                body: BodySpec::default(),
                 headers: vec![],
             },
         );
@@ -752,7 +858,7 @@ mod tests {
                     method: HttpMethod::GET,
                     path: ParsedTemplate::parse("/items/by-id/{{filter.id}}").expect("template"),
                     query: vec![],
-                    body: vec![],
+                    body: BodySpec::default(),
                     headers: vec![],
                 },
             },
@@ -763,7 +869,7 @@ mod tests {
                     path: ParsedTemplate::parse("/orgs/{{filter.org}}/items/{{filter.id}}")
                         .expect("template"),
                     query: vec![],
-                    body: vec![],
+                    body: BodySpec::default(),
                     headers: vec![],
                 },
             },
@@ -774,6 +880,60 @@ mod tests {
             table.resolve_request(&filters).path,
             "/orgs/{{filter.org}}/items/{{filter.id}}"
         );
+    }
+
+    #[test]
+    fn body_spec_legacy_array_deserializes_as_json_variant() {
+        let spec: BodySpec = serde_json::from_value(serde_json::json!([
+            { "path": ["query"], "from": "literal", "value": "x" }
+        ]))
+        .unwrap();
+        let BodySpec::Json { fields } = spec else {
+            panic!("expected legacy array to deserialize as Json variant");
+        };
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].path, vec!["query".to_string()]);
+    }
+
+    #[test]
+    fn body_spec_tagged_text_deserializes() {
+        let spec: BodySpec = serde_json::from_value(serde_json::json!({
+            "format": "text",
+            "content": { "from": "literal", "value": "SELECT 1" }
+        }))
+        .unwrap();
+        match spec {
+            BodySpec::Text {
+                content: ValueSourceSpec::Literal { value },
+            } => assert_eq!(value, serde_json::json!("SELECT 1")),
+            other => panic!("expected text body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn body_spec_tagged_json_with_empty_fields_defaults() {
+        let spec: BodySpec = serde_json::from_value(serde_json::json!({
+            "format": "json"
+        }))
+        .unwrap();
+        let BodySpec::Json { fields } = spec else {
+            panic!("expected json body");
+        };
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn response_body_format_defaults_to_json() {
+        let spec: ResponseSpec =
+            serde_json::from_value(serde_json::json!({ "rows_path": ["data"] })).unwrap();
+        assert_eq!(spec.format, ResponseBodyFormat::Json);
+    }
+
+    #[test]
+    fn response_body_format_parses_json_each_row() {
+        let spec: ResponseSpec =
+            serde_json::from_value(serde_json::json!({ "format": "json_each_row" })).unwrap();
+        assert_eq!(spec.format, ResponseBodyFormat::JsonEachRow);
     }
 
     #[test]

@@ -12,19 +12,68 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use serde::Deserialize;
+use serde_json::{Map, Value};
+
 use crate::{
-    AuthSpec, ColumnSpec, FilterSpec, ManifestError, ManifestInputKind, ManifestInputSpec,
+    ColumnSpec, FilterSpec, HeaderSpec, ManifestError, ManifestInputKind, ManifestInputSpec,
     PaginationSpec, ParsedTemplate, RequestRouteSpec, RequestSpec, ResponseSpec, Result,
     SourceManifestCommon, TableCommon,
     inputs::collect_source_inputs_proto,
     proto::v1 as specv1,
     proto_normalize::{
-        auth_from_proto, pagination_from_proto, request_from_proto, request_routes_from_proto,
-        response_from_proto, source_common_from_proto, table_common_from_proto,
+        auth_from_proto, pagination_from_proto, request_from_proto, request_headers_from_proto,
+        request_routes_from_proto, response_from_proto, source_common_from_proto,
+        table_common_from_proto,
     },
     validate::validate_template,
     validate_http_table, validate_test_queries,
 };
+
+/// Source-level authentication requirements for HTTP-backed source specs.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type")]
+pub enum AuthSpec {
+    /// HTTP Basic authentication; runtime base64-encodes `username:password`.
+    #[serde(rename = "BasicAuth")]
+    BasicAuth(BasicAuthSpec),
+    /// Declarative list of auth headers to attach to the request.
+    #[serde(rename = "HeaderAuth")]
+    HeaderAuth(HeaderAuthSpec),
+    /// Dispatches auth header resolution to a runtime-registered authenticator.
+    #[serde(rename = "CustomAuth")]
+    CustomAuth(CustomAuthSpec),
+}
+
+impl Default for AuthSpec {
+    fn default() -> Self {
+        Self::HeaderAuth(HeaderAuthSpec::default())
+    }
+}
+
+/// HTTP Basic authenticator with separate username and password templates.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BasicAuthSpec {
+    pub username: ParsedTemplate,
+    pub password: ParsedTemplate,
+}
+
+/// Declarative authenticator that injects one or more headers.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct HeaderAuthSpec {
+    #[serde(default)]
+    pub headers: Vec<HeaderSpec>,
+}
+
+/// Dispatches to a runtime-registered request authenticator by name.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CustomAuthSpec {
+    pub authenticator: String,
+    #[serde(flatten)]
+    pub config: Map<String, Value>,
+}
 
 /// Provider-specific response hints for classifying and delaying rate-limit retries.
 #[derive(Debug, Clone, Default)]
@@ -41,6 +90,7 @@ pub struct HttpSourceManifest {
     pub common: SourceManifestCommon,
     pub base_url: ParsedTemplate,
     pub auth: AuthSpec,
+    pub request_headers: Vec<HeaderSpec>,
     pub rate_limit: RateLimitSpec,
     pub tables: Vec<HttpTableSpec>,
     pub declared_inputs: Vec<ManifestInputSpec>,
@@ -174,6 +224,7 @@ impl HttpSourceManifest {
             common,
             base_url,
             auth: auth_from_proto(manifest.auth.as_ref())?,
+            request_headers: request_headers_from_proto(&manifest.request_headers)?,
             rate_limit: rate_limit_from_proto(manifest.rate_limit.as_ref())?,
             tables,
             declared_inputs,

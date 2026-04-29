@@ -5,20 +5,28 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use datafusion::error::{DataFusionError, Result};
-use reqwest::header::HeaderMap;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Map, Value, json};
 
+use crate::RequestAuthenticator;
 use crate::backends::http::ProviderQueryError;
+use crate::backends::http::auth::{resolve_auth_headers, validate_auth_inputs};
 use crate::backends::http::rate_limit::{RateLimitDecision, check_rate_limit};
 use crate::backends::shared::json_path::get_path_value;
+use crate::backends::shared::template::{
+    render_template, resolve_value_source, validate_input_dependencies,
+    validate_value_source_inputs, value_to_string,
+};
 use coral_spec::backends::http::{HttpSourceManifest, HttpTableSpec, RateLimitSpec};
 use coral_spec::{
-    HeaderSpec, HttpMethod, ManifestInputKind, PageSizeSpec, ParsedTemplate, RowStrategy,
-    TemplateNamespace, TemplatePart, ValidatedPagination, ValidatedPaginationMode, ValueSourceSpec,
+    AuthSpec, BodySpec, HeaderSpec, HttpMethod, PageSizeSpec, ParsedTemplate, RequestRouteSpec,
+    RequestSpec as ManifestRequestSpec, ResponseBodyFormat, RowStrategy, ValidatedPagination,
+    ValidatedPaginationMode,
 };
 
 const DEFAULT_MAX_PAGES: usize = 10_000;
 const DEFAULT_HTTP_REQUEST_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_HTTP_USER_AGENT: &str = concat!("coral/", env!("CARGO_PKG_VERSION"));
 
 /// Executes manifest-driven HTTP requests for one registered source.
 #[derive(Clone)]
@@ -27,7 +35,9 @@ pub(crate) struct HttpSourceClient {
     request_timeout: Duration,
     source_schema: String,
     base_url: ParsedTemplate,
-    auth_headers: Vec<HeaderSpec>,
+    auth: AuthSpec,
+    request_headers: Vec<HeaderSpec>,
+    request_authenticators: HashMap<String, Arc<dyn RequestAuthenticator>>,
     rate_limit: RateLimitSpec,
     resolved_inputs: Arc<BTreeMap<String, String>>,
 }
@@ -37,7 +47,8 @@ impl std::fmt::Debug for HttpSourceClient {
         f.debug_struct("HttpSourceClient")
             .field("source_schema", &self.source_schema)
             .field("base_url", &self.base_url)
-            .field("auth_headers", &self.auth_headers)
+            .field("auth", &self.auth)
+            .field("request_headers", &self.request_headers)
             .field("rate_limit", &self.rate_limit)
             .finish_non_exhaustive()
     }
@@ -51,15 +62,25 @@ struct PageState {
     next_url: Option<String>,
 }
 
+/// Concrete request body shape passed to the HTTP layer.
+#[derive(Debug, Clone)]
+enum RequestBody {
+    Json(Value),
+    Text(String),
+}
+
 struct RequestSpec<'a> {
-    auth_headers: &'a [HeaderSpec],
+    auth: &'a AuthSpec,
+    request_headers: &'a [HeaderSpec],
+    request_authenticators: &'a HashMap<String, Arc<dyn RequestAuthenticator>>,
     table_headers: &'a [HeaderSpec],
     table_name: &'a str,
     method: HttpMethod,
     base_url: &'a str,
     url: &'a str,
     query_pairs: &'a [(String, String)],
-    body: Option<&'a Value>,
+    body: Option<&'a RequestBody>,
+    response_format: ResponseBodyFormat,
     source_schema: &'a str,
     rate_limit: &'a RateLimitSpec,
     filters: &'a HashMap<String, String>,
@@ -80,28 +101,16 @@ impl HttpSourceClient {
         manifest: &HttpSourceManifest,
         source_secrets: &BTreeMap<String, String>,
         source_variables: &BTreeMap<String, String>,
+        request_authenticators: &HashMap<String, Arc<dyn RequestAuthenticator>>,
     ) -> Result<Self> {
-        let auth = &manifest.auth;
-        let resolved_inputs = build_resolved_inputs(manifest, source_secrets, source_variables);
-
-        for header in &auth.headers {
-            let resolved = resolve_value_source(
-                &header.value,
-                &HashMap::new(),
-                &HashMap::new(),
-                &resolved_inputs,
-            )?;
-            if resolved.is_none() {
-                return Err(DataFusionError::Execution(format!(
-                    "{} source auth header '{}' could not be resolved",
-                    manifest.common.name, header.name
-                )));
-            }
-        }
+        let resolved_inputs =
+            coral_spec::resolve_inputs(&manifest.declared_inputs, source_secrets, source_variables);
+        validate_source_scoped_http_config(manifest, request_authenticators, &resolved_inputs)?;
 
         let request_timeout = Duration::from_secs(DEFAULT_HTTP_REQUEST_TIMEOUT_SECS);
         let http = reqwest::Client::builder()
             .timeout(request_timeout)
+            .user_agent(DEFAULT_HTTP_USER_AGENT)
             .build()
             .map_err(|error| {
                 DataFusionError::Execution(format!(
@@ -115,7 +124,9 @@ impl HttpSourceClient {
             request_timeout,
             source_schema: manifest.common.name.clone(),
             base_url: manifest.base_url.clone(),
-            auth_headers: manifest.auth.headers.clone(),
+            auth: manifest.auth.clone(),
+            request_headers: manifest.request_headers.clone(),
+            request_authenticators: request_authenticators.clone(),
             rate_limit: manifest.rate_limit.clone(),
             resolved_inputs: Arc::new(resolved_inputs),
         })
@@ -222,7 +233,14 @@ impl HttpSourceClient {
                     &state,
                     self.resolved_inputs.as_ref(),
                 )?;
-                apply_pagination_body_fields(&mut body, table, &pagination, &state, page_size)?;
+                apply_pagination_body_fields(
+                    &mut body,
+                    &active_request.body,
+                    table,
+                    &pagination,
+                    &state,
+                    page_size,
+                )?;
                 (query_pairs, body)
             };
 
@@ -231,7 +249,9 @@ impl HttpSourceClient {
                 &self.http,
                 self.request_timeout,
                 RequestSpec {
-                    auth_headers: &self.auth_headers,
+                    auth: &self.auth,
+                    request_headers: &self.request_headers,
+                    request_authenticators: &self.request_authenticators,
                     table_headers: &active_request.headers,
                     table_name: table.name(),
                     method: active_request.method,
@@ -239,6 +259,7 @@ impl HttpSourceClient {
                     url: &url,
                     query_pairs: &query_pairs,
                     body: body.as_ref(),
+                    response_format: table.response.format,
                     source_schema: &self.source_schema,
                     rate_limit: &self.rate_limit,
                     filters,
@@ -333,6 +354,182 @@ impl HttpSourceClient {
     }
 }
 
+fn validate_source_scoped_http_config(
+    manifest: &HttpSourceManifest,
+    request_authenticators: &HashMap<String, Arc<dyn RequestAuthenticator>>,
+    resolved_inputs: &BTreeMap<String, String>,
+) -> Result<()> {
+    check_base_url_inputs(manifest, resolved_inputs)?;
+    check_request_header_inputs(manifest, resolved_inputs)?;
+    check_table_request_inputs(manifest, resolved_inputs)?;
+    check_auth_inputs(manifest, request_authenticators, resolved_inputs)?;
+    Ok(())
+}
+
+/// `base_url` may reference `{{filter.*}}` / `{{state.*}}` that only resolve
+/// per-request. Check input-token deps only; runtime renders the rest.
+fn check_base_url_inputs(
+    manifest: &HttpSourceManifest,
+    resolved_inputs: &BTreeMap<String, String>,
+) -> Result<()> {
+    validate_input_dependencies(&manifest.base_url, resolved_inputs)
+        .map_err(|error| registration_error(&manifest.common.name, "base_url", &error))
+}
+
+/// Same tolerance for filter/state tokens as `base_url`.
+fn check_request_header_inputs(
+    manifest: &HttpSourceManifest,
+    resolved_inputs: &BTreeMap<String, String>,
+) -> Result<()> {
+    validate_header_inputs(
+        &manifest.common.name,
+        "request_headers",
+        &manifest.request_headers,
+        resolved_inputs,
+    )?;
+    Ok(())
+}
+
+fn check_table_request_inputs(
+    manifest: &HttpSourceManifest,
+    resolved_inputs: &BTreeMap<String, String>,
+) -> Result<()> {
+    for table in &manifest.tables {
+        validate_request_template_inputs(
+            &manifest.common.name,
+            table.name(),
+            "request",
+            &table.request,
+            resolved_inputs,
+        )?;
+        for route in &table.requests {
+            validate_request_route_inputs(
+                &manifest.common.name,
+                table.name(),
+                route,
+                resolved_inputs,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Auth is source-scoped: all template dependencies must resolve from inputs
+/// before any request is issued.
+fn check_auth_inputs(
+    manifest: &HttpSourceManifest,
+    request_authenticators: &HashMap<String, Arc<dyn RequestAuthenticator>>,
+    resolved_inputs: &BTreeMap<String, String>,
+) -> Result<()> {
+    validate_auth_inputs(&manifest.auth, request_authenticators, resolved_inputs)
+        .map_err(|error| registration_error(&manifest.common.name, "auth", &error))
+}
+
+fn registration_error(source: &str, field: &str, error: &DataFusionError) -> DataFusionError {
+    DataFusionError::Execution(format!(
+        "source '{source}' {field} could not be resolved: {error}"
+    ))
+}
+
+fn validate_request_route_inputs(
+    source_name: &str,
+    table_name: &str,
+    route: &RequestRouteSpec,
+    resolved_inputs: &BTreeMap<String, String>,
+) -> Result<()> {
+    let route_label = if route.when_filters.is_empty() {
+        "request route".to_string()
+    } else {
+        format!(
+            "request route for filters [{}]",
+            route.when_filters.join(", ")
+        )
+    };
+    validate_request_template_inputs(
+        source_name,
+        table_name,
+        &route_label,
+        &route.request,
+        resolved_inputs,
+    )
+}
+
+fn validate_request_template_inputs(
+    source_name: &str,
+    table_name: &str,
+    request_label: &str,
+    request: &ManifestRequestSpec,
+    resolved_inputs: &BTreeMap<String, String>,
+) -> Result<()> {
+    validate_input_dependencies(&request.path, resolved_inputs).map_err(|error| {
+        registration_error(
+            source_name,
+            &format!("table '{table_name}' {request_label} path"),
+            &error,
+        )
+    })?;
+    validate_header_inputs(
+        source_name,
+        &format!("table '{table_name}' {request_label} header"),
+        &request.headers,
+        resolved_inputs,
+    )?;
+    for param in &request.query {
+        validate_value_source_inputs(&param.value, resolved_inputs).map_err(|error| {
+            registration_error(
+                source_name,
+                &format!(
+                    "table '{table_name}' {request_label} query param '{}'",
+                    param.name
+                ),
+                &error,
+            )
+        })?;
+    }
+    match &request.body {
+        BodySpec::Json { fields } => {
+            for field in fields {
+                let field_path = if field.path.is_empty() {
+                    "<root>".to_string()
+                } else {
+                    field.path.join(".")
+                };
+                validate_value_source_inputs(&field.value, resolved_inputs).map_err(|error| {
+                    registration_error(
+                        source_name,
+                        &format!("table '{table_name}' {request_label} body field '{field_path}'"),
+                        &error,
+                    )
+                })?;
+            }
+        }
+        BodySpec::Text { content } => {
+            validate_value_source_inputs(content, resolved_inputs).map_err(|error| {
+                registration_error(
+                    source_name,
+                    &format!("table '{table_name}' {request_label} body text"),
+                    &error,
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_header_inputs(
+    source_name: &str,
+    context: &str,
+    headers: &[HeaderSpec],
+    resolved_inputs: &BTreeMap<String, String>,
+) -> Result<()> {
+    for header in headers {
+        validate_value_source_inputs(&header.value, resolved_inputs).map_err(|error| {
+            registration_error(source_name, &format!("{context} '{}'", header.name), &error)
+        })?;
+    }
+    Ok(())
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "HTTP request execution keeps retry, auth, logging, and response handling in one audited flow"
@@ -343,7 +540,9 @@ async fn execute_request(
     request: RequestSpec<'_>,
 ) -> Result<Option<(Value, Option<String>)>> {
     let RequestSpec {
-        auth_headers,
+        auth,
+        request_headers,
+        request_authenticators,
         table_headers,
         table_name,
         method,
@@ -351,6 +550,7 @@ async fn execute_request(
         url,
         query_pairs,
         body,
+        response_format,
         source_schema,
         rate_limit,
         filters,
@@ -365,39 +565,62 @@ async fn execute_request(
         let method_label = http_method_label(method);
         let mut request = build_http_request(http, method, url);
 
-        for header in auth_headers {
-            let value = resolve_value_source(&header.value, filters, state, resolved_inputs)?
-                .ok_or_else(|| {
-                    DataFusionError::Execution(format!(
-                        "missing value for auth header '{}'",
-                        header.name
-                    ))
-                })?;
-            request = request.header(&header.name, value_to_string(&value));
-        }
-
-        for header in table_headers {
+        let mut header_map = HeaderMap::new();
+        for header in request_headers.iter().chain(table_headers.iter()) {
             if let Some(value) =
                 resolve_value_source(&header.value, filters, state, resolved_inputs)?
             {
-                request = request.header(&header.name, value_to_string(&value));
+                let name = HeaderName::try_from(header.name.as_str()).map_err(|error| {
+                    DataFusionError::Execution(format!(
+                        "invalid request header name '{}': {error}",
+                        header.name
+                    ))
+                })?;
+                let value =
+                    HeaderValue::try_from(value_to_string(&value).as_str()).map_err(|error| {
+                        DataFusionError::Execution(format!(
+                            "invalid request header value for '{}': {error}",
+                            header.name
+                        ))
+                    })?;
+                header_map.insert(name, value);
             }
+        }
+        if matches!(body, Some(RequestBody::Text(_)))
+            && !header_map.contains_key(reqwest::header::CONTENT_TYPE)
+        {
+            header_map.insert(
+                reqwest::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain"),
+            );
+        }
+        if !header_map.is_empty() {
+            request = request.headers(header_map);
         }
 
         if !query_pairs.is_empty() {
             request = request.query(query_pairs);
         }
 
-        if let Some(body) = body {
-            request = request.json(body);
+        match body {
+            Some(RequestBody::Json(value)) => {
+                request = request.json(value);
+            }
+            Some(RequestBody::Text(text)) => {
+                request = request.body(text.clone());
+            }
+            None => {}
         }
 
         let logged_url = build_logged_url(url, query_pairs);
-        let _logged_body = body
-            .and_then(|b| serde_json::to_string_pretty(b).ok())
-            .filter(|s| !s.is_empty());
+        let _logged_body = body.and_then(|b| match b {
+            RequestBody::Json(value) => serde_json::to_string_pretty(value).ok(),
+            RequestBody::Text(text) => Some(text.clone()),
+        });
 
-        let response = request.send().await.map_err(|error| {
+        let built = resolve_auth_headers(auth, request, request_authenticators, resolved_inputs)?;
+
+        let response = http.execute(built).await.map_err(|error| {
             request_error(
                 "request",
                 method_label,
@@ -460,16 +683,62 @@ async fn execute_request(
             )));
         }
 
-        let payload: Value = response.json().await.map_err(|error| {
+        let payload = decode_response_body(
+            response,
+            response_format,
+            method_label,
+            &logged_url,
+            request_timeout,
+        )
+        .await?;
+        return Ok(Some((payload, next_url)));
+    }
+}
+
+async fn decode_response_body(
+    response: reqwest::Response,
+    format: ResponseBodyFormat,
+    method_label: &str,
+    logged_url: &str,
+    request_timeout: Duration,
+) -> Result<Value> {
+    match format {
+        ResponseBodyFormat::Json => response.json().await.map_err(|error| {
             request_error(
                 "response decoding",
                 method_label,
-                &logged_url,
+                logged_url,
                 request_timeout,
                 &error,
             )
-        })?;
-        return Ok(Some((payload, next_url)));
+        }),
+        ResponseBodyFormat::JsonEachRow => {
+            let text = response.text().await.map_err(|error| {
+                request_error(
+                    "response decoding",
+                    method_label,
+                    logged_url,
+                    request_timeout,
+                    &error,
+                )
+            })?;
+            let mut rows = Vec::new();
+            for (index, line) in text.lines().enumerate() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let row: Value = serde_json::from_str(trimmed).map_err(|error| {
+                    DataFusionError::Execution(format!(
+                        "response decoding failed for {method_label} {logged_url}: \
+                         json_each_row line {} is not valid JSON: {error}",
+                        index + 1
+                    ))
+                })?;
+                rows.push(row);
+            }
+            Ok(Value::Array(rows))
+        }
     }
 }
 
@@ -576,48 +845,66 @@ fn build_request_body(
     filters: &HashMap<String, String>,
     state: &PageState,
     resolved_inputs: &BTreeMap<String, String>,
-) -> Result<Option<Value>> {
-    if request.body.is_empty() {
-        return Ok(None);
-    }
-
+) -> Result<Option<RequestBody>> {
     let state_values = pagination_state_values(state);
-    let mut root = Value::Object(Map::new());
-
-    for field in &request.body {
-        if let Some(value) =
-            resolve_value_source(&field.value, filters, &state_values, resolved_inputs)?
-        {
-            set_path_value(&mut root, &field.path, value)?;
+    match &request.body {
+        BodySpec::Json { fields } => {
+            if fields.is_empty() {
+                return Ok(None);
+            }
+            let mut root = Value::Object(Map::new());
+            for field in fields {
+                if let Some(value) =
+                    resolve_value_source(&field.value, filters, &state_values, resolved_inputs)?
+                {
+                    set_path_value(&mut root, &field.path, value)?;
+                }
+            }
+            Ok(Some(RequestBody::Json(root)))
+        }
+        BodySpec::Text { content } => {
+            let Some(value) =
+                resolve_value_source(content, filters, &state_values, resolved_inputs)?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(RequestBody::Text(value_to_string(&value))))
         }
     }
-
-    Ok(Some(root))
 }
 
 fn apply_pagination_body_fields(
-    body: &mut Option<Value>,
+    body: &mut Option<RequestBody>,
+    body_spec: &BodySpec,
     table: &HttpTableSpec,
     pagination: &ValidatedPagination,
     state: &PageState,
     page_size: Option<usize>,
 ) -> Result<()> {
-    if body.is_none()
-        && pagination
-            .page_size
-            .as_ref()
-            .is_none_or(|s| s.body_path.is_empty())
-        && !(matches!(pagination.mode, ValidatedPaginationMode::CursorBody)
-            && !table.pagination.cursor_body_path.is_empty()
-            && state.cursor.is_some())
-    {
+    let needs_page_size_body = page_size
+        .zip(pagination.page_size.as_ref())
+        .is_some_and(|(_, spec)| !spec.body_path.is_empty());
+    let needs_cursor_body = matches!(pagination.mode, ValidatedPaginationMode::CursorBody)
+        && !table.pagination.cursor_body_path.is_empty()
+        && state.cursor.is_some();
+
+    if !needs_page_size_body && !needs_cursor_body {
         return Ok(());
     }
 
-    if body.is_none() {
-        *body = Some(Value::Object(Map::new()));
+    if matches!(body_spec, BodySpec::Text { .. }) || matches!(body, Some(RequestBody::Text(_))) {
+        return Err(DataFusionError::Execution(
+            "pagination body fields are not supported with text request bodies".to_string(),
+        ));
     }
-    let root = body.as_mut().expect("body is present");
+
+    if body.is_none() {
+        *body = Some(RequestBody::Json(Value::Object(Map::new())));
+    }
+    let root = match body.as_mut().expect("body is present") {
+        RequestBody::Json(root) => root,
+        RequestBody::Text(_) => unreachable!("text body rejected above"),
+    };
 
     if let (Some(page_size), Some(spec)) = (page_size, pagination.page_size.as_ref())
         && !spec.body_path.is_empty()
@@ -649,52 +936,6 @@ fn page_is_exhausted(rows_on_page: usize, page_size: Option<usize>) -> bool {
     rows_on_page == 0 || page_size.is_some_and(|requested| rows_on_page < requested)
 }
 
-fn resolve_value_source(
-    value: &ValueSourceSpec,
-    filters: &HashMap<String, String>,
-    state: &HashMap<String, String>,
-    resolved_inputs: &BTreeMap<String, String>,
-) -> Result<Option<Value>> {
-    match value {
-        ValueSourceSpec::Template { template } => {
-            let rendered = render_template(template, filters, state, resolved_inputs)?;
-            Ok(Some(Value::String(rendered)))
-        }
-        ValueSourceSpec::Literal { value } => Ok(Some(value.clone())),
-        ValueSourceSpec::Filter { key, default } => Ok(filters
-            .get(key)
-            .map(|v| Value::String(v.clone()))
-            .or_else(|| default.clone())),
-        ValueSourceSpec::FilterInt { key, default } => {
-            let value = if let Some(filter) = filters.get(key) {
-                let parsed = filter.parse::<i64>().map_err(|error| {
-                    DataFusionError::Execution(format!(
-                        "filter '{key}' value '{filter}' is not a valid i64: {error}"
-                    ))
-                })?;
-                Some(json!(parsed))
-            } else {
-                default.map(|value| json!(value))
-            };
-            Ok(value)
-        }
-        ValueSourceSpec::Input { key } => Ok(resolved_inputs.get(key).cloned().map(Value::String)),
-        ValueSourceSpec::State { key } => Ok(state.get(key).map(|v| Value::String(v.clone()))),
-        ValueSourceSpec::NowEpochMinusSeconds { seconds } => {
-            #[allow(
-                clippy::cast_possible_wrap,
-                reason = "Current Unix epoch seconds fit within i64 for centuries"
-            )]
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-            let value = now.saturating_sub(*seconds);
-            Ok(Some(json!(value)))
-        }
-    }
-}
-
 fn pagination_state_values(state: &PageState) -> HashMap<String, String> {
     let mut values = HashMap::new();
     values.insert("page".to_string(), state.page.to_string());
@@ -703,101 +944,6 @@ fn pagination_state_values(state: &PageState) -> HashMap<String, String> {
         values.insert("cursor".to_string(), cursor.clone());
     }
     values
-}
-
-fn render_template(
-    template: &ParsedTemplate,
-    filters: &HashMap<String, String>,
-    state: &HashMap<String, String>,
-    resolved_inputs: &BTreeMap<String, String>,
-) -> Result<String> {
-    let mut out = String::with_capacity(template.raw().len());
-    for part in template.parts() {
-        match part {
-            TemplatePart::Literal(part) => out.push_str(part),
-            TemplatePart::Token(token) => out.push_str(&resolve_template_token(
-                token,
-                filters,
-                state,
-                resolved_inputs,
-            )?),
-        }
-    }
-    Ok(out)
-}
-
-fn resolve_template_token(
-    token: &coral_spec::TemplateToken,
-    filters: &HashMap<String, String>,
-    state: &HashMap<String, String>,
-    resolved_inputs: &BTreeMap<String, String>,
-) -> Result<String> {
-    let default = token.default_value().map(ToString::to_string);
-
-    if token.namespace() == &TemplateNamespace::Input {
-        return resolved_inputs
-            .get(token.key())
-            .cloned()
-            .or(default)
-            .ok_or_else(|| {
-                DataFusionError::Execution(format!(
-                    "missing source input '{}' for template token",
-                    token.key()
-                ))
-            });
-    }
-
-    if token.namespace() == &TemplateNamespace::Filter {
-        return filters
-            .get(token.key())
-            .cloned()
-            .or(default)
-            .ok_or_else(|| {
-                DataFusionError::Execution(format!("missing filter '{}'", token.key()))
-            });
-    }
-
-    if token.namespace() == &TemplateNamespace::State {
-        return state.get(token.key()).cloned().or(default).ok_or_else(|| {
-            DataFusionError::Execution(format!("missing state value '{}'", token.key()))
-        });
-    }
-
-    Err(DataFusionError::Execution(format!(
-        "unsupported template token '{}'",
-        token.raw()
-    )))
-}
-
-fn build_resolved_inputs(
-    manifest: &HttpSourceManifest,
-    source_secrets: &BTreeMap<String, String>,
-    source_variables: &BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    let mut resolved = BTreeMap::new();
-    for input in &manifest.declared_inputs {
-        let value = match input.kind {
-            ManifestInputKind::Secret => source_secrets.get(&input.key).cloned(),
-            ManifestInputKind::Variable => source_variables
-                .get(&input.key)
-                .cloned()
-                .or_else(|| (!input.default_value.is_empty()).then(|| input.default_value.clone())),
-        };
-        if let Some(value) = value {
-            resolved.insert(input.key.clone(), value);
-        }
-    }
-    resolved
-}
-
-fn value_to_string(value: &Value) -> String {
-    match value {
-        Value::Null => String::new(),
-        Value::Bool(v) => v.to_string(),
-        Value::Number(v) => v.to_string(),
-        Value::String(v) => v.clone(),
-        Value::Array(_) | Value::Object(_) => serde_json::to_string(value).unwrap_or_default(),
-    }
 }
 
 fn build_logged_url(url: &str, query_pairs: &[(String, String)]) -> String {
@@ -851,29 +997,42 @@ fn set_path_value(root: &mut Value, path: &[String], value: Value) -> Result<()>
         return Ok(());
     }
 
-    let mut cursor = root;
-    for key in &path[..path.len() - 1] {
-        if !cursor.is_object() {
-            *cursor = Value::Object(Map::new());
+    set_path_value_at(root, path, value)
+}
+
+fn set_path_value_at(cursor: &mut Value, path: &[String], value: Value) -> Result<()> {
+    let Some((head, tail)) = path.split_first() else {
+        *cursor = value;
+        return Ok(());
+    };
+
+    if let Ok(index) = head.parse::<usize>() {
+        if !cursor.is_array() {
+            *cursor = Value::Array(Vec::new());
         }
-        let obj = cursor.as_object_mut().ok_or_else(|| {
-            DataFusionError::Execution("failed to create JSON object path".to_string())
+        let array = cursor.as_array_mut().ok_or_else(|| {
+            DataFusionError::Execution("failed to create JSON array path".to_string())
         })?;
-        cursor = obj
-            .entry(key.clone())
-            .or_insert_with(|| Value::Object(Map::new()));
+        if array.len() <= index {
+            const MAX_JSON_ARRAY_INDEX: usize = 10_000;
+            if index > MAX_JSON_ARRAY_INDEX {
+                return Err(DataFusionError::Execution(format!(
+                    "JSON array index {index} exceeds supported maximum {MAX_JSON_ARRAY_INDEX}"
+                )));
+            }
+            array.resize_with(index + 1, || Value::Null);
+        }
+        return set_path_value_at(&mut array[index], tail, value);
     }
 
-    let last = path
-        .last()
-        .cloned()
-        .ok_or_else(|| DataFusionError::Execution("invalid empty JSON path segment".to_string()))?;
-
+    if !cursor.is_object() {
+        *cursor = Value::Object(Map::new());
+    }
     let obj = cursor.as_object_mut().ok_or_else(|| {
-        DataFusionError::Execution("failed to assign JSON path value".to_string())
+        DataFusionError::Execution("failed to create JSON object path".to_string())
     })?;
-    obj.insert(last, value);
-    Ok(())
+    let next = obj.entry(head.clone()).or_insert(Value::Null);
+    set_path_value_at(next, tail, value)
 }
 
 #[allow(
@@ -1023,15 +1182,16 @@ mod tests {
     use tokio::task::JoinHandle;
 
     use super::{
-        HttpSourceClient, PageState, RequestSpec as HttpRequestSpec, apply_pagination_query_pairs,
-        execute_request, extract_next_link_url, extract_rows, join_url, normalize_base_url,
-        page_is_exhausted, resolve_value_source,
+        HttpSourceClient, PageState, RequestSpec as HttpRequestSpec, apply_pagination_body_fields,
+        apply_pagination_query_pairs, execute_request, extract_next_link_url, extract_rows,
+        join_url, normalize_base_url, page_is_exhausted, resolve_value_source, set_path_value,
     };
     use coral_spec::PaginationMode;
     use coral_spec::backends::http::{HttpSourceManifest, HttpTableSpec, RateLimitSpec};
     use coral_spec::{
-        HttpMethod, PaginationSpec, ParsedTemplate, RequestSpec, RowStrategy,
-        ValidatedPaginationMode, ValueSourceSpec, parse_source_manifest_value,
+        AuthSpec, BodySpec, HttpMethod, PaginationSpec, ParsedTemplate, RequestSpec,
+        ResponseBodyFormat, RowStrategy, ValidatedPaginationMode, ValueSourceSpec,
+        parse_source_manifest_value,
     };
 
     fn parse_http_manifest(value: serde_json::Value) -> HttpSourceManifest {
@@ -1076,7 +1236,62 @@ mod tests {
         .expect("table should exist")
     }
 
+    #[test]
+    fn set_path_value_builds_arrays_from_numeric_segments() {
+        let mut root = json!({});
+
+        set_path_value(
+            &mut root,
+            &[
+                "Dimensions".to_string(),
+                "0".to_string(),
+                "Name".to_string(),
+            ],
+            json!("ClusterName"),
+        )
+        .expect("path assignment should succeed");
+        set_path_value(
+            &mut root,
+            &[
+                "Dimensions".to_string(),
+                "0".to_string(),
+                "Value".to_string(),
+            ],
+            json!("titaness"),
+        )
+        .expect("path assignment should succeed");
+        set_path_value(
+            &mut root,
+            &["Statistics".to_string(), "0".to_string()],
+            json!("Average"),
+        )
+        .expect("path assignment should succeed");
+
+        assert_eq!(
+            root,
+            json!({
+                "Dimensions": [{
+                    "Name": "ClusterName",
+                    "Value": "titaness"
+                }],
+                "Statistics": ["Average"]
+            })
+        );
+    }
+
     fn request_json(request: &RequestSpec) -> serde_json::Value {
+        let body = match &request.body {
+            BodySpec::Json { fields } => fields
+                .iter()
+                .map(|field| {
+                    json!({
+                        "path": field.path,
+                        "value": value_source_json(&field.value),
+                    })
+                })
+                .collect::<Vec<_>>(),
+            BodySpec::Text { .. } => Vec::new(),
+        };
         json!({
             "method": format!("{:?}", request.method),
             "path": request.path,
@@ -1084,10 +1299,7 @@ mod tests {
                 "name": query.name,
                 "value": value_source_json(&query.value),
             })).collect::<Vec<_>>(),
-            "body": request.body.iter().map(|field| json!({
-                "path": field.path,
-                "value": value_source_json(&field.value),
-            })).collect::<Vec<_>>(),
+            "body": body,
             "headers": request.headers.iter().map(|header| json!({
                 "name": header.name,
                 "value": value_source_json(&header.value),
@@ -1108,6 +1320,11 @@ mod tests {
             }),
             ValueSourceSpec::FilterInt { key, default } => json!({
                 "from": "filter_int",
+                "key": key,
+                "default": default,
+            }),
+            ValueSourceSpec::FilterBool { key, default } => json!({
+                "from": "filter_bool",
                 "key": key,
                 "default": default,
             }),
@@ -1282,6 +1499,24 @@ mod tests {
     }
 
     #[test]
+    fn resolve_value_source_parses_filter_bools_as_bools() {
+        let filters = HashMap::from([("descending".to_string(), "false".to_string())]);
+
+        let value = resolve_value_source(
+            &ValueSourceSpec::FilterBool {
+                key: "descending".to_string(),
+                default: None,
+            },
+            &filters,
+            &HashMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("bool filter should resolve");
+
+        assert_eq!(value, Some(json!(false)));
+    }
+
+    #[test]
     fn backend_client_requires_source_scoped_credentials() {
         let manifest = parse_http_manifest(json!({
             "dsl_version": 3,
@@ -1290,6 +1525,7 @@ mod tests {
             "backend": "http",
             "base_url": "https://api.example.com",
             "auth": {
+                "type": "HeaderAuth",
                 "headers": [{
                     "name": "Authorization",
                     "from": "template",
@@ -1311,14 +1547,235 @@ mod tests {
         }));
         let source_secrets = BTreeMap::new();
 
-        let error = HttpSourceClient::from_manifest(&manifest, &source_secrets, &BTreeMap::new())
-            .expect_err("missing source-scoped credentials must fail");
+        let error = HttpSourceClient::from_manifest(
+            &manifest,
+            &source_secrets,
+            &BTreeMap::new(),
+            &HashMap::new(),
+        )
+        .expect_err("missing source-scoped credentials must fail");
 
         assert!(
             error
                 .to_string()
                 .contains("missing source input 'API_KEY' for template token")
         );
+    }
+
+    #[test]
+    fn backend_client_rejects_unresolved_table_request_path_inputs() {
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "alpha",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": "https://api.example.com",
+            "inputs": {
+                "API_KEY": { "kind": "secret" },
+                "ACCOUNT_ID": { "kind": "variable" }
+            },
+            "tables": [{
+                "name": "items",
+                "description": "items",
+                "request": {
+                    "path": "/{{input.ACCOUNT_ID}}/items"
+                },
+                "columns": [{
+                    "name": "id",
+                    "type": "Utf8"
+                }]
+            }]
+        }));
+
+        let error = HttpSourceClient::from_manifest(
+            &manifest,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &HashMap::new(),
+        )
+        .expect_err("missing table request path inputs must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("table 'items' request path could not be resolved")
+        );
+    }
+
+    #[test]
+    fn backend_client_rejects_unresolved_table_request_header_inputs() {
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "alpha",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": "https://api.example.com",
+            "inputs": {
+                "ACCOUNT_ID": { "kind": "variable" }
+            },
+            "tables": [{
+                "name": "items",
+                "description": "items",
+                "request": {
+                    "path": "/items",
+                    "headers": [{
+                        "name": "X-Account",
+                        "from": "input",
+                        "key": "ACCOUNT_ID"
+                    }]
+                },
+                "columns": [{
+                    "name": "id",
+                    "type": "Utf8"
+                }]
+            }]
+        }));
+
+        let error = HttpSourceClient::from_manifest(
+            &manifest,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &HashMap::new(),
+        )
+        .expect_err("missing table request header inputs must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("table 'items' request header 'X-Account' could not be resolved")
+        );
+    }
+
+    #[test]
+    fn backend_client_rejects_unresolved_table_request_query_inputs() {
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "alpha",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": "https://api.example.com",
+            "inputs": {
+                "ACCOUNT_ID": { "kind": "variable" }
+            },
+            "tables": [{
+                "name": "items",
+                "description": "items",
+                "request": {
+                    "path": "/items",
+                    "query": [{
+                        "name": "account_id",
+                        "from": "input",
+                        "key": "ACCOUNT_ID"
+                    }]
+                },
+                "columns": [{
+                    "name": "id",
+                    "type": "Utf8"
+                }]
+            }]
+        }));
+
+        let error = HttpSourceClient::from_manifest(
+            &manifest,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &HashMap::new(),
+        )
+        .expect_err("missing table request query inputs must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("table 'items' request query param 'account_id' could not be resolved")
+        );
+    }
+
+    #[test]
+    fn backend_client_rejects_unresolved_table_request_body_inputs() {
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "alpha",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": "https://api.example.com",
+            "inputs": {
+                "ACCOUNT_ID": { "kind": "variable" }
+            },
+            "tables": [{
+                "name": "items",
+                "description": "items",
+                "request": {
+                    "method": "POST",
+                    "path": "/items",
+                    "body": [{
+                        "path": ["account", "id"],
+                        "from": "input",
+                        "key": "ACCOUNT_ID"
+                    }]
+                },
+                "columns": [{
+                    "name": "id",
+                    "type": "Utf8"
+                }]
+            }]
+        }));
+
+        let error = HttpSourceClient::from_manifest(
+            &manifest,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &HashMap::new(),
+        )
+        .expect_err("missing table request body inputs must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("table 'items' request body field 'account.id' could not be resolved")
+        );
+    }
+
+    #[test]
+    fn backend_client_rejects_unresolved_request_route_inputs() {
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "alpha",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": "https://api.example.com",
+            "inputs": {
+                "ACCOUNT_ID": { "kind": "variable" }
+            },
+            "tables": [{
+                "name": "items",
+                "description": "items",
+                "request": { "path": "/items" },
+                "requests": [{
+                    "when_filters": ["account_id"],
+                    "method": "GET",
+                    "path": "/{{input.ACCOUNT_ID}}/items"
+                }],
+                "filters": [{
+                    "name": "account_id"
+                }],
+                "columns": [{
+                    "name": "id",
+                    "type": "Utf8"
+                }]
+            }]
+        }));
+
+        let error = HttpSourceClient::from_manifest(
+            &manifest,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &HashMap::new(),
+        )
+        .expect_err("missing request route inputs must fail");
+
+        assert!(error.to_string().contains(
+            "table 'items' request route for filters [account_id] path could not be resolved"
+        ));
     }
 
     #[test]
@@ -1329,7 +1786,7 @@ mod tests {
                 method: HttpMethod::GET,
                 path: ParsedTemplate::parse("/items").expect("template"),
                 query: vec![],
-                body: vec![],
+                body: BodySpec::default(),
                 headers: vec![],
             },
         );
@@ -1370,6 +1827,55 @@ mod tests {
     }
 
     #[test]
+    fn apply_pagination_body_fields_rejects_declared_text_body_even_when_absent() {
+        let table = test_http_table_spec(
+            &json!([]),
+            &RequestSpec {
+                method: HttpMethod::GET,
+                path: ParsedTemplate::parse("/items").expect("template"),
+                query: vec![],
+                body: BodySpec::default(),
+                headers: vec![],
+            },
+        );
+        let body_spec = BodySpec::Text {
+            content: ValueSourceSpec::Filter {
+                key: "sql".to_string(),
+                default: None,
+            },
+        };
+        let pagination = PaginationSpec {
+            page_size: Some(coral_spec::PageSizeSpec {
+                default: 25,
+                max: 100,
+                query_param: None,
+                body_path: vec!["limit".to_string()],
+            }),
+            ..PaginationSpec::default()
+        }
+        .validated("demo", "items")
+        .unwrap();
+        let mut body = None;
+
+        let error = apply_pagination_body_fields(
+            &mut body,
+            &body_spec,
+            &table,
+            &pagination,
+            &PageState::default(),
+            Some(25),
+        )
+        .expect_err("text request bodies must not receive pagination body fields");
+
+        assert!(
+            error
+                .to_string()
+                .contains("pagination body fields are not supported with text request bodies")
+        );
+        assert!(body.is_none());
+    }
+
+    #[test]
     fn page_is_exhausted_handles_empty_short_and_full_pages() {
         for (rows_on_page, page_size, expected) in
             [(0, Some(50), true), (24, Some(25), true), (24, None, false)]
@@ -1388,7 +1894,7 @@ mod tests {
                 method: HttpMethod::GET,
                 path: ParsedTemplate::parse("/items").expect("template"),
                 query: vec![],
-                body: vec![],
+                body: BodySpec::default(),
                 headers: vec![],
             },
         );
@@ -1560,7 +2066,9 @@ mod tests {
             &http,
             request_timeout,
             HttpRequestSpec {
-                auth_headers: &[],
+                auth: &AuthSpec::default(),
+                request_headers: &[],
+                request_authenticators: &HashMap::new(),
                 table_headers: &[],
                 table_name: "items",
                 method: HttpMethod::GET,
@@ -1568,6 +2076,7 @@ mod tests {
                 url: &url,
                 query_pairs: &query_pairs,
                 body: None,
+                response_format: ResponseBodyFormat::default(),
                 source_schema: "demo",
                 rate_limit: &RateLimitSpec::default(),
                 filters: &filters,

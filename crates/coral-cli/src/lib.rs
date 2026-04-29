@@ -15,7 +15,8 @@ mod source_ops;
 
 use std::path::PathBuf;
 
-use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{Shell, generate};
 use coral_api::v1::ExecuteSqlRequest;
 use coral_client::{
     AppClient, decode_execute_sql_response, default_workspace, format_batches_json,
@@ -45,6 +46,15 @@ enum Command {
     Onboard,
     /// Start the MCP server over stdio
     McpStdio,
+    /// Generate shell completion scripts
+    Completion(CompletionArgs),
+}
+
+#[derive(Debug, Args)]
+/// Generate shell completion scripts
+struct CompletionArgs {
+    /// Shell to generate completions for
+    shell: Shell,
 }
 
 #[derive(Debug, Args)]
@@ -91,6 +101,14 @@ enum SourceCommand {
     Discover,
     /// List configured sources
     List,
+    /// Show metadata for a source
+    Info {
+        /// Name of the source to show info for
+        name: String,
+        /// Show additional details such as input hints
+        #[arg(short, long)]
+        verbose: bool,
+    },
     /// Add a new source
     Add(SourceAddArgs),
     /// Lint manifest file
@@ -196,13 +214,16 @@ async fn run_parsed(app: AppClient, cli: Cli) -> Result<(), anyhow::Error> {
                     print_text_table(["Source", "Version", "Origin"], rows);
                 }
             }
+            SourceCommand::Info { name, verbose } => {
+                source_ops::print_source_info(&app, &name, verbose).await?;
+            }
             SourceCommand::Add(args) => run_source_add(&app, args).await?,
             SourceCommand::Lint { file } => {
                 source_ops::load_validated_manifest_file(&file)?;
                 println!("Manifest is valid");
             }
             SourceCommand::Test { name } => {
-                source_ops::validate_and_print(
+                source_ops::test_and_print(
                     &app,
                     &name,
                     source_ops::TableDisplayLimit::All,
@@ -220,6 +241,11 @@ async fn run_parsed(app: AppClient, cli: Cli) -> Result<(), anyhow::Error> {
         }
         Command::McpStdio => {
             coral_mcp::run_stdio_with_client(app).await?;
+        }
+        Command::Completion(args) => {
+            let mut cmd = Cli::command();
+            let bin_name = cmd.get_name().to_string();
+            generate(args.shell, &mut cmd, bin_name, &mut std::io::stdout());
         }
     }
 
