@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::backends::file::{JsonlSourceManifest, ParquetSourceManifest};
 use crate::backends::http::HttpSourceManifest;
 use crate::proto::v1 as specv1;
-use crate::proto_source::{source_manifest_proto_from_value, source_manifest_proto_from_yaml};
+use crate::proto_validate::validate_source_manifest_proto;
 use crate::{ManifestError, ManifestInputSpec, Result, SourceBackend};
 
 /// Validated top-level source spec for one registered source.
@@ -146,7 +146,8 @@ impl ValidatedSourceManifest {
 /// Returns a [`ManifestError`] if the `YAML` cannot be parsed or the source
 /// spec violates any validation rules.
 pub fn parse_source_manifest_yaml(raw: &str) -> Result<ValidatedSourceManifest> {
-    let manifest = source_manifest_proto_from_yaml(raw)?;
+    let value = serde_yaml::from_str(raw).map_err(ManifestError::parse_yaml)?;
+    let manifest = source_manifest_proto_from_value(value)?;
     parse_source_manifest_proto(&manifest)
 }
 
@@ -159,6 +160,43 @@ pub fn parse_source_manifest_yaml(raw: &str) -> Result<ValidatedSourceManifest> 
 pub fn parse_source_manifest_value(value: Value) -> Result<ValidatedSourceManifest> {
     let manifest = source_manifest_proto_from_value(value)?;
     parse_source_manifest_proto(&manifest)
+}
+
+fn source_manifest_proto_from_value(value: Value) -> Result<specv1::SourceManifest> {
+    reject_unknown_top_level_fields(&value)?;
+    serde_json::from_value(value).map_err(ManifestError::deserialize)
+}
+
+fn reject_unknown_top_level_fields(value: &Value) -> Result<()> {
+    let Value::Object(map) = value else {
+        return Err(ManifestError::validation(
+            "source manifest must be a mapping",
+        ));
+    };
+    for key in map.keys() {
+        if !matches!(
+            key.as_str(),
+            "api_version"
+                | "kind"
+                | "name"
+                | "version"
+                | "dsl_version"
+                | "backend"
+                | "description"
+                | "test_queries"
+                | "inputs"
+                | "base_url"
+                | "auth"
+                | "rate_limit"
+                | "tables"
+                | "request_headers"
+        ) {
+            return Err(ManifestError::validation(format!(
+                "source manifest has unknown field '{key}'"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Parse and validate a source spec from its generated protobuf manifest.
@@ -174,6 +212,7 @@ pub fn parse_source_manifest_value(value: Value) -> Result<ValidatedSourceManife
 pub fn parse_source_manifest_proto(
     manifest: &specv1::SourceManifest,
 ) -> Result<ValidatedSourceManifest> {
+    validate_source_manifest_proto(manifest)?;
     let backend_kind = parse_source_backend(manifest)?;
     match backend_kind {
         SourceBackend::Http => Ok(ValidatedSourceManifest {

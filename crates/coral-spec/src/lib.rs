@@ -83,7 +83,8 @@ mod loader;
 mod parser;
 pub mod proto;
 mod proto_normalize;
-mod proto_source;
+mod proto_serde;
+mod proto_validate;
 mod template;
 mod validate;
 

@@ -21,8 +21,9 @@ discovery, and normalized source-definition models.
 
 ## Invariants
 
-- Keep source-spec types transport-neutral; do not import protobuf or gRPC
-  types.
+- Keep source-spec types transport-neutral. Generated source-manifest protobuf
+  types are semantic contract types and may be used here; do not import gRPC or
+  transport-layer types.
 - Keep runtime execution concerns out of this crate. Engine behavior belongs in
   `coral-engine`.
 - Prefer normalized source-spec values over raw YAML plumbing in public

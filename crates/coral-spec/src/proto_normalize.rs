@@ -4,12 +4,13 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+use crate::backends::http::{BasicAuthSpec, CustomAuthSpec, HeaderAuthSpec};
 use crate::proto::v1 as specv1;
 use crate::{
-    AuthSpec, BodyFieldSpec, ColumnSpec, ExprSpec, FilterMode, FilterSpec, HeaderSpec, HttpMethod,
-    ManifestError, PageSizeSpec, PaginationMode, PaginationSpec, ParsedTemplate, QueryParamSpec,
-    RequestRouteSpec, RequestSpec, ResponseSpec, Result, RowStrategy, SourceManifestCommon,
-    TableCommon, TimestampInput, ValueSourceSpec,
+    AuthSpec, BodyFieldSpec, BodySpec, ColumnSpec, ExprSpec, FilterMode, FilterSpec, HeaderSpec,
+    HttpMethod, ManifestError, PageSizeSpec, PaginationMode, PaginationSpec, ParsedTemplate,
+    QueryParamSpec, RequestRouteSpec, RequestSpec, ResponseBodyFormat, ResponseSpec, Result,
+    RowStrategy, SourceManifestCommon, TableCommon, TimestampInput, ValueSourceSpec,
 };
 
 pub(crate) fn source_common_from_proto(manifest: &specv1::SourceManifest) -> SourceManifestCommon {
@@ -26,9 +27,42 @@ pub(crate) fn auth_from_proto(auth: Option<&specv1::AuthSpec>) -> Result<AuthSpe
     let Some(auth) = auth else {
         return Ok(AuthSpec::default());
     };
-    Ok(AuthSpec {
-        headers: headers_from_proto(&auth.headers)?,
-    })
+    let kind = auth.kind.as_ref().ok_or_else(|| {
+        ManifestError::validation("source manifest auth must declare a kind (basic/header/custom)")
+    })?;
+    match kind {
+        specv1::auth_spec::Kind::Basic(spec) => Ok(AuthSpec::BasicAuth(BasicAuthSpec {
+            username: ParsedTemplate::parse(&spec.username)?,
+            password: ParsedTemplate::parse(&spec.password)?,
+        })),
+        specv1::auth_spec::Kind::Header(spec) => Ok(AuthSpec::HeaderAuth(HeaderAuthSpec {
+            headers: headers_from_proto(&spec.headers)?,
+        })),
+        specv1::auth_spec::Kind::Custom(spec) => {
+            let config = if spec.config_json.is_empty() {
+                serde_json::Map::new()
+            } else {
+                match json_value(&spec.config_json)? {
+                    Value::Object(map) => map,
+                    _ => {
+                        return Err(ManifestError::validation(
+                            "source manifest custom auth config must be an object",
+                        ));
+                    }
+                }
+            };
+            Ok(AuthSpec::CustomAuth(CustomAuthSpec {
+                authenticator: spec.authenticator.clone(),
+                config,
+            }))
+        }
+    }
+}
+
+pub(crate) fn request_headers_from_proto(
+    headers: &[specv1::HeaderSpec],
+) -> Result<Vec<HeaderSpec>> {
+    headers_from_proto(headers)
 }
 
 pub(crate) fn table_common_from_proto(table: &specv1::TableSpec) -> Result<TableCommon> {
@@ -63,6 +97,7 @@ pub(crate) fn response_from_proto(response: Option<&specv1::ResponseSpec>) -> Re
         return Ok(ResponseSpec::default());
     };
     Ok(ResponseSpec {
+        format: response_body_format_from_proto(response.format)?,
         rows_path: response.rows_path.clone(),
         ok_path: response.ok_path.clone(),
         error_path: response.error_path.clone(),
@@ -134,13 +169,33 @@ fn request_spec_from_proto(request: &specv1::RequestSpec) -> Result<RequestSpec>
             .iter()
             .map(query_param_from_proto)
             .collect::<Result<Vec<_>>>()?,
-        body: request
-            .body
-            .iter()
-            .map(body_field_from_proto)
-            .collect::<Result<Vec<_>>>()?,
+        body: body_from_proto(request.body.as_ref())?,
         headers: headers_from_proto(&request.headers)?,
     })
+}
+
+fn body_from_proto(body: Option<&specv1::BodySpec>) -> Result<BodySpec> {
+    let Some(body) = body else {
+        return Ok(BodySpec::default());
+    };
+    let Some(shape) = body.shape.as_ref() else {
+        return Ok(BodySpec::default());
+    };
+    match shape {
+        specv1::body_spec::Shape::Json(json) => Ok(BodySpec::Json {
+            fields: json
+                .fields
+                .iter()
+                .map(body_field_from_proto)
+                .collect::<Result<Vec<_>>>()?,
+        }),
+        specv1::body_spec::Shape::Text(text) => Ok(BodySpec::Text {
+            content: value_source_from_proto(
+                text.content.as_ref(),
+                "source manifest text body content",
+            )?,
+        }),
+    }
 }
 
 fn query_param_from_proto(param: &specv1::QueryParamSpec) -> Result<QueryParamSpec> {
@@ -190,6 +245,10 @@ fn value_source_from_proto(
             key: value.key.clone(),
             default: value.default_value,
         }),
+        specv1::value_source::Kind::FilterBool(value) => Ok(ValueSourceSpec::FilterBool {
+            key: value.key.clone(),
+            default: value.default_value,
+        }),
         specv1::value_source::Kind::Input(value) => Ok(ValueSourceSpec::Input {
             key: value.key.clone(),
         }),
@@ -201,6 +260,19 @@ fn value_source_from_proto(
                 seconds: value.seconds,
             })
         }
+    }
+}
+
+fn response_body_format_from_proto(value: i32) -> Result<ResponseBodyFormat> {
+    match specv1::ResponseBodyFormat::try_from(value).map_err(|_| {
+        ManifestError::validation(format!(
+            "source manifest response body format enum value {value} is invalid"
+        ))
+    })? {
+        specv1::ResponseBodyFormat::Unspecified | specv1::ResponseBodyFormat::Json => {
+            Ok(ResponseBodyFormat::Json)
+        }
+        specv1::ResponseBodyFormat::JsonEachRow => Ok(ResponseBodyFormat::JsonEachRow),
     }
 }
 
@@ -250,7 +322,7 @@ fn expr_from_proto(expr: &specv1::ExprSpec) -> Result<ExprSpec> {
         specv1::expr_spec::Kind::Literal(expr) => Ok(ExprSpec::Literal {
             value: json_value(&expr.json)?,
         }),
-        specv1::expr_spec::Kind::NullValue(_) => Ok(ExprSpec::Null),
+        specv1::expr_spec::Kind::Null(_) => Ok(ExprSpec::Null),
         specv1::expr_spec::Kind::JoinArray(expr) => Ok(ExprSpec::JoinArray {
             path: expr.path.clone(),
             separator: expr.separator.clone().unwrap_or_else(|| ",".to_string()),

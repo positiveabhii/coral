@@ -107,7 +107,7 @@ fn collect_declared_inputs_proto(
         };
         if kind == ManifestInputKind::Secret && spec.default_value.is_some() {
             return Err(ManifestError::validation(format!(
-                "manifest secret input '{}' must not declare a default",
+                "manifest secret input '{}' must not define default",
                 input.key
             )));
         }
@@ -146,10 +146,7 @@ fn validate_input_references_proto(
     Ok(())
 }
 
-fn validate_auth_inputs_proto(
-    auth: &specv1::AuthSpec,
-    declared: &BTreeSet<String>,
-) -> Result<()> {
+fn validate_auth_inputs_proto(auth: &specv1::AuthSpec, declared: &BTreeSet<String>) -> Result<()> {
     let Some(kind) = auth.kind.as_ref() else {
         return Ok(());
     };
@@ -166,22 +163,15 @@ fn validate_auth_inputs_proto(
     Ok(())
 }
 
-fn validate_template_inputs_in_json(
-    raw: &str,
-    declared: &BTreeSet<String>,
-) -> Result<()> {
+fn validate_template_inputs_in_json(raw: &str, declared: &BTreeSet<String>) -> Result<()> {
     if raw.is_empty() {
         return Ok(());
     }
-    let value: serde_json::Value =
-        serde_json::from_str(raw).map_err(ManifestError::deserialize)?;
+    let value: serde_json::Value = serde_json::from_str(raw).map_err(ManifestError::deserialize)?;
     walk_json_strings(&value, declared)
 }
 
-fn walk_json_strings(
-    value: &serde_json::Value,
-    declared: &BTreeSet<String>,
-) -> Result<()> {
+fn walk_json_strings(value: &serde_json::Value, declared: &BTreeSet<String>) -> Result<()> {
     match value {
         serde_json::Value::String(string) => validate_template(string, declared),
         serde_json::Value::Array(items) => {
@@ -286,10 +276,11 @@ fn validate_template(template: &str, declared: &BTreeSet<String>) -> Result<()> 
 mod tests {
     use super::{ManifestInputKind, ManifestInputSpec, collect_source_inputs_proto};
     use crate::Result;
-    use crate::proto_source::source_manifest_proto_from_yaml;
+    use crate::{ManifestError, proto::v1 as specv1};
 
     fn collect(raw: &str) -> Result<Vec<ManifestInputSpec>> {
-        let manifest = source_manifest_proto_from_yaml(raw)?;
+        let manifest: specv1::SourceManifest =
+            serde_yaml::from_str(raw).map_err(ManifestError::parse_yaml)?;
         collect_source_inputs_proto(&manifest)
     }
 

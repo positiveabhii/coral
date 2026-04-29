@@ -16,6 +16,7 @@ message SourceManifest {
   AuthSpec auth = 11;
   RateLimitSpec rate_limit = 12;
   repeated TableSpec tables = 13;
+  repeated HeaderSpec request_headers = 14;
 }
 
 enum SourceBackend {
@@ -44,7 +45,25 @@ enum SourceInputKind {
 }
 
 message AuthSpec {
+  oneof kind {
+    BasicAuthSpec basic = 1;
+    HeaderAuthSpec header = 2;
+    CustomAuthSpec custom = 3;
+  }
+}
+
+message BasicAuthSpec {
+  string username = 1;
+  string password = 2;
+}
+
+message HeaderAuthSpec {
   repeated HeaderSpec headers = 1;
+}
+
+message CustomAuthSpec {
+  string authenticator = 1;
+  string config_json = 2;
 }
 
 message HeaderSpec {
@@ -90,8 +109,23 @@ message RequestSpec {
   HttpMethod method = 1;
   string path = 2;
   repeated QueryParamSpec query = 3;
-  repeated BodyFieldSpec body = 4;
+  BodySpec body = 4;
   repeated HeaderSpec headers = 5;
+}
+
+message BodySpec {
+  oneof shape {
+    JsonBody json = 1;
+    TextBody text = 2;
+  }
+}
+
+message JsonBody {
+  repeated BodyFieldSpec fields = 1;
+}
+
+message TextBody {
+  ValueSource content = 1;
 }
 
 enum HttpMethod {
@@ -125,6 +159,7 @@ message ValueSource {
     InputValue input = 5;
     StateValue state = 6;
     NowEpochMinusSecondsValue now_epoch_minus_seconds = 7;
+    FilterBoolValue filter_bool = 8;
   }
 }
 
@@ -146,6 +181,11 @@ message FilterIntValue {
   optional int64 default_value = 2;
 }
 
+message FilterBoolValue {
+  string key = 1;
+  optional bool default_value = 2;
+}
+
 message InputValue {
   string key = 1;
 }
@@ -164,6 +204,13 @@ message ResponseSpec {
   repeated string error_path = 3;
   bool allow_404_empty = 4;
   RowStrategy row_strategy = 5;
+  ResponseBodyFormat format = 6;
+}
+
+enum ResponseBodyFormat {
+  RESPONSE_BODY_FORMAT_UNSPECIFIED = 0;
+  RESPONSE_BODY_FORMAT_JSON = 1;
+  RESPONSE_BODY_FORMAT_JSON_EACH_ROW = 2;
 }
 
 enum RowStrategy {
@@ -233,7 +280,7 @@ message ExprSpec {
     CoalesceExpr coalesce = 2;
     FromFilterExpr from_filter = 3;
     LiteralExpr literal = 4;
-    NullExpr null_value = 5;
+    NullExpr null = 5;
     JoinArrayExpr join_array = 6;
     TagValueExpr tag_value = 7;
     IfPresentExpr if_present = 8;
