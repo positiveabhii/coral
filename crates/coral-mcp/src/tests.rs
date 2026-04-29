@@ -151,13 +151,15 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .collect::<Vec<_>>(),
         vec!["sql", "list_tables"]
     );
-    assert!(
-        initial_tools[0]
-            .description
-            .as_deref()
-            .expect("sql description")
-            .contains("0 configured source")
-    );
+    let sql_description = initial_tools[0]
+        .description
+        .as_deref()
+        .expect("sql description");
+    assert!(sql_description.contains("0 configured source"));
+    assert!(sql_description.contains("coral.tables"));
+    assert!(sql_description.contains("guide"));
+    assert!(sql_description.contains("coral.columns"));
+    assert!(sql_description.contains("coral.inputs"));
     let list_tables_tool = &initial_tools[1];
     let list_tables_properties = list_tables_tool
         .input_schema
@@ -170,8 +172,11 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         .as_deref()
         .expect("list_tables description");
     assert!(list_tables_description.contains("exact schema"));
+    assert!(list_tables_description.contains("flat table index"));
     assert!(list_tables_description.contains("coral.tables"));
+    assert!(list_tables_description.contains("guide"));
     assert!(list_tables_description.contains("coral.columns"));
+    assert!(list_tables_description.contains("coral.inputs"));
 
     let initial_resources = client
         .list_all_resources()
@@ -252,11 +257,12 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     assert!(!updated_guide_text.contains("## Visible SQL Schemas"));
     assert!(
         updated_guide_text
-            .contains("SELECT schema_name, table_name, description, required_filters")
+            .contains("SELECT schema_name, table_name, description, guide, required_filters")
     );
     assert!(updated_guide_text.contains("FROM coral.tables"));
     assert!(updated_guide_text.contains("LIKE"));
     assert!(updated_guide_text.contains("DESCRIBE local_messages.messages"));
+    assert!(updated_guide_text.contains("is_virtual"));
     assert!(updated_guide_text.contains("is_required_filter"));
     assert!(updated_guide_text.contains(
         "FROM coral.columns WHERE schema_name = 'local_messages' AND table_name = 'messages'"

@@ -55,13 +55,12 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             .collect::<Vec<_>>(),
         vec!["sql", "list_tables"]
     );
-    assert!(
-        tools[0]
-            .description
-            .as_deref()
-            .expect("sql description")
-            .contains("1 visible SQL schema(s) are currently available")
-    );
+    let sql_description = tools[0].description.as_deref().expect("sql description");
+    assert!(sql_description.contains("1 visible SQL schema(s) are currently available"));
+    assert!(sql_description.contains("coral.tables"));
+    assert!(sql_description.contains("guide"));
+    assert!(sql_description.contains("coral.columns"));
+    assert!(sql_description.contains("coral.inputs"));
     assert!(
         tools[1]
             .description
@@ -80,8 +79,11 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
         .as_deref()
         .expect("list_tables description");
     assert!(list_tables_description.contains("exact schema"));
+    assert!(list_tables_description.contains("flat table index"));
     assert!(list_tables_description.contains("coral.tables"));
+    assert!(list_tables_description.contains("guide"));
     assert!(list_tables_description.contains("coral.columns"));
+    assert!(list_tables_description.contains("coral.inputs"));
 
     let resources = client.list_all_resources().await?;
     assert_eq!(
@@ -98,9 +100,13 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
     let guide_text = text_content(&guide);
     assert!(guide_text.contains("## Available Schemas"));
     assert!(guide_text.contains("- local_messages"));
+    assert!(
+        guide_text.contains("SELECT schema_name, table_name, description, guide, required_filters")
+    );
     assert!(guide_text.contains("FROM coral.tables"));
     assert!(guide_text.contains("LIKE"));
     assert!(guide_text.contains("DESCRIBE local_messages.messages"));
+    assert!(guide_text.contains("is_virtual"));
     assert!(guide_text.contains(
         "FROM coral.columns WHERE schema_name = 'local_messages' AND table_name = 'messages'"
     ));
