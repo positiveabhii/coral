@@ -10,8 +10,7 @@
 
 use std::collections::BTreeSet;
 
-use serde_json::{Map, Value};
-
+use crate::proto::v1 as specv1;
 use crate::{ManifestError, ParsedTemplate, Result, TemplateNamespace};
 
 /// The kind of interactive input required by one validated source spec.
@@ -41,120 +40,137 @@ pub struct ManifestInputSpec {
     pub hint: Option<String>,
 }
 
-/// Collect interactive source inputs from an already-parsed manifest value.
+/// Collect interactive source inputs from a generated source manifest proto.
 ///
 /// # Errors
 ///
 /// Returns a [`ManifestError`] when an input is declared incorrectly or the
 /// manifest references an input that is not declared under the top-level
 /// `inputs` block.
-pub(crate) fn collect_source_inputs_value(root: &Value) -> Result<Vec<ManifestInputSpec>> {
-    let inputs = collect_declared_inputs(root)?;
-    validate_input_references(root, &inputs)?;
+pub(crate) fn collect_source_inputs_proto(
+    manifest: &specv1::SourceManifest,
+) -> Result<Vec<ManifestInputSpec>> {
+    let inputs = collect_declared_inputs_proto(&manifest.inputs)?;
+    validate_input_references_proto(manifest, &inputs)?;
     Ok(inputs)
 }
 
-fn collect_declared_inputs(root: &Value) -> Result<Vec<ManifestInputSpec>> {
-    let root = root
-        .as_object()
-        .ok_or_else(|| ManifestError::validation("manifest must be a mapping"))?;
-    let Some(inputs) = root.get("inputs") else {
-        return Ok(Vec::new());
-    };
-    let inputs = inputs.as_object().ok_or_else(|| {
-        ManifestError::validation("manifest `inputs` must be declared as a mapping")
-    })?;
-
-    let mut ordered = Vec::new();
-    for (key, value) in inputs {
-        let input = value.as_object().ok_or_else(|| {
+fn collect_declared_inputs_proto(
+    inputs: &[specv1::SourceInputBinding],
+) -> Result<Vec<ManifestInputSpec>> {
+    let mut ordered = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let spec = input.input.as_ref().ok_or_else(|| {
             ManifestError::validation(format!(
-                "manifest input '{key}' must be declared as a mapping"
+                "manifest input '{}' must include an input spec",
+                input.key
             ))
         })?;
-        let kind = match input.get("kind").and_then(Value::as_str) {
-            Some("variable") => ManifestInputKind::Variable,
-            Some("secret") => ManifestInputKind::Secret,
-            Some(other) => {
+        let kind = match specv1::SourceInputKind::try_from(spec.kind).map_err(|_| {
+            ManifestError::validation(format!(
+                "manifest input '{}' has unsupported kind enum value {}",
+                input.key, spec.kind
+            ))
+        })? {
+            specv1::SourceInputKind::Variable => ManifestInputKind::Variable,
+            specv1::SourceInputKind::Secret => ManifestInputKind::Secret,
+            specv1::SourceInputKind::Unspecified => {
                 return Err(ManifestError::validation(format!(
-                    "manifest input '{key}' has unsupported kind '{other}'"
-                )));
-            }
-            None => {
-                return Err(ManifestError::validation(format!(
-                    "manifest input '{key}' is missing kind"
+                    "manifest input '{}' is missing kind",
+                    input.key
                 )));
             }
         };
-        let default_value = input
-            .get("default")
-            .and_then(Value::as_str)
-            .map(ToString::to_string);
-        if kind == ManifestInputKind::Secret && default_value.is_some() {
+        if kind == ManifestInputKind::Secret && spec.default_value.is_some() {
             return Err(ManifestError::validation(format!(
-                "manifest secret input '{key}' must not declare a default"
+                "manifest secret input '{}' must not declare a default",
+                input.key
             )));
         }
-        let hint = input
-            .get("hint")
-            .and_then(Value::as_str)
-            .map(ToString::to_string);
+        let default_value = spec.default_value.clone();
         ordered.push(ManifestInputSpec {
-            key: key.clone(),
+            key: input.key.clone(),
             kind,
             required: default_value.is_none(),
             default_value: default_value.unwrap_or_default(),
-            hint,
+            hint: if spec.hint.is_empty() {
+                None
+            } else {
+                Some(spec.hint.clone())
+            },
         });
     }
-
     Ok(ordered)
 }
 
-fn validate_input_references(root: &Value, inputs: &[ManifestInputSpec]) -> Result<()> {
+fn validate_input_references_proto(
+    manifest: &specv1::SourceManifest,
+    inputs: &[ManifestInputSpec],
+) -> Result<()> {
     let declared: BTreeSet<String> = inputs.iter().map(|input| input.key.clone()).collect();
-    validate_value(root, true, &declared)
-}
-
-fn validate_value(value: &Value, is_root: bool, declared: &BTreeSet<String>) -> Result<()> {
-    match value {
-        Value::Object(map) => {
-            validate_mapping(map, declared)?;
-            for (key, nested) in map {
-                if is_root && key == "inputs" {
-                    continue;
-                }
-                validate_value(nested, false, declared)?;
-            }
+    validate_template(&manifest.base_url, &declared)?;
+    if let Some(auth) = &manifest.auth {
+        validate_headers_proto(&auth.headers, &declared)?;
+    }
+    for table in &manifest.tables {
+        validate_request_proto(table.request.as_ref(), &declared)?;
+        for route in &table.requests {
+            validate_request_proto(route.request.as_ref(), &declared)?;
         }
-        Value::Array(items) => {
-            for item in items {
-                validate_value(item, false, declared)?;
-            }
-        }
-        Value::String(raw) => validate_template(raw, declared)?,
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
     Ok(())
 }
 
-fn validate_mapping(map: &Map<String, Value>, declared: &BTreeSet<String>) -> Result<()> {
-    if map.get("from").and_then(Value::as_str) != Some("input") {
-        return Ok(());
+fn validate_headers_proto(
+    headers: &[specv1::HeaderSpec],
+    declared: &BTreeSet<String>,
+) -> Result<()> {
+    for header in headers {
+        validate_value_source_proto(header.value.as_ref(), declared)?;
     }
+    Ok(())
+}
 
-    let key = map
-        .get("key")
-        .and_then(Value::as_str)
-        .ok_or_else(|| ManifestError::validation("manifest 'input' value source is missing key"))?;
+fn validate_request_proto(
+    request: Option<&specv1::RequestSpec>,
+    declared: &BTreeSet<String>,
+) -> Result<()> {
+    let Some(request) = request else {
+        return Ok(());
+    };
+    validate_template(&request.path, declared)?;
+    validate_headers_proto(&request.headers, declared)?;
+    for param in &request.query {
+        validate_value_source_proto(param.value.as_ref(), declared)?;
+    }
+    for field in &request.body {
+        validate_value_source_proto(field.value.as_ref(), declared)?;
+    }
+    Ok(())
+}
+
+fn validate_value_source_proto(
+    source: Option<&specv1::ValueSource>,
+    declared: &BTreeSet<String>,
+) -> Result<()> {
+    let Some(kind) = source.and_then(|source| source.kind.as_ref()) else {
+        return Ok(());
+    };
+    match kind {
+        specv1::value_source::Kind::Template(value) => validate_template(&value.template, declared),
+        specv1::value_source::Kind::Input(value) => validate_input_key(&value.key, declared),
+        specv1::value_source::Kind::Literal(_)
+        | specv1::value_source::Kind::Filter(_)
+        | specv1::value_source::Kind::FilterInt(_)
+        | specv1::value_source::Kind::State(_)
+        | specv1::value_source::Kind::NowEpochMinusSeconds(_) => Ok(()),
+    }
+}
+
+fn validate_input_key(key: &str, declared: &BTreeSet<String>) -> Result<()> {
     if !declared.contains(key) {
         return Err(ManifestError::validation(format!(
             "manifest input '{key}' is referenced but not declared under top-level inputs"
-        )));
-    }
-    if map.contains_key("default") {
-        return Err(ManifestError::validation(format!(
-            "manifest input '{key}' must declare defaults under top-level inputs"
         )));
     }
     Ok(())
@@ -166,12 +182,7 @@ fn validate_template(template: &str, declared: &BTreeSet<String>) -> Result<()> 
         if !matches!(token.namespace(), TemplateNamespace::Input) {
             continue;
         }
-        if !declared.contains(token.key()) {
-            return Err(ManifestError::validation(format!(
-                "manifest input '{}' is referenced but not declared under top-level inputs",
-                token.key()
-            )));
-        }
+        validate_input_key(token.key(), declared)?;
         if token.default_value().is_some() {
             return Err(ManifestError::validation(format!(
                 "manifest input '{}' must declare defaults under top-level inputs",
@@ -184,12 +195,13 @@ fn validate_template(template: &str, declared: &BTreeSet<String>) -> Result<()> 
 
 #[cfg(test)]
 mod tests {
-    use super::{ManifestInputKind, ManifestInputSpec, collect_source_inputs_value};
+    use super::{ManifestInputKind, ManifestInputSpec, collect_source_inputs_proto};
     use crate::Result;
+    use crate::proto_source::source_manifest_proto_from_yaml;
 
     fn collect(raw: &str) -> Result<Vec<ManifestInputSpec>> {
-        let root: serde_json::Value = serde_yaml::from_str(raw).expect("parse yaml");
-        collect_source_inputs_value(&root)
+        let manifest = source_manifest_proto_from_yaml(raw)?;
+        collect_source_inputs_proto(&manifest)
     }
 
     #[test]
@@ -213,7 +225,11 @@ auth:
     - name: Authorization
       from: template
       template: Bearer {{input.GITHUB_TOKEN}}
-tables: []
+tables:
+  - name: messages
+    description: Demo messages
+    request:
+      path: /messages
 "#;
 
         let inputs = collect(manifest).expect("inputs");
@@ -251,7 +267,11 @@ auth:
     - name: Authorization
       from: input
       key: GITHUB_TOKEN
-tables: []
+tables:
+  - name: messages
+    description: Demo messages
+    request:
+      path: /messages
 ";
         let inputs = collect(manifest).expect("inputs");
         assert_eq!(inputs.len(), 1);
@@ -266,7 +286,11 @@ version: 1.0.0
 dsl_version: 3
 backend: http
 base_url: https://api.github.com
-tables: []
+tables:
+  - name: messages
+    description: Demo messages
+    request:
+      path: /messages
 ";
         let inputs = collect(manifest).expect("no inputs is fine");
         assert!(inputs.is_empty());
@@ -280,7 +304,11 @@ version: 1.0.0
 dsl_version: 3
 backend: http
 base_url: "{{input.GITHUB_API_BASE}}"
-tables: []
+tables:
+  - name: messages
+    description: Demo messages
+    request:
+      path: /messages
 "#;
         let error = collect(manifest).expect_err("undeclared reference");
         assert!(
@@ -302,7 +330,11 @@ inputs:
   GITHUB_TOKEN:
     kind: secret
 base_url: "{{input.GITHUB_API_BASE}}"
-tables: []
+tables:
+  - name: messages
+    description: Demo messages
+    request:
+      path: /messages
 "#;
         let error = collect(manifest).expect_err("undeclared input");
         assert!(
@@ -324,7 +356,11 @@ inputs:
     kind: variable
     default: https://api.github.com
 base_url: "{{input.GITHUB_API_BASE|https://other.example.com}}"
-tables: []
+tables:
+  - name: messages
+    description: Demo messages
+    request:
+      path: /messages
 "#;
         let error = collect(manifest).expect_err("inline default");
         assert!(
@@ -345,9 +381,13 @@ inputs:
   GITHUB_TOKEN:
     kind: secret
     default: abc123
-tables: []
+tables:
+  - name: messages
+    description: Demo messages
+    request:
+      path: /messages
 ";
         let error = collect(manifest).expect_err("secret default");
-        assert!(error.to_string().contains("must not declare a default"));
+        assert!(error.to_string().contains("must not define default"));
     }
 }

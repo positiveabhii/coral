@@ -12,27 +12,26 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use serde::Deserialize;
-use serde_json::Value;
-
 use crate::{
     AuthSpec, ColumnSpec, FilterSpec, ManifestError, ManifestInputKind, ManifestInputSpec,
     PaginationSpec, ParsedTemplate, RequestRouteSpec, RequestSpec, ResponseSpec, Result,
-    SourceBackend, SourceManifestCommon, TableCommon, inputs::collect_source_inputs_value,
-    validate::validate_template, validate_http_table, validate_test_queries,
+    SourceManifestCommon, TableCommon,
+    inputs::collect_source_inputs_proto,
+    proto::v1 as specv1,
+    proto_normalize::{
+        auth_from_proto, pagination_from_proto, request_from_proto, request_routes_from_proto,
+        response_from_proto, source_common_from_proto, table_common_from_proto,
+    },
+    validate::validate_template,
+    validate_http_table, validate_test_queries,
 };
 
 /// Provider-specific response hints for classifying and delaying rate-limit retries.
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Default)]
 pub struct RateLimitSpec {
-    #[serde(default)]
     pub extra_statuses: Vec<u16>,
-    #[serde(default)]
     pub retry_after_header: Option<String>,
-    #[serde(default)]
     pub remaining_header: Option<String>,
-    #[serde(default)]
     pub reset_header: Option<String>,
 }
 
@@ -45,51 +44,6 @@ pub struct HttpSourceManifest {
     pub rate_limit: RateLimitSpec,
     pub tables: Vec<HttpTableSpec>,
     pub declared_inputs: Vec<ManifestInputSpec>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawHttpSourceManifest {
-    dsl_version: u32,
-    name: String,
-    version: String,
-    #[serde(default)]
-    description: String,
-    #[serde(default)]
-    test_queries: Vec<String>,
-    backend: SourceBackend,
-    #[serde(default)]
-    base_url: ParsedTemplate,
-    #[serde(default)]
-    auth: AuthSpec,
-    #[serde(default)]
-    rate_limit: RateLimitSpec,
-    #[serde(default)]
-    inputs: Option<Value>,
-    tables: Vec<RawHttpTableSpec>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawHttpTableSpec {
-    name: String,
-    description: String,
-    #[serde(default)]
-    guide: String,
-    #[serde(default)]
-    filters: Vec<FilterSpec>,
-    #[serde(default)]
-    fetch_limit_default: Option<usize>,
-    #[serde(default)]
-    request: RequestSpec,
-    #[serde(default)]
-    requests: Vec<RequestRouteSpec>,
-    #[serde(default)]
-    response: ResponseSpec,
-    #[serde(default)]
-    pagination: PaginationSpec,
-    #[serde(default)]
-    columns: Vec<ColumnSpec>,
 }
 
 /// One validated HTTP table declaration.
@@ -166,60 +120,44 @@ impl HttpSourceManifest {
     }
 }
 
-impl RawHttpTableSpec {
-    fn into_validated(self, schema: &str) -> Result<HttpTableSpec> {
+impl HttpTableSpec {
+    fn from_proto(table: &specv1::TableSpec, schema: &str) -> Result<HttpTableSpec> {
+        let common = table_common_from_proto(table)?;
+        let request = request_from_proto(table.request.as_ref())?;
+        let requests = request_routes_from_proto(&table.requests)?;
+        let response = response_from_proto(table.response.as_ref())?;
+        let pagination = pagination_from_proto(table.pagination.as_ref())?;
         validate_http_table(
             schema,
-            &self.name,
-            &self.filters,
-            &self.columns,
-            &self.request,
-            &self.requests,
-            &self.pagination,
+            &common.name,
+            &common.filters,
+            &common.columns,
+            &request,
+            &requests,
+            &pagination,
         )?;
 
         Ok(HttpTableSpec {
-            common: TableCommon::new(
-                self.name,
-                self.description,
-                self.guide,
-                self.filters,
-                self.fetch_limit_default,
-                self.columns,
-            ),
-            request: self.request,
-            requests: self.requests,
-            response: self.response,
-            pagination: self.pagination,
+            common,
+            request,
+            requests,
+            response,
+            pagination,
         })
     }
 }
 
 impl HttpSourceManifest {
-    pub(crate) fn parse_manifest_value(value: Value) -> Result<Self> {
-        let declared_inputs = collect_source_inputs_value(&value)?;
-        let raw: RawHttpSourceManifest =
-            serde_json::from_value(value).map_err(ManifestError::deserialize)?;
-        let RawHttpSourceManifest {
-            dsl_version,
-            name,
-            version,
-            description,
-            test_queries,
-            backend: _backend,
-            base_url,
-            auth,
-            rate_limit,
-            inputs: _inputs,
-            tables,
-        } = raw;
-        validate_test_queries(&name, &test_queries)?;
-        let common =
-            SourceManifestCommon::new(dsl_version, name, version, description, test_queries);
-        let tables = tables
-            .into_iter()
-            .map(|table| table.into_validated(&common.name))
+    pub(crate) fn parse_manifest_proto(manifest: &specv1::SourceManifest) -> Result<Self> {
+        let declared_inputs = collect_source_inputs_proto(manifest)?;
+        validate_test_queries(&manifest.name, &manifest.test_queries)?;
+        let common = source_common_from_proto(manifest);
+        let tables = manifest
+            .tables
+            .iter()
+            .map(|table| HttpTableSpec::from_proto(table, &common.name))
             .collect::<Result<Vec<_>>>()?;
+        let base_url = ParsedTemplate::parse(&manifest.base_url)?;
         if base_url.raw().trim().is_empty() {
             return Err(ManifestError::validation(format!(
                 "source '{}' must define a non-empty base_url",
@@ -235,12 +173,34 @@ impl HttpSourceManifest {
         Ok(Self {
             common,
             base_url,
-            auth,
-            rate_limit,
+            auth: auth_from_proto(manifest.auth.as_ref())?,
+            rate_limit: rate_limit_from_proto(manifest.rate_limit.as_ref())?,
             tables,
             declared_inputs,
         })
     }
+}
+
+fn rate_limit_from_proto(rate_limit: Option<&specv1::RateLimitSpec>) -> Result<RateLimitSpec> {
+    let Some(rate_limit) = rate_limit else {
+        return Ok(RateLimitSpec::default());
+    };
+    Ok(RateLimitSpec {
+        extra_statuses: rate_limit
+            .extra_statuses
+            .iter()
+            .map(|status| {
+                u16::try_from(*status).map_err(|_| {
+                    ManifestError::validation(format!(
+                        "source manifest rate_limit extra status {status} exceeds supported u16 range"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+        retry_after_header: rate_limit.retry_after_header.clone(),
+        remaining_header: rate_limit.remaining_header.clone(),
+        reset_header: rate_limit.reset_header.clone(),
+    })
 }
 
 #[cfg(test)]

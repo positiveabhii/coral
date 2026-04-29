@@ -11,10 +11,7 @@ use serde_json::Value;
 use crate::backends::file::{JsonlSourceManifest, ParquetSourceManifest};
 use crate::backends::http::HttpSourceManifest;
 use crate::proto::v1 as specv1;
-use crate::proto_source::{
-    source_manifest_proto_from_value, source_manifest_proto_from_yaml,
-    source_manifest_proto_to_value,
-};
+use crate::proto_source::{source_manifest_proto_from_value, source_manifest_proto_from_yaml};
 use crate::{ManifestError, ManifestInputSpec, Result, SourceBackend};
 
 /// Validated top-level source spec for one registered source.
@@ -178,20 +175,21 @@ pub fn parse_source_manifest_proto(
     manifest: &specv1::SourceManifest,
 ) -> Result<ValidatedSourceManifest> {
     let backend_kind = parse_source_backend(manifest)?;
-    let value = source_manifest_proto_to_value(manifest)?;
     match backend_kind {
         SourceBackend::Http => Ok(ValidatedSourceManifest {
-            inner: ValidatedManifestKind::Http(Box::new(HttpSourceManifest::parse_manifest_value(
-                value,
+            inner: ValidatedManifestKind::Http(Box::new(HttpSourceManifest::parse_manifest_proto(
+                manifest,
             )?)),
         }),
         SourceBackend::Parquet => Ok(ValidatedSourceManifest {
-            inner: ValidatedManifestKind::Parquet(ParquetSourceManifest::parse_manifest_value(
-                value,
+            inner: ValidatedManifestKind::Parquet(ParquetSourceManifest::parse_manifest_proto(
+                manifest,
             )?),
         }),
         SourceBackend::Jsonl => Ok(ValidatedSourceManifest {
-            inner: ValidatedManifestKind::Jsonl(JsonlSourceManifest::parse_manifest_value(value)?),
+            inner: ValidatedManifestKind::Jsonl(JsonlSourceManifest::parse_manifest_proto(
+                manifest,
+            )?),
         }),
     }
 }

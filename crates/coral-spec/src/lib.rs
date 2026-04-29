@@ -82,6 +82,7 @@ mod inputs;
 mod loader;
 mod parser;
 pub mod proto;
+mod proto_normalize;
 mod proto_source;
 mod template;
 mod validate;
