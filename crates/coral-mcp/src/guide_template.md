@@ -8,7 +8,7 @@ Always inspect queryable tables and table metadata before writing queries:
 
 ```sql
 -- List visible tables, descriptions, guides, and required filters
-SELECT schema_name, table_name, description, guide, required_filters
+SELECT schema_name, table_name, description, required_filters
 FROM coral.tables
 ORDER BY schema_name, table_name;
 
@@ -18,7 +18,7 @@ ORDER BY schema_name, table_name;
 -- Quick table shape shortcut
 {{DESCRIBE_EXAMPLE}}
 
--- Canonical column inspection with required-filter and virtual-column metadata
+-- Canonical column inspection with required-filter metadata
 {{COLUMNS_EXAMPLE}}
 ```
 
@@ -56,6 +56,6 @@ FROM source.events;
 ## Query Guidance
 
 - Fully qualify tables in SQL, for example `slack.messages`.
-- Read `coral.tables.guide` before querying a table, and check `coral.tables.required_filters` plus `coral.columns.is_required_filter` before querying tables that depend on filter-only inputs.
+- Check `coral.tables.required_filters` and `coral.columns.is_required_filter` before querying tables that depend on filter-only inputs.
 - Cross-source joins work with standard SQL after source scans complete.
 - `list_tables` and `coral://tables` show queryable fully qualified tables; `coral.tables`, `coral.columns`, and `coral.inputs` provide richer SQL metadata.

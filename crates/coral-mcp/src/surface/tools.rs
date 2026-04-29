@@ -9,8 +9,6 @@ use serde_json::{Map, Value, json};
 
 use super::resources::{visible_schema_count, visible_table_count};
 
-const SQL_DISCOVERY_GUIDANCE: &str = "Use this tool for discovery and answers. Before querying source tables, inspect `coral.tables` for `schema_name`, `table_name`, `description`, `guide`, and `required_filters`; inspect `coral.columns` for column types, descriptions, virtual columns, and `is_required_filter`; inspect `coral.inputs` when source config affects the answer.";
-
 pub(crate) fn sql_tool(sources: &[Source], tables: &[Table]) -> Tool {
     Tool::new(
         "sql",
@@ -105,12 +103,12 @@ pub(crate) fn build_tool_result(value: Value) -> Result<CallToolResult, ErrorDat
 fn sql_tool_description(sources: &[Source], tables: &[Table]) -> String {
     if tables.is_empty() {
         format!(
-            "Run a SQL query against local Coral sources. {} configured source(s), but no visible SQL schemas are currently available. {SQL_DISCOVERY_GUIDANCE}",
+            "Run a SQL query against local Coral sources. {} configured source(s), but no visible SQL schemas are currently available.",
             sources.len()
         )
     } else {
         format!(
-            "Run a SQL query against local Coral sources. {} visible SQL schema(s) are currently available. {SQL_DISCOVERY_GUIDANCE}",
+            "Run a SQL query against local Coral sources. {} visible SQL schema(s) are currently available.",
             visible_schema_count(tables)
         )
     }
@@ -118,7 +116,7 @@ fn sql_tool_description(sources: &[Source], tables: &[Table]) -> String {
 
 fn list_tables_description(tables: &[Table]) -> String {
     format!(
-        "List queryable fully qualified tables, optionally narrowed by exact schema. Use only as a flat table index. For richer discovery and table search, query `coral.tables` including `guide`, `coral.columns`, and `coral.inputs` with the `sql` tool. {} table(s) are currently visible.",
+        "List queryable fully qualified tables, optionally narrowed by exact schema. Query `coral.tables` and `coral.columns` with the `sql` tool for richer metadata and table search. {} table(s) are currently visible.",
         visible_table_count(tables)
     )
 }

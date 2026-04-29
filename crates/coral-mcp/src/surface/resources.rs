@@ -5,7 +5,7 @@ use coral_api::v1::{Source, Table};
 use rmcp::model::{AnnotateAble, RawResource, Resource};
 use serde_json::{Value, json};
 
-static INITIAL_INSTRUCTIONS: &str = "You are connected to Coral. Use the `sql` tool against `coral.tables` to discover visible tables, descriptions, guides, and required filters, then query `coral.columns` for column types, descriptions, virtual columns, and `is_required_filter`. Inspect `coral.inputs` when source configuration affects the answer. Use `list_tables` only as a flat fully qualified table index, optionally narrowed by exact schema. `DESCRIBE <schema>.<table>` and `SHOW COLUMNS FROM <schema>.<table>` are quick-shape shortcuts.";
+static INITIAL_INSTRUCTIONS: &str = "You are connected to Coral. Use the `sql` tool against `coral.tables` to discover visible tables, descriptions, guides, and required filters, then query `coral.columns` for column types, descriptions, virtual columns, and `is_required_filter`. Use `list_tables` only as a flat fully qualified table index, optionally narrowed by exact schema. `DESCRIBE <schema>.<table>` and `SHOW COLUMNS FROM <schema>.<table>` are quick-shape shortcuts.";
 static GUIDE_TEMPLATE: &str = include_str!("../guide_template.md");
 
 pub(crate) fn initial_instructions() -> &'static str {
@@ -56,11 +56,11 @@ pub(crate) fn guide_resource_content(sources: &[Source], tables: &[Table]) -> St
         table_name
     };
     let columns_example = format!(
-        "SELECT column_name, data_type, is_required_filter, is_virtual, description \
+        "SELECT column_name, data_type, is_required_filter, description \
 FROM coral.columns WHERE schema_name = '{schema_name}' AND table_name = '{table_name}' ORDER BY ordinal_position;"
     );
     let table_search_example = format!(
-        "SELECT schema_name, table_name, description, guide, required_filters \
+        "SELECT schema_name, table_name, description, required_filters \
 FROM coral.tables \
 WHERE schema_name = '{schema_name}' AND table_name LIKE '%{search_fragment}%' \
 ORDER BY schema_name, table_name;"
@@ -179,7 +179,6 @@ mod tests {
         assert!(content.contains("schema_name = '<schema>'"));
         assert!(content.contains("table_name LIKE '%pull%'"));
         assert!(content.contains("DESCRIBE <schema>.<table>"));
-        assert!(content.contains("is_virtual"));
     }
 
     #[test]
@@ -193,14 +192,9 @@ mod tests {
         assert!(content.contains("Visible source schemas:"));
         assert!(content.contains("- slack"));
         assert!(content.contains("Fully qualify tables in SQL, for example `slack.messages`."));
-        assert!(
-            content
-                .contains("SELECT schema_name, table_name, description, guide, required_filters")
-        );
         assert!(content.contains(
             "FROM coral.tables WHERE schema_name = 'slack' AND table_name LIKE '%channels%'"
         ));
-        assert!(content.contains("is_virtual"));
         assert!(content.contains("DESCRIBE slack.channels"));
     }
 }
