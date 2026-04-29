@@ -218,7 +218,9 @@ tables:
         )
         .expect_err("legacy schema field should fail");
         let message = error.to_string();
-        assert!(message.starts_with("invalid input: source manifest failed schema validation:"));
-        assert!(message.contains("'schema'"));
+        assert_eq!(
+            message,
+            "invalid input: source manifest has unknown field 'schema'"
+        );
     }
 }

@@ -58,7 +58,7 @@ tables:
 }
 
 #[test]
-fn lint_rejects_schema_violation() {
+fn lint_rejects_manifest_contract_violation() {
     let (_dir, path) = temp_manifest(
         r"
 name: demo
@@ -77,8 +77,8 @@ tables:
     assert!(!output.status.success(), "expected non-zero exit status");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("\"backend\" is a required property"),
-        "expected missing-backend schema error, got: {stderr}"
+        stderr.contains("source manifest must define backend"),
+        "expected missing-backend manifest error, got: {stderr}"
     );
 }
 

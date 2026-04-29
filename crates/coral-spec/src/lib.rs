@@ -81,7 +81,8 @@ mod error;
 mod inputs;
 mod loader;
 mod parser;
-mod schema;
+pub mod proto;
+mod proto_source;
 mod template;
 mod validate;
 
@@ -96,7 +97,8 @@ pub use error::{ManifestError, Result};
 pub use inputs::{ManifestInputKind, ManifestInputSpec};
 pub use loader::load_manifest_path;
 pub use parser::{
-    ValidatedSourceManifest, parse_source_manifest_value, parse_source_manifest_yaml,
+    ValidatedSourceManifest, parse_source_manifest_proto, parse_source_manifest_value,
+    parse_source_manifest_yaml,
 };
 pub use template::{ParsedTemplate, TemplateNamespace, TemplatePart, TemplateToken};
 pub(crate) use validate::{

@@ -10,7 +10,11 @@ use serde_json::Value;
 
 use crate::backends::file::{JsonlSourceManifest, ParquetSourceManifest};
 use crate::backends::http::HttpSourceManifest;
-use crate::schema::validate_manifest_schema;
+use crate::proto::v1 as specv1;
+use crate::proto_source::{
+    source_manifest_proto_from_value, source_manifest_proto_from_yaml,
+    source_manifest_proto_to_value,
+};
 use crate::{ManifestError, ManifestInputSpec, Result, SourceBackend};
 
 /// Validated top-level source spec for one registered source.
@@ -145,8 +149,8 @@ impl ValidatedSourceManifest {
 /// Returns a [`ManifestError`] if the `YAML` cannot be parsed or the source
 /// spec violates any validation rules.
 pub fn parse_source_manifest_yaml(raw: &str) -> Result<ValidatedSourceManifest> {
-    let manifest_value: Value = serde_yaml::from_str(raw).map_err(ManifestError::parse_yaml)?;
-    parse_source_manifest_value(manifest_value)
+    let manifest = source_manifest_proto_from_yaml(raw)?;
+    parse_source_manifest_proto(&manifest)
 }
 
 /// Parse and validate a source spec from structured source-spec data.
@@ -156,8 +160,25 @@ pub fn parse_source_manifest_yaml(raw: &str) -> Result<ValidatedSourceManifest> 
 /// Returns a [`ManifestError`] if the source spec violates any validation
 /// rules.
 pub fn parse_source_manifest_value(value: Value) -> Result<ValidatedSourceManifest> {
-    validate_manifest_schema(&value)?;
-    let backend_kind = parse_source_backend(&value)?;
+    let manifest = source_manifest_proto_from_value(value)?;
+    parse_source_manifest_proto(&manifest)
+}
+
+/// Parse and validate a source spec from its generated protobuf manifest.
+///
+/// This is the canonical raw-manifest path. YAML and structured-value parsers
+/// convert into this protobuf shape before backend-specific semantic
+/// validation runs.
+///
+/// # Errors
+///
+/// Returns a [`ManifestError`] if the source spec violates any validation
+/// rules.
+pub fn parse_source_manifest_proto(
+    manifest: &specv1::SourceManifest,
+) -> Result<ValidatedSourceManifest> {
+    let backend_kind = parse_source_backend(manifest)?;
+    let value = source_manifest_proto_to_value(manifest)?;
     match backend_kind {
         SourceBackend::Http => Ok(ValidatedSourceManifest {
             inner: ValidatedManifestKind::Http(Box::new(HttpSourceManifest::parse_manifest_value(
@@ -175,18 +196,26 @@ pub fn parse_source_manifest_value(value: Value) -> Result<ValidatedSourceManife
     }
 }
 
-fn parse_source_backend(value: &Value) -> Result<SourceBackend> {
-    let backend = value.get("backend").cloned().ok_or_else(|| {
-        ManifestError::validation("failed to deserialize manifest: missing backend")
-    })?;
-    let backend: SourceBackend =
-        serde_json::from_value(backend).map_err(ManifestError::deserialize)?;
-    Ok(backend)
+fn parse_source_backend(manifest: &specv1::SourceManifest) -> Result<SourceBackend> {
+    match specv1::SourceBackend::try_from(manifest.backend).map_err(|_| {
+        ManifestError::validation(format!(
+            "source manifest backend enum value {} is invalid",
+            manifest.backend
+        ))
+    })? {
+        specv1::SourceBackend::Http => Ok(SourceBackend::Http),
+        specv1::SourceBackend::Parquet => Ok(SourceBackend::Parquet),
+        specv1::SourceBackend::Jsonl => Ok(SourceBackend::Jsonl),
+        specv1::SourceBackend::Unspecified => Err(ManifestError::validation(
+            "source manifest must define backend",
+        )),
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_source_manifest_yaml;
+    use super::{parse_source_manifest_proto, parse_source_manifest_yaml};
+    use crate::proto::v1 as specv1;
 
     #[test]
     fn parse_source_manifest_preserves_test_query_order() {
@@ -240,5 +269,34 @@ tables:
             error.to_string(),
             "source 'demo' test_queries[0] must not be empty"
         );
+    }
+
+    #[test]
+    fn parse_source_manifest_proto_accepts_generated_shape() {
+        let manifest = specv1::SourceManifest {
+            name: "demo".to_string(),
+            version: "1.0.0".to_string(),
+            dsl_version: 3,
+            backend: specv1::SourceBackend::Jsonl as i32,
+            tables: vec![specv1::TableSpec {
+                name: "messages".to_string(),
+                description: "Demo messages".to_string(),
+                source: Some(specv1::FileSourceSpec {
+                    location: "file:///tmp/demo/".to_string(),
+                    ..specv1::FileSourceSpec::default()
+                }),
+                columns: vec![specv1::ColumnSpec {
+                    name: "kind".to_string(),
+                    data_type: "Utf8".to_string(),
+                    ..specv1::ColumnSpec::default()
+                }],
+                ..specv1::TableSpec::default()
+            }],
+            ..specv1::SourceManifest::default()
+        };
+        let manifest = parse_source_manifest_proto(&manifest).expect("manifest should parse");
+
+        assert_eq!(manifest.schema_name(), "demo");
+        assert!(manifest.as_jsonl().is_some());
     }
 }
