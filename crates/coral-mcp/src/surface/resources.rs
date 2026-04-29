@@ -60,7 +60,7 @@ pub(crate) fn guide_resource_content(sources: &[Source], tables: &[Table]) -> St
 FROM coral.columns WHERE schema_name = '{schema_name}' AND table_name = '{table_name}' ORDER BY ordinal_position;"
     );
     let table_search_example = format!(
-        "SELECT schema_name, table_name, description, required_filters \
+        "SELECT schema_name, table_name, description, guide, required_filters \
 FROM coral.tables \
 WHERE schema_name = '{schema_name}' AND table_name LIKE '%{search_fragment}%' \
 ORDER BY schema_name, table_name;"
@@ -192,6 +192,10 @@ mod tests {
         assert!(content.contains("Visible source schemas:"));
         assert!(content.contains("- slack"));
         assert!(content.contains("Fully qualify tables in SQL, for example `slack.messages`."));
+        assert!(
+            content
+                .contains("SELECT schema_name, table_name, description, guide, required_filters")
+        );
         assert!(content.contains(
             "FROM coral.tables WHERE schema_name = 'slack' AND table_name LIKE '%channels%'"
         ));

@@ -8,7 +8,7 @@ Always inspect queryable tables and table metadata before writing queries:
 
 ```sql
 -- List visible tables, descriptions, guides, and required filters
-SELECT schema_name, table_name, description, required_filters
+SELECT schema_name, table_name, description, guide, required_filters
 FROM coral.tables
 ORDER BY schema_name, table_name;
 

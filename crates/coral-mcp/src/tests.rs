@@ -252,7 +252,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     assert!(!updated_guide_text.contains("## Visible SQL Schemas"));
     assert!(
         updated_guide_text
-            .contains("SELECT schema_name, table_name, description, required_filters")
+            .contains("SELECT schema_name, table_name, description, guide, required_filters")
     );
     assert!(updated_guide_text.contains("FROM coral.tables"));
     assert!(updated_guide_text.contains("LIKE"));

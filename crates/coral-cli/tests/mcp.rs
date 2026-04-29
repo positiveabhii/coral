@@ -98,6 +98,9 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
     let guide_text = text_content(&guide);
     assert!(guide_text.contains("## Available Schemas"));
     assert!(guide_text.contains("- local_messages"));
+    assert!(
+        guide_text.contains("SELECT schema_name, table_name, description, guide, required_filters")
+    );
     assert!(guide_text.contains("FROM coral.tables"));
     assert!(guide_text.contains("LIKE"));
     assert!(guide_text.contains("DESCRIBE local_messages.messages"));
