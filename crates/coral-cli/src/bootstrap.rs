@@ -37,13 +37,36 @@ pub(crate) async fn bootstrap() -> Result<Bootstrap, BootstrapError> {
     })
 }
 
+#[cfg(feature = "server")]
+pub(crate) async fn start_dev_server(
+    bind_addr: std::net::SocketAddr,
+) -> Result<RunningServer, BootstrapError> {
+    Ok(configure_server_builder(ServerBuilder::new())
+        .with_bind_addr(bind_addr)
+        .with_grpc_web()
+        .start()
+        .await?)
+}
+
+#[cfg(feature = "embedded-ui")]
+pub(crate) async fn start_ui_server(
+    bind_addr: std::net::SocketAddr,
+) -> Result<RunningServer, BootstrapError> {
+    Ok(configure_server_builder(ServerBuilder::new())
+        .with_bind_addr(bind_addr)
+        .with_grpc_web()
+        .with_static_assets(crate::embedded_ui_assets())
+        .start()
+        .await?)
+}
+
 fn configure_server_builder(builder: ServerBuilder) -> ServerBuilder {
     builder.add_engine_extensions_provider(Arc::new(AwsEngineExtensionsProvider))
 }
 
 #[cfg(feature = "cli-test-server")]
 fn bootstrap_endpoint() -> Option<String> {
-    coral_cli::env::bootstrap_endpoint()
+    crate::env::bootstrap_endpoint()
 }
 
 #[cfg(not(feature = "cli-test-server"))]

@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 arrow.workspace = true
+axum.workspace = true
 directories.workspace = true
 fs2.workspace = true
 serde.workspace = true
@@ -23,6 +24,8 @@ toml.workspace = true
 toml_edit.workspace = true
 tonic.workspace = true
 tonic-types.workspace = true
+tonic-web.workspace = true
+tower.workspace = true
 tracing.workspace = true
 
 coral-api.workspace = true
@@ -32,6 +35,7 @@ coral-engine.workspace = true
 
 [dev-dependencies]
 coral-client.workspace = true
+prost.workspace = true
 reqwest.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
