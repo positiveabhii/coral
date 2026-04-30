@@ -17,6 +17,11 @@ pub(crate) enum BootstrapError {
     Startup(#[from] LocalServerError),
     #[error(transparent)]
     Connect(#[from] ClientError),
+    #[cfg(feature = "embedded-ui")]
+    #[error(
+        "embedded UI assets are missing; run `npm run build --prefix ui` and rebuild `coral` with the `embedded-ui` feature"
+    )]
+    EmbeddedUiMissing,
 }
 
 pub(crate) async fn bootstrap() -> Result<Bootstrap, BootstrapError> {
@@ -52,6 +57,10 @@ pub(crate) async fn start_dev_server(
 pub(crate) async fn start_ui_server(
     bind_addr: std::net::SocketAddr,
 ) -> Result<RunningServer, BootstrapError> {
+    if !crate::embedded_ui_assets_available() {
+        return Err(BootstrapError::EmbeddedUiMissing);
+    }
+
     Ok(configure_server_builder(ServerBuilder::new())
         .with_bind_addr(bind_addr)
         .with_grpc_web()
