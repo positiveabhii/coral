@@ -24,7 +24,7 @@ fn write_fixture_manifest(root: &Path) -> PathBuf {
     fs::create_dir_all(&data_dir).expect("create data dir");
     fs::write(
         data_dir.join("messages.jsonl"),
-        r#"{"type":"user","sessionId":"s1","text":"hello"}
+        r#"{"type":"user","sessionId":"s1","text":"hello ludo"}
 {"type":"assistant","sessionId":"s1","text":"world"}
 "#,
     )
@@ -273,7 +273,7 @@ async fn mcp_tool_error_does_not_end_session() {
         .expect("sql");
     assert_eq!(
         sql.structured_content.expect("structured content")["rows"][0]["text"],
-        "hello"
+        "hello ludo"
     );
     assert_eq!(sql.is_error, Some(false));
 
