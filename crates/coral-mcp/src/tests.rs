@@ -17,6 +17,8 @@ use tonic::Request;
 
 use crate::CoralMcpServer;
 
+const USER_MESSAGE_TEXT: &str = "hello ludo";
+
 fn write_fixture_manifest(root: &Path) -> PathBuf {
     let source_dir = root.join("fixture-source");
     let data_dir = root.join("fixture-data");
@@ -24,9 +26,11 @@ fn write_fixture_manifest(root: &Path) -> PathBuf {
     fs::create_dir_all(&data_dir).expect("create data dir");
     fs::write(
         data_dir.join("messages.jsonl"),
-        r#"{"type":"user","sessionId":"s1","text":"hello ludo"}
-{"type":"assistant","sessionId":"s1","text":"world"}
-"#,
+        format!(
+            r#"{{"type":"user","sessionId":"s1","text":"{USER_MESSAGE_TEXT}"}}
+{{"type":"assistant","sessionId":"s1","text":"world"}}
+"#
+        ),
     )
     .expect("write jsonl");
     let manifest = format!(
@@ -273,7 +277,7 @@ async fn mcp_tool_error_does_not_end_session() {
         .expect("sql");
     assert_eq!(
         sql.structured_content.expect("structured content")["rows"][0]["text"],
-        "hello ludo"
+        USER_MESSAGE_TEXT
     );
     assert_eq!(sql.is_error, Some(false));
 
