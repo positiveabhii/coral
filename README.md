@@ -276,3 +276,5 @@ Please do not report security issues in public issues or pull requests. See
 ## Licence
 
 Coral is licensed under the Apache License 2.0. See [`LICENSE`](./LICENSE).
+
+<!-- bench-314 e2e smoke 2026-05-04T13:55:17Z -->
