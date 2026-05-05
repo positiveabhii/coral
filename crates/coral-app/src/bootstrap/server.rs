@@ -14,6 +14,7 @@ use std::task::{Context, Poll};
 use axum::body::Body as AxumBody;
 use axum::extract::Request as AxumRequest;
 use axum::response::Response as AxumResponse;
+use coral_api::v1::feedback_service_server::FeedbackServiceServer;
 use coral_api::v1::query_service_server::QueryServiceServer;
 use coral_api::v1::source_service_server::SourceServiceServer;
 use coral_api::{HTTP2_MAX_HEADER_LIST_SIZE, QUERY_RESPONSE_MAX_MESSAGE_SIZE};
@@ -33,6 +34,8 @@ use tower::{Layer, Service};
 use super::env::AppEnvironment;
 use super::error::AppError;
 use crate::EngineExtensionsProvider;
+use crate::feedback::manager::FeedbackManager;
+use crate::feedback::service::FeedbackService;
 use crate::query::manager::QueryManager;
 use crate::query::service::QueryService;
 use crate::sources::manager::SourceManager;
@@ -241,6 +244,7 @@ impl ServerBuilder {
         let secret_store = SecretStore::new(layout.clone());
         let source_manager =
             SourceManager::new(config_store.clone(), secret_store.clone(), layout.clone());
+        let feedback_manager = FeedbackManager::new(layout.clone());
         let query_manager = QueryManager::new(
             config_store,
             secret_store,
@@ -251,6 +255,7 @@ impl ServerBuilder {
         start_server(
             source_manager,
             query_manager,
+            feedback_manager,
             self.config.bind_addr,
             self.config.transport,
         )
@@ -323,11 +328,13 @@ impl Drop for RunningServer {
 async fn start_server(
     source_manager: SourceManager,
     query_manager: QueryManager,
+    feedback_manager: FeedbackManager,
     bind_addr: SocketAddr,
     transport: ServerTransport,
 ) -> Result<RunningServer, AppError> {
     let source_service = SourceService::new(source_manager, query_manager.clone());
     let query_service = QueryService::new(query_manager);
+    let feedback_service = FeedbackService::new(feedback_manager);
     let listener = TcpListener::bind(bind_addr).await?;
     let endpoint_uri = format!("http://{}", listener.local_addr()?);
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -337,6 +344,7 @@ async fn start_server(
             listener,
             shutdown_rx,
             SourceServiceServer::new(source_service),
+            FeedbackServiceServer::new(feedback_service),
             QueryServiceServer::new(query_service)
                 .max_encoding_message_size(QUERY_RESPONSE_MAX_MESSAGE_SIZE),
         ),
@@ -344,6 +352,7 @@ async fn start_server(
             listener,
             shutdown_rx,
             SourceServiceServer::new(source_service),
+            FeedbackServiceServer::new(feedback_service),
             QueryServiceServer::new(query_service)
                 .max_encoding_message_size(QUERY_RESPONSE_MAX_MESSAGE_SIZE),
             static_assets,
@@ -357,10 +366,11 @@ async fn start_server(
     })
 }
 
-fn start_grpc_server<S, Q>(
+fn start_grpc_server<S, F, Q>(
     listener: TcpListener,
     shutdown_rx: oneshot::Receiver<()>,
     source_service: S,
+    feedback_service: F,
     query_service: Q,
 ) -> JoinHandle<Result<(), tonic::transport::Error>>
 where
@@ -371,6 +381,13 @@ where
         + Sync
         + 'static,
     S::Future: Send + 'static,
+    F: Service<Request<Body>, Response = Response<Body>, Error = Infallible>
+        + NamedService
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    F::Future: Send + 'static,
     Q: Service<Request<Body>, Response = Response<Body>, Error = Infallible>
         + NamedService
         + Clone
@@ -383,6 +400,7 @@ where
         Server::builder()
             .http2_max_header_list_size(HTTP2_MAX_HEADER_LIST_SIZE)
             .add_service(source_service)
+            .add_service(feedback_service)
             .add_service(query_service)
             .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
                 let _ = shutdown_rx.await;
@@ -391,10 +409,11 @@ where
     })
 }
 
-fn start_grpc_web_server<S, Q>(
+fn start_grpc_web_server<S, F, Q>(
     listener: TcpListener,
     shutdown_rx: oneshot::Receiver<()>,
     source_service: S,
+    feedback_service: F,
     query_service: Q,
     static_assets: Option<Arc<dyn StaticAssetsProvider>>,
 ) -> JoinHandle<Result<(), tonic::transport::Error>>
@@ -406,6 +425,13 @@ where
         + Sync
         + 'static,
     S::Future: Send + 'static,
+    F: Service<Request<Body>, Response = Response<Body>, Error = Infallible>
+        + NamedService
+        + Clone
+        + Send
+        + Sync
+        + 'static,
+    F::Future: Send + 'static,
     Q: Service<Request<Body>, Response = Response<Body>, Error = Infallible>
         + NamedService
         + Clone
@@ -416,6 +442,7 @@ where
 {
     let grpc = Routes::default()
         .add_service(source_service)
+        .add_service(feedback_service)
         .add_service(query_service)
         .into_axum_router()
         .layer(GrpcWebLayer::new())
@@ -565,6 +592,7 @@ mod tests {
         ServerBuilder, ServerTransport, StaticAsset, StaticAssetsProvider,
         is_native_grpc_content_type, start_server,
     };
+    use crate::feedback::manager::FeedbackManager;
     use crate::query::manager::QueryManager;
     use crate::sources::manager::SourceManager;
     use crate::state::{AppStateLayout, ConfigStore, SecretStore};
@@ -786,6 +814,7 @@ mod tests {
             SecretStore::new(layout.clone()),
             layout.clone(),
         );
+        let feedback_manager = FeedbackManager::new(layout.clone());
         let query_manager = QueryManager::new(
             ConfigStore::new(layout.clone()),
             SecretStore::new(layout.clone()),
@@ -798,6 +827,7 @@ mod tests {
         let running = start_server(
             source_manager,
             query_manager,
+            feedback_manager,
             default_bind_addr(),
             ServerTransport::Grpc,
         )
@@ -869,6 +899,7 @@ tables:
             SecretStore::new(layout.clone()),
             layout.clone(),
         );
+        let feedback_manager = FeedbackManager::new(layout.clone());
         let query_manager = QueryManager::new(
             ConfigStore::new(layout.clone()),
             SecretStore::new(layout.clone()),
@@ -879,6 +910,7 @@ tables:
         let running = start_server(
             source_manager,
             query_manager,
+            feedback_manager,
             default_bind_addr(),
             ServerTransport::Grpc,
         )
@@ -962,6 +994,7 @@ tables:
             SecretStore::new(layout.clone()),
             layout.clone(),
         );
+        let feedback_manager = FeedbackManager::new(layout.clone());
         let query_manager = QueryManager::new(
             ConfigStore::new(layout.clone()),
             SecretStore::new(layout.clone()),
@@ -972,6 +1005,7 @@ tables:
         let running = start_server(
             source_manager,
             query_manager,
+            feedback_manager,
             default_bind_addr(),
             ServerTransport::Grpc,
         )

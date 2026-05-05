@@ -60,7 +60,7 @@ enum Command {
     /// Interactive wizard to set up Coral and explore use cases
     Onboard,
     /// Start the MCP server over stdio
-    McpStdio,
+    McpStdio(McpStdioArgs),
     #[cfg(feature = "server")]
     /// Start the local gRPC-Web server (use with the UI dev server)
     Server(ServerArgs),
@@ -102,6 +102,14 @@ struct SqlArgs {
     format: OutputFormat,
     /// SQL query to execute
     sql: String,
+}
+
+#[derive(Debug, Args)]
+/// Start the MCP server over stdio
+struct McpStdioArgs {
+    /// Expose the feedback submission tool.
+    #[arg(long)]
+    enable_feedback: bool,
 }
 
 #[derive(Debug, Args)]
@@ -192,7 +200,7 @@ impl CliExitError {
 impl Command {
     fn required_runtime(&self) -> RequiredRuntime {
         match self {
-            Command::Sql(_) | Command::Source(_) | Command::Onboard | Command::McpStdio => {
+            Command::Sql(_) | Command::Source(_) | Command::Onboard | Command::McpStdio(_) => {
                 RequiredRuntime::AppClient
             }
             Command::Completion(_) => RequiredRuntime::None,
@@ -204,7 +212,7 @@ impl Command {
     }
 
     fn enables_stderr_logs(&self) -> bool {
-        matches!(self, Command::McpStdio)
+        matches!(self, Command::McpStdio(_))
     }
 }
 
@@ -350,7 +358,7 @@ async fn run_no_runtime_command(command: Command) -> Result<(), anyhow::Error> {
         Command::Server(args) => run_dev_server(args.bind_addr).await,
         #[cfg(feature = "embedded-ui")]
         Command::Ui(args) => run_ui(args.bind_addr).await,
-        Command::Sql(_) | Command::Source(_) | Command::Onboard | Command::McpStdio => {
+        Command::Sql(_) | Command::Source(_) | Command::Onboard | Command::McpStdio(_) => {
             unreachable!("app client commands are routed through app runtime startup")
         }
     }
@@ -379,8 +387,14 @@ async fn run_app_command(app: AppClient, command: Command) -> Result<(), anyhow:
         Command::Onboard => {
             onboard::run(&app).await?;
         }
-        Command::McpStdio => {
-            coral_mcp::run_stdio_with_client(app).await?;
+        Command::McpStdio(args) => {
+            coral_mcp::run_stdio_with_client(
+                app,
+                coral_mcp::McpOptions {
+                    feedback_enabled: args.enable_feedback,
+                },
+            )
+            .await?;
         }
         Command::Completion(_) => {
             unreachable!("no-runtime commands are routed without an app client")
@@ -637,6 +651,15 @@ mod tests {
     #[test]
     fn mcp_stdio_invocation_enables_stderr_logs() {
         assert!(command_enables_stderr_logs(["coral", "mcp-stdio"]));
+    }
+
+    #[test]
+    fn mcp_stdio_with_feedback_invocation_enables_stderr_logs() {
+        assert!(command_enables_stderr_logs([
+            "coral",
+            "mcp-stdio",
+            "--enable-feedback"
+        ]));
     }
 
     #[test]

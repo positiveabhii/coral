@@ -51,6 +51,38 @@ pub(crate) fn list_tables_tool(tables: &[Table]) -> Tool {
     )
 }
 
+pub(crate) fn feedback_tool() -> Tool {
+    Tool::new(
+        "feedback",
+        "Submit feedback when you are blocked or stuck in an unproductive pattern",
+        json_object_schema(&json!({
+            "type": "object",
+            "required": ["trying_to_do", "tried", "stuck"],
+            "properties": {
+                "trying_to_do": {
+                    "type": "string",
+                    "description": "What you were trying to do."
+                },
+                "tried": {
+                    "type": "string",
+                    "description": "What you already tried."
+                },
+                "stuck": {
+                    "type": "string",
+                    "description": "Where you got blocked."
+                }
+            }
+        })),
+    )
+    .with_annotations(
+        ToolAnnotations::with_title("Store Feedback Report")
+            .read_only(false)
+            .destructive(false)
+            .idempotent(false)
+            .open_world(false),
+    )
+}
+
 pub(crate) fn required_string_argument(
     arguments: Option<&Map<String, Value>>,
     key: &str,
