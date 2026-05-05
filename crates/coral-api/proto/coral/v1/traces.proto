@@ -24,12 +24,13 @@ message TraceSummary {
   string query = 4;
   // Derived trace status.
   TraceStatus status = 5;
-  // Earliest span start time in Unix nanoseconds.
-  int64 start_time_unix_nanos = 6;
-  // Latest span end time in Unix nanoseconds.
-  int64 end_time_unix_nanos = 7;
-  // Wall-clock duration between the first span start and last span end.
-  int64 duration_nanos = 8;
+  // Earliest span start time in Unix nanoseconds, encoded as decimal text.
+  string start_time_unix_nanos = 6;
+  // Latest span end time in Unix nanoseconds, encoded as decimal text.
+  string end_time_unix_nanos = 7;
+  // Wall-clock duration between the first span start and last span end,
+  // encoded as decimal text.
+  string duration_nanos = 8;
   // Number of spans captured for this trace.
   uint32 span_count = 9;
   // Query row count when the trace includes a completed Coral query span.
@@ -79,12 +80,12 @@ message TraceSpan {
   TraceStatus status = 7;
   // Optional status message for error spans.
   string status_message = 8;
-  // Span start time in Unix nanoseconds.
-  int64 start_time_unix_nanos = 9;
-  // Span end time in Unix nanoseconds.
-  int64 end_time_unix_nanos = 10;
-  // Span duration in nanoseconds.
-  int64 duration_nanos = 11;
+  // Span start time in Unix nanoseconds, encoded as decimal text.
+  string start_time_unix_nanos = 9;
+  // Span end time in Unix nanoseconds, encoded as decimal text.
+  string end_time_unix_nanos = 10;
+  // Span duration in nanoseconds, encoded as decimal text.
+  string duration_nanos = 11;
   // JSON object of OpenTelemetry span attributes.
   string attributes_json = 12;
   // JSON payload of OpenTelemetry span events.

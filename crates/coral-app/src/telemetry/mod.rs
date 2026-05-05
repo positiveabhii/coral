@@ -14,7 +14,7 @@ use opentelemetry_otlp::{
 use opentelemetry_sdk::logs::SdkLoggerProvider;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
-use opentelemetry_sdk::trace::SdkTracerProvider;
+use opentelemetry_sdk::trace::{BatchConfigBuilder, SdkTracerProvider};
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use tracing_subscriber::Layer as _;
 use tracing_subscriber::filter::Targets;
@@ -37,6 +37,7 @@ static LOGGER_PROVIDER: Mutex<Option<SdkLoggerProvider>> = Mutex::new(None);
 static METER_PROVIDER: Mutex<Option<SdkMeterProvider>> = Mutex::new(None);
 
 const METRICS_INTERVAL: Duration = Duration::from_secs(5);
+const LOCAL_TRACE_EXPORT_DELAY: Duration = Duration::from_millis(250);
 
 fn build_log_filter(filter: Option<&str>) -> (EnvFilter, Option<String>) {
     let Some(filter) = filter else {
@@ -235,8 +236,13 @@ fn try_init_tracing(
         if let Some(path) = local_trace_store_dir {
             let exporter = local_store::ParquetSpanExporter::new(path)
                 .map_err(|e| AppError::InvalidInput(e.to_string()))?;
+            let batch_config = BatchConfigBuilder::default()
+                .with_scheduled_delay(LOCAL_TRACE_EXPORT_DELAY)
+                .build();
             builder = builder.with_span_processor(
-                opentelemetry_sdk::trace::BatchSpanProcessor::builder(exporter).build(),
+                opentelemetry_sdk::trace::BatchSpanProcessor::builder(exporter)
+                    .with_batch_config(batch_config)
+                    .build(),
             );
         }
 

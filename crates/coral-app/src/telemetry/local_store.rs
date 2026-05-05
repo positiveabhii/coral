@@ -209,6 +209,7 @@ impl TraceStore {
 
         let mut summaries = traces
             .into_iter()
+            .filter(|(_, spans)| spans.iter().any(|span| span.name == "coral.query"))
             .map(|(trace_id, spans)| summary_from_spans(&trace_id, &spans))
             .collect::<Vec<_>>();
         summaries.sort_by(|left, right| {
@@ -1108,6 +1109,39 @@ mod tests {
         assert_eq!(detail.summary, *summary);
         assert_eq!(detail.spans.len(), 1);
         assert_eq!(detail.spans[0].span_id, summary.root_span_id);
+    }
+
+    #[test]
+    fn list_traces_excludes_non_query_traces() {
+        let temp = TempDir::new().expect("temp dir");
+        let dir = temp.path().join("telemetry").join("traces");
+        let exporter = ParquetSpanExporter::new(dir.clone()).expect("parquet span exporter");
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter)
+            .build();
+        let tracer = provider.tracer("local-store-test");
+        let mut grpc_span = tracer
+            .span_builder("grpc")
+            .with_kind(SpanKind::Internal)
+            .with_attributes([KeyValue::new("grpc.method", "list_traces")])
+            .start(&tracer);
+        grpc_span.end();
+        let mut query_span = tracer
+            .span_builder("coral.query")
+            .with_kind(SpanKind::Internal)
+            .with_attributes([
+                KeyValue::new("sql", "SELECT 1"),
+                KeyValue::new("status", "ok"),
+            ])
+            .start(&tracer);
+        query_span.end();
+        provider.shutdown().expect("provider shutdown");
+
+        let store = TraceStore::new(dir);
+        let summaries = store.list_traces(10, 0).expect("list traces");
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].name, "coral.query");
     }
 
     #[test]
