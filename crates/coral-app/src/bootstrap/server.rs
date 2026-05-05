@@ -160,18 +160,18 @@ impl ServerBuilder {
     }
 
     #[must_use]
-    /// Overrides the loopback address used by the local server.
+    /// Overrides the socket address used by the local server.
     pub fn with_bind_addr(mut self, bind_addr: SocketAddr) -> Self {
         self.config = self.config.with_bind_addr(bind_addr);
         self
     }
 
     #[must_use]
-    /// Switches the server to gRPC-Web on a single loopback port.
+    /// Switches the server to gRPC-Web on a single port.
     ///
     /// Requests with native `application/grpc` content-types are rejected
     /// with HTTP 415; the server is intended for browser clients on the same
-    /// origin (or a proxy that exposes the loopback port as same-origin).
+    /// origin.
     pub fn with_grpc_web(mut self) -> Self {
         self.config = self.config.with_grpc_web();
         self
@@ -217,7 +217,7 @@ impl ServerBuilder {
         self
     }
 
-    /// Starts the Coral gRPC server on loopback TCP.
+    /// Starts the Coral gRPC server on TCP.
     ///
     /// By default, Coral keeps a real local gRPC boundary here so the public
     /// client talks to the same typed transport contract the server exposes.
@@ -271,7 +271,7 @@ pub struct RunningServer {
 
 impl RunningServer {
     #[must_use]
-    /// Returns the loopback endpoint URI for this server.
+    /// Returns the endpoint URI for this server.
     ///
     /// This is part of the narrow sibling-facing bootstrap seam used by the
     /// thin local client and by integration tests that need explicit control

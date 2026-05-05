@@ -341,7 +341,9 @@ pub async fn run(app: AppClient, ctx: coral_app::RunContext) -> Result<(), anyho
 async fn run_no_runtime_command(command: Command) -> Result<(), anyhow::Error> {
     match command {
         Command::Completion(args) => {
-            run_completion(&args);
+            let mut cmd = Cli::command();
+            let bin_name = cmd.get_name().to_string();
+            generate(args.shell, &mut cmd, bin_name, &mut std::io::stdout());
             Ok(())
         }
         #[cfg(feature = "server")]
@@ -356,7 +358,23 @@ async fn run_no_runtime_command(command: Command) -> Result<(), anyhow::Error> {
 
 async fn run_app_command(app: AppClient, command: Command) -> Result<(), anyhow::Error> {
     match command {
-        Command::Sql(args) => run_sql(&app, args).await?,
+        Command::Sql(args) => {
+            let response = match app
+                .query_client()
+                .execute_sql(Request::new(ExecuteSqlRequest {
+                    workspace: Some(default_workspace()),
+                    sql: args.sql,
+                }))
+                .await
+            {
+                Ok(response) => response.into_inner(),
+                Err(status) => {
+                    return Err(CliExitError::new(query_error::render_query_error(&status)).into());
+                }
+            };
+            let result = decode_execute_sql_response(&response)?;
+            print_batches(result.batches(), args.format)?;
+        }
         Command::Source(args) => run_source(&app, args).await?,
         Command::Onboard => {
             onboard::run(&app).await?;
@@ -364,8 +382,8 @@ async fn run_app_command(app: AppClient, command: Command) -> Result<(), anyhow:
         Command::McpStdio => {
             coral_mcp::run_stdio_with_client(app).await?;
         }
-        Command::Completion(args) => {
-            run_completion(&args);
+        Command::Completion(_) => {
+            unreachable!("no-runtime commands are routed without an app client")
         }
         #[cfg(feature = "server")]
         Command::Server(_) => {
@@ -377,31 +395,6 @@ async fn run_app_command(app: AppClient, command: Command) -> Result<(), anyhow:
         }
     }
 
-    Ok(())
-}
-
-fn run_completion(args: &CompletionArgs) {
-    let mut cmd = Cli::command();
-    let bin_name = cmd.get_name().to_string();
-    generate(args.shell, &mut cmd, bin_name, &mut std::io::stdout());
-}
-
-async fn run_sql(app: &AppClient, args: SqlArgs) -> Result<(), anyhow::Error> {
-    let response = match app
-        .query_client()
-        .execute_sql(Request::new(ExecuteSqlRequest {
-            workspace: Some(default_workspace()),
-            sql: args.sql,
-        }))
-        .await
-    {
-        Ok(response) => response.into_inner(),
-        Err(status) => {
-            return Err(CliExitError::new(query_error::render_query_error(&status)).into());
-        }
-    };
-    let result = decode_execute_sql_response(&response)?;
-    print_batches(result.batches(), args.format)?;
     Ok(())
 }
 
@@ -601,20 +594,29 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "embedded-ui", not(feature = "server")))]
+    #[test]
+    fn server_command_is_not_available_with_embedded_ui_only() {
+        let error = Cli::try_parse_from(["coral", "server", "--help"])
+            .expect_err("embedded-ui should not expose the dev server command");
+
+        assert!(
+            error.to_string().contains("unrecognized subcommand"),
+            "unexpected parse error: {error}"
+        );
+    }
+
     #[cfg(feature = "embedded-ui")]
     #[test]
     fn ui_command_uses_custom_bind_addr_without_required_runtime() {
-        let cli = Cli::try_parse_from(["coral", "ui", "--addr", "127.0.0.1:1459"])
+        let cli = Cli::try_parse_from(["coral", "ui", "--addr", "0.0.0.0:1459"])
             .expect("ui args should parse");
 
         assert_eq!(cli.command.required_runtime(), RequiredRuntime::None);
         let super::Command::Ui(args) = cli.command else {
             panic!("expected ui command");
         };
-        assert_eq!(
-            args.bind_addr,
-            "127.0.0.1:1459".parse().expect("socket addr")
-        );
+        assert_eq!(args.bind_addr, "0.0.0.0:1459".parse().expect("socket addr"));
     }
 
     #[test]
