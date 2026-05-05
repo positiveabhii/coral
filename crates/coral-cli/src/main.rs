@@ -8,7 +8,9 @@
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    match coral_cli::run_from_env().await {
+    let result = coral_cli::run_from_env().await;
+    let _ = tokio::task::spawn_blocking(coral_app::shutdown_tracing).await;
+    match result {
         Ok(()) => Ok(()),
         Err(error) => {
             if let Some(cli_error) = error.downcast_ref::<coral_cli::CliExitError>() {

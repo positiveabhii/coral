@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::harness::{
-    TestRuntime, assert_row_count, build_source, execution_to_rows, write_jsonl_file,
+    assert_row_count, build_source, execution_to_rows, test_runtime, write_jsonl_file,
 };
 
 fn manifest(dir: &Path) -> Value {
@@ -69,7 +69,7 @@ async fn similar_to_with_like_wildcard_returns_clear_error() {
 
     let error = CoralQuery::execute_sql(
         &[source],
-        &TestRuntime,
+        test_runtime(),
         "SELECT id, name FROM linear.projects WHERE name SIMILAR TO '(Slack|Weekly)%'",
     )
     .await
@@ -81,21 +81,20 @@ async fn similar_to_with_like_wildcard_returns_clear_error() {
 }
 
 #[tokio::test]
-async fn regex_match_with_like_wildcard_returns_clear_error() {
+async fn regex_match_with_percent_is_valid() {
     let temp = TempDir::new().expect("temp dir");
     let source = write_projects_fixture(temp.path());
 
-    let error = CoralQuery::execute_sql(
+    // % is a literal character in regex — no error, just zero matches
+    let execution = CoralQuery::execute_sql(
         &[source],
-        &TestRuntime,
+        test_runtime(),
         "SELECT id, name FROM linear.projects WHERE name ~ '(Slack|Weekly)%'",
     )
     .await
-    .expect_err("regex wildcard mismatch should fail");
+    .expect("regex with literal % should succeed");
 
-    let detail = invalid_input_detail(error);
-    assert!(detail.contains("Regex operator `~` pattern '(Slack|Weekly)%'"));
-    assert!(detail.contains("Use `.*` instead of `%`"));
+    assert_row_count(&execution, 0);
 }
 
 #[tokio::test]
@@ -105,7 +104,7 @@ async fn similar_to_with_regex_syntax_succeeds() {
 
     let execution = CoralQuery::execute_sql(
         &[source],
-        &TestRuntime,
+        test_runtime(),
         "SELECT id, name FROM linear.projects WHERE name SIMILAR TO '(Slack|Weekly).*' ORDER BY id",
     )
     .await
@@ -123,7 +122,7 @@ async fn regex_match_with_valid_regex_succeeds() {
 
     let execution = CoralQuery::execute_sql(
         &[source],
-        &TestRuntime,
+        test_runtime(),
         "SELECT id, name FROM linear.projects WHERE name ~ '^(Slack|Weekly)' ORDER BY id",
     )
     .await
@@ -141,7 +140,7 @@ async fn like_with_wildcards_still_works() {
 
     let execution = CoralQuery::execute_sql(
         &[source],
-        &TestRuntime,
+        test_runtime(),
         "SELECT id, name FROM linear.projects WHERE name LIKE 'Slack%' OR name LIKE 'Weekly%' ORDER BY id",
     )
     .await

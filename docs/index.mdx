@@ -77,9 +77,11 @@ Full [benchmark report](https://withcoral.com/benchmarks).
 
 Coral sits between you and your data sources: you (or your agent) write SQL, and Coral translates it into API calls or file reads, then returns a single query result.
 
-For example, here's Coral answering the question:
+You can ask your agents complex questions about your data:
 
-> Which Sentry errors create the most noise in Slack, and who is working on them?
+![coral sql demo](/images/claude-query-example.png)
+
+Or run SQL queries yourself:
 
 ![coral sql demo](/images/coral-sql-join.gif)
 
@@ -113,7 +115,7 @@ graph LR
     FS -.->|File path| Disk
 ```
 
-For the full internals, crates, gRPC transport, DataFusion integration, see the [architecture page](/contributors/architecture).
+For the full internals, crates, gRPC transport, DataFusion integration, see the [architecture page](/project/architecture).
 
 ## Quick links
 

@@ -17,6 +17,7 @@
 mod client;
 mod error;
 pub mod local;
+mod propagation;
 mod status_error;
 
 use std::io::Cursor;

@@ -11,9 +11,11 @@ Coral gives agents a local-first SQL runtime over APIs, files, and other data
 sources. Query it from the CLI, inspect schemas and tables, or expose the same
 runtime over MCP so agents can use it without bespoke tool glue.
 
-Here's Coral answering the question:
+You can ask your agents complex questions about your data:
 
-> "Which Sentry errors create the most noise in Slack, and who is working on them?"
+![coral sql demo](./docs/images/claude-query-example.png)
+
+Or run SQL queries yourself:
 
 ![coral sql demo](./docs/images/coral-sql-join.gif)
 
@@ -110,7 +112,7 @@ lets the query pick just the columns it needs. Query pushdown and caching
 keep things responsive and cut unnecessary API traffic.
 
 For a deeper understanding of the internals, see the
-[architecture page](https://withcoral.com/docs/contributors/architecture).
+[architecture page](https://withcoral.com/docs/project/architecture).
 
 ## Bundled sources
 

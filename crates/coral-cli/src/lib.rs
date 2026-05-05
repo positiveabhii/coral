@@ -202,6 +202,31 @@ impl Command {
             Command::Ui(_) => RequiredRuntime::None,
         }
     }
+
+    fn enables_stderr_logs(&self) -> bool {
+        matches!(self, Command::McpStdio)
+    }
+}
+
+/// Returns whether this CLI invocation should render telemetry logs to stderr.
+///
+/// `MCP` stdio reserves stdout for protocol messages, so stderr is the only
+/// local diagnostics stream that can be safely exposed while the server is
+/// running.
+#[must_use]
+pub fn enables_stderr_logs() -> bool {
+    command_enables_stderr_logs(std::env::args_os())
+}
+
+fn command_enables_stderr_logs<I, T>(args: I) -> bool
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    matches!(
+        Cli::try_parse_from(args).map(|cli| cli.command),
+        Ok(command) if command.enables_stderr_logs()
+    )
 }
 
 /// Parses CLI arguments, starts the runtime required by the selected command,
@@ -213,12 +238,23 @@ impl Command {
 /// formatting fails.
 pub async fn run_from_env() -> Result<(), anyhow::Error> {
     let Cli { command } = Cli::parse();
+    let ctx = coral_app::RunContext {
+        trace_parent: env::trace_parent(),
+    };
+
     match command.required_runtime() {
         RequiredRuntime::AppClient => {
-            let bootstrap::Bootstrap { app, _server } = bootstrap::bootstrap().await?;
-            run_app_command(app, command).await
+            let enable_stderr_logs = command.enables_stderr_logs();
+            let bootstrap = bootstrap::bootstrap(enable_stderr_logs).await?;
+            let app = bootstrap.app.clone();
+            let result =
+                coral_app::run_with_context(&ctx, Box::pin(run_app_command(app, command))).await;
+            bootstrap.shutdown().await;
+            result
         }
-        RequiredRuntime::None => run_no_runtime_command(command).await,
+        RequiredRuntime::None => {
+            coral_app::run_with_context(&ctx, Box::pin(run_no_runtime_command(command))).await
+        }
     }
 }
 
@@ -288,12 +324,18 @@ async fn run_ui(bind_addr: SocketAddr) -> Result<(), anyhow::Error> {
 ///
 /// Returns an error if argument parsing, command execution, or output
 /// formatting fails.
-pub async fn run(app: AppClient) -> Result<(), anyhow::Error> {
+pub async fn run(app: AppClient, ctx: coral_app::RunContext) -> Result<(), anyhow::Error> {
     let Cli { command } = Cli::parse();
-    match command.required_runtime() {
-        RequiredRuntime::AppClient => run_app_command(app, command).await,
-        RequiredRuntime::None => run_no_runtime_command(command).await,
-    }
+    coral_app::run_with_context(
+        &ctx,
+        Box::pin(async move {
+            match command.required_runtime() {
+                RequiredRuntime::AppClient => run_app_command(app, command).await,
+                RequiredRuntime::None => run_no_runtime_command(command).await,
+            }
+        }),
+    )
+    .await
 }
 
 async fn run_no_runtime_command(command: Command) -> Result<(), anyhow::Error> {
@@ -539,8 +581,9 @@ async fn run_source_add(app: &AppClient, args: SourceAddArgs) -> Result<(), anyh
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command, RequiredRuntime};
     use clap::Parser;
+
+    use super::{Cli, RequiredRuntime, command_enables_stderr_logs};
 
     #[cfg(feature = "server")]
     #[test]
@@ -549,7 +592,7 @@ mod tests {
             .expect("server args should parse");
 
         assert_eq!(cli.command.required_runtime(), RequiredRuntime::None);
-        let Command::Server(args) = cli.command else {
+        let super::Command::Server(args) = cli.command else {
             panic!("expected server command");
         };
         assert_eq!(
@@ -565,7 +608,7 @@ mod tests {
             .expect("ui args should parse");
 
         assert_eq!(cli.command.required_runtime(), RequiredRuntime::None);
-        let Command::Ui(args) = cli.command else {
+        let super::Command::Ui(args) = cli.command else {
             panic!("expected ui command");
         };
         assert_eq!(
@@ -587,5 +630,15 @@ mod tests {
         let cli = Cli::try_parse_from(["coral", "source", "list"]).expect("source list parses");
 
         assert_eq!(cli.command.required_runtime(), RequiredRuntime::AppClient);
+    }
+
+    #[test]
+    fn mcp_stdio_invocation_enables_stderr_logs() {
+        assert!(command_enables_stderr_logs(["coral", "mcp-stdio"]));
+    }
+
+    #[test]
+    fn non_mcp_invocation_disables_stderr_logs() {
+        assert!(!command_enables_stderr_logs(["coral", "sql", "SELECT 1"]));
     }
 }
