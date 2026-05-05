@@ -75,7 +75,7 @@ impl QueryManager {
         sql: &str,
     ) -> Result<QueryExecution, QueryManagerError> {
         let started_at = Instant::now();
-        let query_span = create_query_span(sql);
+        let query_span = create_query_span(workspace_name, sql);
         let result = async {
             let sources = self
                 .load_query_sources(workspace_name)
@@ -203,10 +203,11 @@ impl QueryManager {
     }
 }
 
-fn create_query_span(sql: &str) -> tracing::Span {
+fn create_query_span(workspace_name: &WorkspaceName, sql: &str) -> tracing::Span {
     tracing::info_span!(
         "coral.query",
         otel.name = "coral.query",
+        workspace = %workspace_name,
         sql = %sql,
         row_count = tracing::field::Empty,
         status = tracing::field::Empty,
