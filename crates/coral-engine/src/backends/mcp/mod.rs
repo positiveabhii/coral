@@ -29,6 +29,7 @@ use crate::backends::{
     build_registered_table_function, internal_table_function_name, registered_columns_from_specs,
     required_filter_names,
 };
+use crate::runtime::statistics::RuntimeStatisticsContext;
 
 #[derive(Debug, Clone)]
 struct McpCompiledSource {
@@ -91,6 +92,7 @@ impl CompiledBackendSource for McpCompiledSource {
     async fn register(
         &self,
         _ctx: &datafusion::prelude::SessionContext,
+        _statistics: &RuntimeStatisticsContext,
     ) -> Result<BackendRegistration> {
         let mut table_functions =
             SourceTableFunctions::with_capacity(self.manifest.functions.len());
