@@ -16,6 +16,9 @@ use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use crate::RequestAuthenticator;
 use crate::backends::http::ProviderQueryError;
 use crate::backends::http::auth::{resolve_auth_headers, validate_auth_inputs};
+use crate::backends::http::cache::{
+    HttpCacheEntry, HttpResponseCache, build_cache_key, estimate_json_bytes,
+};
 use crate::backends::http::rate_limit::{RateLimitDecision, check_rate_limit};
 use crate::backends::http::target::HttpFetchTarget;
 use crate::backends::shared::json_path::get_path_value;
@@ -24,7 +27,7 @@ use crate::backends::shared::template::{
     RenderContext, render_template, resolve_value_source, validate_input_dependencies,
     validate_value_source_inputs, value_to_string,
 };
-use coral_spec::backends::http::{HttpSourceManifest, RateLimitSpec};
+use coral_spec::backends::http::{HttpCacheMode, HttpSourceManifest, RateLimitSpec};
 use coral_spec::{
     AuthSpec, BodySpec, HeaderSpec, HttpMethod, PageSizeSpec, ParsedTemplate, RequestRouteSpec,
     RequestSpec as ManifestRequestSpec, ResponseBodyFormat, ValidatedPagination,
@@ -42,18 +45,21 @@ pub(crate) struct HttpSourceClient {
     http: reqwest::Client,
     request_timeout: Duration,
     source_schema: String,
+    source_version: String,
     base_url: ParsedTemplate,
     auth: AuthSpec,
     request_headers: Vec<HeaderSpec>,
     request_authenticators: HashMap<String, Arc<dyn RequestAuthenticator>>,
     rate_limit: RateLimitSpec,
     resolved_inputs: Arc<BTreeMap<String, String>>,
+    cache: HttpResponseCache,
 }
 
 impl std::fmt::Debug for HttpSourceClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HttpSourceClient")
             .field("source_schema", &self.source_schema)
+            .field("source_version", &self.source_version)
             .field("base_url", &self.base_url)
             .field("auth", &self.auth)
             .field("request_headers", &self.request_headers)
@@ -149,12 +155,14 @@ impl HttpSourceClient {
             http,
             request_timeout,
             source_schema: manifest.common.name.clone(),
+            source_version: manifest.common.version.clone(),
             base_url: manifest.base_url.clone(),
             auth: manifest.auth.clone(),
             request_headers: manifest.request_headers.clone(),
             request_authenticators: request_authenticators.clone(),
             rate_limit: manifest.rate_limit.clone(),
             resolved_inputs: Arc::new(resolved_inputs),
+            cache: HttpResponseCache::new(),
         })
     }
 
@@ -273,31 +281,127 @@ impl HttpSourceClient {
                 (query_pairs, body)
             };
 
-            let request = execute_request(
-                &self.http,
-                self.request_timeout,
-                OutgoingHttpRequest {
-                    auth: &self.auth,
-                    request_headers: &self.request_headers,
-                    request_authenticators: &self.request_authenticators,
-                    table_headers: &active_request.headers,
-                    table_name: target.name(),
-                    method: active_request.method,
-                    base_url: &base_url,
-                    url: &url,
-                    query_pairs: &query_pairs,
-                    body: body.as_ref(),
-                    response_format: target.response().format,
-                    source_schema: &self.source_schema,
-                    rate_limit: &self.rate_limit,
-                    render_context,
-                    allow_404_empty: target.response().allow_404_empty,
-                    link_header_require_results: pagination.link_header_require_results,
-                },
-            )
-            .await?;
+            // Determine whether this table has an active TTL cache policy.
+            let cache_key: Option<(String, usize, u64)> = target
+                .cache()
+                .filter(|p| p.mode == HttpCacheMode::Ttl)
+                .map(|policy| {
+                    let body_hash = body.as_ref().map(hash_request_body);
+                    let key = build_cache_key(
+                        &self.source_schema,
+                        &self.source_version,
+                        target.name(),
+                        http_method_label(active_request.method),
+                        &url,
+                        &query_pairs,
+                        body_hash,
+                        &policy.vary_headers,
+                        policy.ttl.as_secs(),
+                    );
+                    let max_entry = policy.max_entry_bytes.unwrap_or(usize::MAX);
+                    (key, max_entry, policy.ttl.as_secs())
+                });
 
-            let Some((payload, next_url)) = request else {
+            // Check the cache before issuing the outbound request.
+            let page = if let Some((ref key, max_entry_bytes, ttl_secs)) = cache_key {
+                if let Some(entry) = self.cache.get(key).await {
+                    tracing::trace!(
+                        source = %self.source_schema,
+                        table = %target.name(),
+                        "http cache hit"
+                    );
+                    Some((entry.payload, entry.next_url))
+                } else {
+                    tracing::trace!(
+                        source = %self.source_schema,
+                        table = %target.name(),
+                        "http cache miss"
+                    );
+                    let result = execute_request(
+                        &self.http,
+                        self.request_timeout,
+                        OutgoingHttpRequest {
+                            auth: &self.auth,
+                            request_headers: &self.request_headers,
+                            request_authenticators: &self.request_authenticators,
+                            table_headers: &active_request.headers,
+                            table_name: target.name(),
+                            method: active_request.method,
+                            base_url: &base_url,
+                            url: &url,
+                            query_pairs: &query_pairs,
+                            body: body.as_ref(),
+                            response_format: target.response().format,
+                            source_schema: &self.source_schema,
+                            rate_limit: &self.rate_limit,
+                            render_context,
+                            allow_404_empty: target.response().allow_404_empty,
+                            link_header_require_results: pagination.link_header_require_results,
+                        },
+                    )
+                    .await?;
+                    if let Some((ref payload, ref next_url)) = result {
+                        let estimated_bytes = estimate_json_bytes(payload);
+                        let ok_for_cache = target.response().ok_path.is_empty()
+                            || get_path_value(payload, &target.response().ok_path)
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false);
+                        if !ok_for_cache {
+                            tracing::trace!(
+                                source = %self.source_schema,
+                                table = %target.name(),
+                                "http cache entry skipped: ok_path=false"
+                            );
+                        } else if estimated_bytes <= max_entry_bytes {
+                            self.cache
+                                .put(
+                                    key.clone(),
+                                    HttpCacheEntry {
+                                        payload: payload.clone(),
+                                        next_url: next_url.clone(),
+                                        ttl: Duration::from_secs(ttl_secs),
+                                        estimated_bytes,
+                                    },
+                                )
+                                .await;
+                        } else {
+                            tracing::trace!(
+                                source = %self.source_schema,
+                                table = %target.name(),
+                                estimated_bytes,
+                                "http cache entry skipped: exceeds max_entry_bytes"
+                            );
+                        }
+                    }
+                    result
+                }
+            } else {
+                execute_request(
+                    &self.http,
+                    self.request_timeout,
+                    OutgoingHttpRequest {
+                        auth: &self.auth,
+                        request_headers: &self.request_headers,
+                        request_authenticators: &self.request_authenticators,
+                        table_headers: &active_request.headers,
+                        table_name: target.name(),
+                        method: active_request.method,
+                        base_url: &base_url,
+                        url: &url,
+                        query_pairs: &query_pairs,
+                        body: body.as_ref(),
+                        response_format: target.response().format,
+                        source_schema: &self.source_schema,
+                        rate_limit: &self.rate_limit,
+                        render_context,
+                        allow_404_empty: target.response().allow_404_empty,
+                        link_header_require_results: pagination.link_header_require_results,
+                    },
+                )
+                .await?
+            };
+
+            let Some((payload, next_url)) = page else {
                 break;
             };
 
@@ -1403,6 +1507,23 @@ fn set_path_value_at(cursor: &mut Value, path: &[String], value: Value) -> Resul
 
 fn extract_rows(target: &HttpFetchTarget, payload: &Value) -> Vec<Value> {
     shared_extract_rows(target.response(), payload)
+}
+
+fn hash_request_body(body: &RequestBody) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    match body {
+        RequestBody::Json(value) => {
+            serde_json::to_string(value)
+                .unwrap_or_default()
+                .hash(&mut hasher);
+        }
+        RequestBody::Text(text) => {
+            text.hash(&mut hasher);
+        }
+    }
+    hasher.finish()
 }
 
 fn extract_next_link_url(
@@ -2765,5 +2886,821 @@ mod tests {
             manifest.rate_limit.remaining_header.as_deref(),
             Some("X-RateLimit-Remaining")
         );
+    }
+
+    // ── Cache tests ───────────────────────────────────────────────────────────
+
+    fn cached_users_manifest(base_url: &str) -> HttpSourceManifest {
+        parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": base_url,
+            "tables": [{
+                "name": "users",
+                "description": "Users",
+                "request": { "path": "/api/users" },
+                "response": { "rows_path": ["data"] },
+                "cache": { "mode": "ttl", "ttl": "1h" },
+                "columns": [
+                    { "name": "id", "type": "Int64" },
+                    { "name": "name", "type": "Utf8" }
+                ]
+            }]
+        }))
+    }
+
+    fn build_test_client(manifest: &HttpSourceManifest) -> HttpSourceClient {
+        HttpSourceClient::from_manifest(
+            manifest,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &HashMap::new(),
+        )
+        .expect("test client should build")
+    }
+
+    async fn fetch_table(
+        client: &HttpSourceClient,
+        table: &HttpTableSpec,
+        filters: &HashMap<String, String>,
+        sql_limit: Option<usize>,
+    ) -> datafusion::error::Result<Vec<serde_json::Value>> {
+        let target = test_http_request_target(table);
+        client
+            .fetch(&target, filters, &HashMap::new(), sql_limit)
+            .await
+    }
+
+    #[tokio::test]
+    async fn cache_hit_avoids_second_outbound_request() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [
+                    { "id": 1, "name": "Ada" },
+                    { "id": 2, "name": "Grace" }
+                ]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let manifest = cached_users_manifest(&server.uri());
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+        let filters = HashMap::new();
+
+        let rows1 = fetch_table(&client, table, &filters, None)
+            .await
+            .expect("first fetch");
+        let rows2 = fetch_table(&client, table, &filters, None)
+            .await
+            .expect("second fetch from cache");
+
+        assert_eq!(rows1, rows2);
+        assert_eq!(rows1.len(), 2);
+        // MockServer verifies .expect(1) on drop — panics if != 1 request made
+    }
+
+    #[tokio::test]
+    async fn cache_miss_on_different_filter_values() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": server.uri(),
+            "tables": [{
+                "name": "items",
+                "description": "Items",
+                "filters": [{ "name": "status" }],
+                "request": {
+                    "path": "/api/items",
+                    "query": [{ "name": "status", "from": "filter", "key": "status" }]
+                },
+                "cache": { "mode": "ttl", "ttl": "1h" },
+                "columns": [{ "name": "id", "type": "Int64" }]
+            }]
+        }));
+
+        Mock::given(method("GET"))
+            .and(path("/api/items"))
+            .and(query_param("status", "open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": 1 }])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/items"))
+            .and(query_param("status", "closed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": 2 }])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+
+        let rows_open = fetch_table(
+            &client,
+            table,
+            &HashMap::from([("status".into(), "open".into())]),
+            None,
+        )
+        .await
+        .expect("open fetch");
+        let rows_closed = fetch_table(
+            &client,
+            table,
+            &HashMap::from([("status".into(), "closed".into())]),
+            None,
+        )
+        .await
+        .expect("closed fetch");
+
+        assert_ne!(rows_open, rows_closed);
+        // Both mocks have .expect(1) — verified on drop
+    }
+
+    #[tokio::test]
+    async fn cache_second_identical_query_uses_first_result() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": server.uri(),
+            "tables": [{
+                "name": "items",
+                "description": "Items",
+                "filters": [{ "name": "status" }],
+                "request": {
+                    "path": "/api/items",
+                    "query": [{ "name": "status", "from": "filter", "key": "status" }]
+                },
+                "cache": { "mode": "ttl", "ttl": "1h" },
+                "columns": [{ "name": "id", "type": "Int64" }]
+            }]
+        }));
+
+        Mock::given(method("GET"))
+            .and(path("/api/items"))
+            .and(query_param("status", "open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": 1 }])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+        let filters = HashMap::from([("status".to_string(), "open".to_string())]);
+
+        let r1 = fetch_table(&client, table, &filters, None)
+            .await
+            .expect("first");
+        let r2 = fetch_table(&client, table, &filters, None)
+            .await
+            .expect("second, from cache");
+        assert_eq!(r1, r2);
+        // .expect(1) verified on drop
+    }
+
+    #[tokio::test]
+    async fn cache_does_not_cache_failed_responses() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        // Use 400 (not retried, unlike 5xx) to get exactly one request per fetch() call.
+        // The second call must still hit the server, proving failed responses are not cached.
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad request"))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let manifest = cached_users_manifest(&server.uri());
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+        let filters = HashMap::new();
+
+        assert!(
+            fetch_table(&client, table, &filters, None).await.is_err(),
+            "first call should fail"
+        );
+        assert!(
+            fetch_table(&client, table, &filters, None).await.is_err(),
+            "second call should also fail"
+        );
+        // .expect(2) verifies 2 separate outbound requests (no caching of errors)
+    }
+
+    #[tokio::test]
+    async fn cache_expires_after_ttl() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "data": [{ "id": 1 }] })),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": server.uri(),
+            "tables": [{
+                "name": "users",
+                "description": "Users",
+                "request": { "path": "/api/users" },
+                "response": { "rows_path": ["data"] },
+                "cache": { "mode": "ttl", "ttl": "1s" },
+                "columns": [{ "name": "id", "type": "Int64" }]
+            }]
+        }));
+
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+        let filters = HashMap::new();
+
+        fetch_table(&client, table, &filters, None)
+            .await
+            .expect("first fetch");
+        // Wait for the 1s TTL to expire
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        fetch_table(&client, table, &filters, None)
+            .await
+            .expect("second fetch after expiry");
+        // .expect(2) verifies 2 outbound requests were made
+    }
+
+    #[tokio::test]
+    async fn cache_disabled_by_default() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({ "data": [{ "id": 1 }] })),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        // Manifest with no cache field — caching must stay disabled.
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": server.uri(),
+            "tables": [{
+                "name": "users",
+                "description": "Users",
+                "request": { "path": "/api/users" },
+                "response": { "rows_path": ["data"] },
+                "columns": [{ "name": "id", "type": "Int64" }]
+            }]
+        }));
+
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+        let filters = HashMap::new();
+
+        fetch_table(&client, table, &filters, None)
+            .await
+            .expect("first");
+        fetch_table(&client, table, &filters, None)
+            .await
+            .expect("second");
+        // .expect(2) verifies both calls made it to the server (no caching)
+    }
+
+    #[test]
+    fn parse_manifest_accepts_cache_ttl_policy() {
+        use coral_spec::backends::http::HttpCacheMode;
+
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "alpha",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": "https://api.example.com",
+            "tables": [{
+                "name": "items",
+                "description": "items",
+                "request": { "path": "/items" },
+                "cache": {
+                    "mode": "ttl",
+                    "ttl": "5m",
+                    "vary": { "headers": ["Accept"] },
+                    "max_pages": 50,
+                    "max_entry_bytes": 1_048_576
+                },
+                "columns": [{ "name": "id", "type": "Utf8" }]
+            }]
+        }));
+
+        let cache = manifest.tables[0]
+            .cache
+            .as_ref()
+            .expect("cache policy should be set");
+        assert_eq!(cache.mode, HttpCacheMode::Ttl);
+        assert_eq!(cache.ttl.as_secs(), 300);
+        assert_eq!(cache.vary_headers, vec!["Accept"]);
+        assert_eq!(cache.max_pages, Some(50));
+        assert_eq!(cache.max_entry_bytes, Some(1_048_576));
+    }
+
+    #[test]
+    fn parse_manifest_no_cache_field_gives_none() {
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "alpha",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": "https://api.example.com",
+            "tables": [{
+                "name": "items",
+                "description": "items",
+                "request": { "path": "/items" },
+                "columns": [{ "name": "id", "type": "Utf8" }]
+            }]
+        }));
+
+        assert!(manifest.tables[0].cache.is_none());
+    }
+
+    #[tokio::test]
+    async fn cache_different_post_body_causes_miss() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": server.uri(),
+            "tables": [{
+                "name": "items",
+                "description": "Items",
+                "filters": [{ "name": "status" }],
+                "request": {
+                    "method": "POST",
+                    "path": "/api/items",
+                    "body": [{ "path": ["filter"], "from": "filter", "key": "status" }]
+                },
+                "cache": { "mode": "ttl", "ttl": "1h" },
+                "columns": [{ "name": "id", "type": "Int64" }]
+            }]
+        }));
+
+        Mock::given(method("POST"))
+            .and(path("/api/items"))
+            .and(body_json(json!({ "filter": "open" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": 1 }])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/items"))
+            .and(body_json(json!({ "filter": "closed" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": 2 }])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+
+        let rows_open = fetch_table(
+            &client,
+            table,
+            &HashMap::from([("status".into(), "open".into())]),
+            None,
+        )
+        .await
+        .expect("open fetch");
+        let rows_closed = fetch_table(
+            &client,
+            table,
+            &HashMap::from([("status".into(), "closed".into())]),
+            None,
+        )
+        .await
+        .expect("closed fetch");
+
+        assert_ne!(rows_open, rows_closed);
+        // Both mocks have .expect(1) — verified on drop
+    }
+
+    #[tokio::test]
+    async fn cache_different_pagination_state_causes_miss() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // No page_size query_param so the page number is the only URL-level pagination
+        // state. This ensures the cache key for page 1 is the same regardless of the
+        // SQL limit used by the caller.
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": server.uri(),
+            "tables": [{
+                "name": "items",
+                "description": "Items",
+                "pagination": {
+                    "mode": "page",
+                    "page_param": "page",
+                    "page_start": 1
+                },
+                "request": { "path": "/api/items" },
+                "cache": { "mode": "ttl", "ttl": "1h" },
+                "columns": [{ "name": "id", "type": "Int64" }]
+            }]
+        }));
+
+        // Page 1 is fetched once from the server (first call), then served from cache
+        // (second call) — same URL so same cache key.
+        Mock::given(method("GET"))
+            .and(path("/api/items"))
+            .and(query_param("page", "1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([{ "id": 1 }, { "id": 2 }])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        // Page 2 is only fetched by the second call (different cache key: page=2).
+        Mock::given(method("GET"))
+            .and(path("/api/items"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": 3 }])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+
+        // First call: limit=2 → fetches page 1 (2 rows = limit), stops.
+        let rows1 = fetch_table(&client, table, &HashMap::new(), Some(2))
+            .await
+            .expect("first fetch");
+        assert_eq!(rows1.len(), 2);
+
+        // Second call: limit=3 → page 1 served from cache (2 rows), page 2 fresh from server.
+        let rows2 = fetch_table(&client, table, &HashMap::new(), Some(3))
+            .await
+            .expect("second fetch");
+        assert_eq!(rows2.len(), 3);
+        // Page 1 expect(1) and page 2 expect(1) are verified on drop
+    }
+
+    #[tokio::test]
+    async fn cache_pagination_stores_pages_independently() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": server.uri(),
+            "tables": [{
+                "name": "items",
+                "description": "Items",
+                "pagination": {
+                    "mode": "page",
+                    "page_param": "page",
+                    "page_start": 1,
+                    "page_size": { "default": 2, "max": 100, "query_param": "per_page" }
+                },
+                "request": { "path": "/api/items" },
+                "cache": { "mode": "ttl", "ttl": "1h" },
+                "columns": [{ "name": "id", "type": "Int64" }]
+            }]
+        }));
+
+        // Both pages are fetched once each on the first run, then served from
+        // cache on the second run — total expect(1) per page.
+        Mock::given(method("GET"))
+            .and(path("/api/items"))
+            .and(query_param("page", "1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([{ "id": 1 }, { "id": 2 }])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/items"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": 3 }])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+
+        // First run: fetches both pages from server
+        let rows1 = fetch_table(&client, table, &HashMap::new(), None)
+            .await
+            .expect("first fetch");
+        assert_eq!(rows1.len(), 3);
+
+        // Second run: both pages served from cache — no additional server hits
+        let rows2 = fetch_table(&client, table, &HashMap::new(), None)
+            .await
+            .expect("second fetch");
+        assert_eq!(rows2, rows1);
+        // expect(1) per page verified on mock drop
+    }
+
+    #[tokio::test]
+    async fn cache_does_not_cache_5xx_responses() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // 500 triggers 2 retries → 3 requests for first fetch(); served up_to 3 times.
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("server error"))
+            .up_to_n_times(3)
+            .expect(3)
+            .mount(&server)
+            .await;
+        // After the 500 mock is exhausted, the second fetch hits the server and gets 200.
+        // If 5xx responses were incorrectly cached, this mock would never be reached.
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "data": [{ "id": 1, "name": "Ada" }] })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let manifest = cached_users_manifest(&server.uri());
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+        let filters = HashMap::new();
+
+        assert!(
+            fetch_table(&client, table, &filters, None).await.is_err(),
+            "first call should fail with server error"
+        );
+        let rows = fetch_table(&client, table, &filters, None)
+            .await
+            .expect("second call should succeed from server — 5xx response was not cached");
+        assert_eq!(rows.len(), 1);
+        // expect(3) on 500 mock and expect(1) on 200 mock verified on drop
+    }
+
+    #[tokio::test]
+    async fn cache_does_not_cache_429_responses() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        // Retry-After: 60 exceeds MAX_SHORT_RETRY_AFTER (15s) → rate limit fails
+        // immediately without retrying, so each fetch() makes exactly one request.
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(ResponseTemplate::new(429).append_header("Retry-After", "60"))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let manifest = cached_users_manifest(&server.uri());
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+        let filters = HashMap::new();
+
+        assert!(
+            fetch_table(&client, table, &filters, None).await.is_err(),
+            "first call should fail with rate-limit error"
+        );
+        assert!(
+            fetch_table(&client, table, &filters, None).await.is_err(),
+            "second call should also fail — 429 responses are not cached"
+        );
+        // expect(2) verifies 2 outbound requests (no caching of rate-limit errors)
+    }
+
+    #[tokio::test]
+    async fn cache_does_not_cache_malformed_json() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("this is not json"))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let manifest = cached_users_manifest(&server.uri());
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+        let filters = HashMap::new();
+
+        assert!(
+            fetch_table(&client, table, &filters, None).await.is_err(),
+            "first call should fail to decode"
+        );
+        assert!(
+            fetch_table(&client, table, &filters, None).await.is_err(),
+            "second call should also fail — malformed JSON is not cached"
+        );
+        // expect(2) verifies 2 outbound requests (decode error, no cache write)
+    }
+
+    #[tokio::test]
+    async fn cache_does_not_cache_allow_404_empty() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/items"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": server.uri(),
+            "tables": [{
+                "name": "items",
+                "description": "Items",
+                "request": { "path": "/api/items" },
+                "response": { "allow_404_empty": true },
+                "cache": { "mode": "ttl", "ttl": "1h" },
+                "columns": [{ "name": "id", "type": "Int64" }]
+            }]
+        }));
+
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+        let filters = HashMap::new();
+
+        let rows1 = fetch_table(&client, table, &filters, None)
+            .await
+            .expect("first");
+        assert!(rows1.is_empty(), "allow_404_empty should return empty rows");
+
+        let rows2 = fetch_table(&client, table, &filters, None)
+            .await
+            .expect("second");
+        assert!(rows2.is_empty());
+        // expect(2) verifies both calls hit the server (empty result is not cached)
+    }
+
+    #[tokio::test]
+    async fn cache_skips_oversized_entry_without_failing() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [
+                    { "id": 1, "name": "Ada" },
+                    { "id": 2, "name": "Grace" }
+                ]
+            })))
+            .expect(2) // entry is never cached, so both calls hit server
+            .mount(&server)
+            .await;
+
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": server.uri(),
+            "tables": [{
+                "name": "users",
+                "description": "Users",
+                "request": { "path": "/api/users" },
+                "response": { "rows_path": ["data"] },
+                "cache": { "mode": "ttl", "ttl": "1h", "max_entry_bytes": 10 },
+                "columns": [
+                    { "name": "id", "type": "Int64" },
+                    { "name": "name", "type": "Utf8" }
+                ]
+            }]
+        }));
+
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+        let filters = HashMap::new();
+
+        let rows1 = fetch_table(&client, table, &filters, None)
+            .await
+            .expect("first");
+        assert_eq!(
+            rows1.len(),
+            2,
+            "rows should be returned even when entry is skipped"
+        );
+
+        let rows2 = fetch_table(&client, table, &filters, None)
+            .await
+            .expect("second");
+        assert_eq!(rows2, rows1);
+        // expect(2) verifies both calls hit server (oversized entry was not stored)
+    }
+
+    #[tokio::test]
+    async fn cache_does_not_cache_ok_path_false() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/users"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({ "ok": false, "error": "rate limited" })),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": server.uri(),
+            "tables": [{
+                "name": "users",
+                "description": "Users",
+                "request": { "path": "/api/users" },
+                "response": {
+                    "ok_path": ["ok"],
+                    "error_path": ["error"]
+                },
+                "cache": { "mode": "ttl", "ttl": "1h" },
+                "columns": [{ "name": "id", "type": "Int64" }]
+            }]
+        }));
+
+        let client = build_test_client(&manifest);
+        let table = &manifest.tables[0];
+        let filters = HashMap::new();
+
+        assert!(
+            fetch_table(&client, table, &filters, None).await.is_err(),
+            "first call should fail: ok_path=false"
+        );
+        assert!(
+            fetch_table(&client, table, &filters, None).await.is_err(),
+            "second call should also fail — ok_path=false response was not cached"
+        );
+        // expect(2) verifies both calls hit the server (bad response not cached)
     }
 }

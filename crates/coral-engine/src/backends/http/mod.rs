@@ -18,6 +18,7 @@ use crate::backends::{
 };
 use coral_spec::backends::http::{HttpSourceManifest, HttpTableSpec};
 pub(crate) mod auth;
+pub(crate) mod cache;
 pub(crate) mod client;
 pub(crate) mod error;
 pub(crate) mod function;

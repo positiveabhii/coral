@@ -1,0 +1,293 @@
+//! In-memory HTTP response page cache for opt-in TTL-based caching.
+//!
+//! Cache entries are keyed by a stable canonical string derived from all
+//! request-determining material: source identity, table, rendered URL, query
+//! params, body hash, vary headers, and the declared TTL.  Secret values are
+//! never included in keys, values, or trace events.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use moka::Expiry;
+use moka::future::Cache;
+use serde_json::Value;
+
+const CACHE_FORMAT_VERSION: u8 = 1;
+const DEFAULT_CACHE_MAX_BYTES: u64 = 256 * 1024 * 1024; // 256 MiB
+
+/// A single decoded HTTP response page held in the cache.
+#[derive(Clone)]
+pub(crate) struct HttpCacheEntry {
+    /// Decoded response payload.
+    pub(crate) payload: Value,
+    /// Parsed `Link: <...>; rel="next"` URL from the response, if any.
+    pub(crate) next_url: Option<String>,
+    /// Time-to-live used to set expiry when the entry was created.
+    pub(crate) ttl: Duration,
+    /// Estimated in-memory size in bytes (JSON string length approximation).
+    pub(crate) estimated_bytes: usize,
+}
+
+struct EntryExpiry;
+
+impl Expiry<String, HttpCacheEntry> for EntryExpiry {
+    fn expire_after_create(
+        &self,
+        _key: &String,
+        value: &HttpCacheEntry,
+        _created_at: std::time::Instant,
+    ) -> Option<Duration> {
+        Some(value.ttl)
+    }
+
+    fn expire_after_read(
+        &self,
+        _key: &String,
+        _value: &HttpCacheEntry,
+        _current_time: std::time::Instant,
+        current_duration: Option<Duration>,
+        _last_modified_at: std::time::Instant,
+    ) -> Option<Duration> {
+        current_duration
+    }
+
+    fn expire_after_update(
+        &self,
+        _key: &String,
+        _value: &HttpCacheEntry,
+        _current_time: std::time::Instant,
+        current_duration: Option<Duration>,
+    ) -> Option<Duration> {
+        current_duration
+    }
+}
+
+/// Shared in-memory HTTP response page cache backed by moka.
+///
+/// `Clone` is cheap — all clones share the same underlying cache.
+#[derive(Clone)]
+pub(crate) struct HttpResponseCache {
+    inner: Arc<Cache<String, HttpCacheEntry>>,
+}
+
+impl HttpResponseCache {
+    /// Create a new cache with the default 256 MiB capacity limit.
+    pub(crate) fn new() -> Self {
+        let inner = Cache::builder()
+            .max_capacity(DEFAULT_CACHE_MAX_BYTES)
+            .weigher(|_key: &String, value: &HttpCacheEntry| {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "Saturating at u32::MAX is the correct moka weigher clamp"
+                )]
+                let weight = value.estimated_bytes.min(u32::MAX as usize) as u32;
+                weight
+            })
+            .expire_after(EntryExpiry)
+            .build();
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// Return the cached entry for `key`, or `None` on miss or expiry.
+    pub(crate) async fn get(&self, key: &str) -> Option<HttpCacheEntry> {
+        self.inner.get(key).await
+    }
+
+    /// Insert `entry` under `key`.
+    pub(crate) async fn put(&self, key: String, entry: HttpCacheEntry) {
+        self.inner.insert(key, entry).await;
+    }
+}
+
+/// Build a stable, canonical cache key string from all request-determining
+/// material.  Auth headers and secret values are never included.
+///
+/// `body_hash` is a pre-computed hash of the serialized request body, allowing
+/// callers to hash the body without exposing its type to this module.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "All parameters are distinct key dimensions; introducing a struct would add noise"
+)]
+pub(crate) fn build_cache_key(
+    source_name: &str,
+    source_version: &str,
+    table_name: &str,
+    method: &str,
+    url: &str,
+    query_pairs: &[(String, String)],
+    body_hash: Option<u64>,
+    vary_headers: &[String],
+    ttl_secs: u64,
+) -> String {
+    let mut sorted_qs = query_pairs.to_vec();
+    sorted_qs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+    let mut vary_sorted = vary_headers.to_vec();
+    vary_sorted.sort_unstable();
+
+    format!(
+        "v{CACHE_FORMAT_VERSION}\t{source_name}\t{source_version}\t{table_name}\t{method}\t{url}\t{sorted_qs:?}\t{body_hash:?}\t{vary_sorted:?}\t{ttl_secs}"
+    )
+}
+
+/// Estimate the in-memory size of a JSON value using its serialized length.
+pub(crate) fn estimate_json_bytes(value: &Value) -> usize {
+    serde_json::to_string(value).map_or(0, |s| s.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn cache_key_is_stable_for_identical_inputs() {
+        let key1 = build_cache_key(
+            "demo",
+            "0.1.0",
+            "users",
+            "GET",
+            "https://api.example.com/users",
+            &[("page".to_string(), "1".to_string())],
+            None,
+            &[],
+            300,
+        );
+        let key2 = build_cache_key(
+            "demo",
+            "0.1.0",
+            "users",
+            "GET",
+            "https://api.example.com/users",
+            &[("page".to_string(), "1".to_string())],
+            None,
+            &[],
+            300,
+        );
+        assert_eq!(key1, key2);
+    }
+
+    #[test]
+    fn cache_key_differs_for_different_query_params() {
+        let key1 = build_cache_key(
+            "demo",
+            "0.1.0",
+            "users",
+            "GET",
+            "https://api.example.com/users",
+            &[("page".to_string(), "1".to_string())],
+            None,
+            &[],
+            300,
+        );
+        let key2 = build_cache_key(
+            "demo",
+            "0.1.0",
+            "users",
+            "GET",
+            "https://api.example.com/users",
+            &[("page".to_string(), "2".to_string())],
+            None,
+            &[],
+            300,
+        );
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn cache_key_normalises_query_param_order() {
+        let key1 = build_cache_key(
+            "demo",
+            "0.1.0",
+            "items",
+            "GET",
+            "https://api.example.com/items",
+            &[
+                ("b".to_string(), "2".to_string()),
+                ("a".to_string(), "1".to_string()),
+            ],
+            None,
+            &[],
+            60,
+        );
+        let key2 = build_cache_key(
+            "demo",
+            "0.1.0",
+            "items",
+            "GET",
+            "https://api.example.com/items",
+            &[
+                ("a".to_string(), "1".to_string()),
+                ("b".to_string(), "2".to_string()),
+            ],
+            None,
+            &[],
+            60,
+        );
+        assert_eq!(key1, key2);
+    }
+
+    #[test]
+    fn cache_key_differs_for_different_source_version() {
+        let key1 = build_cache_key(
+            "demo",
+            "0.1.0",
+            "users",
+            "GET",
+            "https://api.example.com/users",
+            &[],
+            None,
+            &[],
+            300,
+        );
+        let key2 = build_cache_key(
+            "demo",
+            "0.2.0",
+            "users",
+            "GET",
+            "https://api.example.com/users",
+            &[],
+            None,
+            &[],
+            300,
+        );
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn cache_key_differs_for_different_ttl() {
+        let key1 = build_cache_key(
+            "demo",
+            "0.1.0",
+            "users",
+            "GET",
+            "https://api.example.com/users",
+            &[],
+            None,
+            &[],
+            60,
+        );
+        let key2 = build_cache_key(
+            "demo",
+            "0.1.0",
+            "users",
+            "GET",
+            "https://api.example.com/users",
+            &[],
+            None,
+            &[],
+            300,
+        );
+        assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn estimate_json_bytes_returns_string_length() {
+        let value = json!({"key": "value", "num": 42});
+        let estimated = estimate_json_bytes(&value);
+        let serialized = serde_json::to_string(&value).unwrap();
+        assert_eq!(estimated, serialized.len());
+    }
+}

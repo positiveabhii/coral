@@ -21,6 +21,7 @@ datafusion-tracing.workspace = true
 futures.workspace = true
 glob.workspace = true
 httpdate.workspace = true
+moka.workspace = true
 object_store.workspace = true
 opentelemetry.workspace = true
 parquet.workspace = true
@@ -44,5 +45,5 @@ coral-spec.workspace = true
 parquet.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 wiremock.workspace = true
