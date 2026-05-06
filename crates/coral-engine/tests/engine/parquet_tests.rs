@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use coral_engine::CoralQuery;
+use coral_engine::{CoralQuery, StatisticsObservationScope};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -34,15 +34,14 @@ async fn select_all_from_parquet_source() {
     write_parquet_file(temp.path(), "users.parquet", &users_batch());
     let source = build_source(parquet_manifest("parquet_users", temp.path()));
 
-    let rows = execution_to_rows(
-        &CoralQuery::execute_sql(
-            &[source],
-            test_runtime(),
-            "SELECT id, name, email FROM parquet_users.users ORDER BY id",
-        )
-        .await
-        .expect("query should succeed"),
-    );
+    let execution = CoralQuery::execute_sql(
+        &[source],
+        test_runtime(),
+        "SELECT id, name, email FROM parquet_users.users ORDER BY id",
+    )
+    .await
+    .expect("query should succeed");
+    let rows = execution_to_rows(&execution);
 
     assert_eq!(
         rows,
@@ -52,6 +51,20 @@ async fn select_all_from_parquet_source() {
             json!({"id": 3, "name": "Linus", "email": "linus@example.com"}),
         ]
     );
+
+    let observations = execution.statistics_observations();
+    assert_eq!(observations.len(), 1);
+    let observation = observations.first().expect("one observation");
+    assert_eq!(observation.scope, StatisticsObservationScope::TableGlobal);
+    let by_name = observation
+        .columns
+        .iter()
+        .map(|column| (column.column_name.as_str(), column))
+        .collect::<std::collections::HashMap<_, _>>();
+    let id = by_name.get("id").expect("id stats");
+    let name = by_name.get("name").expect("name stats");
+    assert_eq!(id.approx_distinct_count.as_ref().unwrap().value, 3);
+    assert_eq!(name.sample_count, 3);
 }
 
 #[tokio::test]
@@ -60,15 +73,14 @@ async fn select_with_column_projection() {
     write_parquet_file(temp.path(), "users.parquet", &users_batch());
     let source = build_source(parquet_manifest("parquet_projection", temp.path()));
 
-    let rows = execution_to_rows(
-        &CoralQuery::execute_sql(
-            &[source],
-            test_runtime(),
-            "SELECT email FROM parquet_projection.users ORDER BY email",
-        )
-        .await
-        .expect("query should succeed"),
-    );
+    let execution = CoralQuery::execute_sql(
+        &[source],
+        test_runtime(),
+        "SELECT email FROM parquet_projection.users ORDER BY email",
+    )
+    .await
+    .expect("query should succeed");
+    let rows = execution_to_rows(&execution);
 
     assert_eq!(
         rows,
@@ -78,6 +90,13 @@ async fn select_with_column_projection() {
             json!({"email": "linus@example.com"}),
         ]
     );
+    let observations = execution.statistics_observations();
+    assert_eq!(observations.len(), 1);
+    let observation = observations.first().expect("one observation");
+    assert_eq!(observation.scope, StatisticsObservationScope::Limited);
+    assert_eq!(observation.columns.len(), 1);
+    let column = observation.columns.first().expect("one column");
+    assert_eq!(column.column_name, "email");
 }
 
 #[tokio::test]
@@ -130,17 +149,51 @@ async fn select_count_aggregation() {
     write_parquet_file(temp.path(), "users.parquet", &users_batch());
     let source = build_source(parquet_manifest("parquet_count", temp.path()));
 
-    let rows = execution_to_rows(
-        &CoralQuery::execute_sql(
-            &[source],
-            test_runtime(),
-            "SELECT COUNT(*) AS n FROM parquet_count.users",
-        )
-        .await
-        .expect("query should succeed"),
-    );
+    let execution = CoralQuery::execute_sql(
+        &[source],
+        test_runtime(),
+        "SELECT COUNT(*) AS n FROM parquet_count.users",
+    )
+    .await
+    .expect("query should succeed");
+    let rows = execution_to_rows(&execution);
 
     assert_eq!(rows, vec![json!({"n": 3})]);
+    assert!(
+        execution
+            .statistics_observations()
+            .iter()
+            .all(|observation| observation.scope != StatisticsObservationScope::TableGlobal),
+        "aggregate scans must not persist projected parquet stats as table-global"
+    );
+}
+
+#[tokio::test]
+async fn multi_file_scan_emits_one_table_global_observation() {
+    let temp = TempDir::new().expect("temp dir");
+    write_parquet_file(temp.path(), "users-a.parquet", &users_batch());
+    write_parquet_file(temp.path(), "users-b.parquet", &users_batch());
+    let source = build_source(parquet_manifest("parquet_multi", temp.path()));
+
+    let execution = CoralQuery::execute_sql(
+        &[source],
+        test_runtime(),
+        "SELECT id, name, email FROM parquet_multi.users",
+    )
+    .await
+    .expect("query should succeed");
+
+    let observations = execution.statistics_observations();
+    assert_eq!(observations.len(), 1);
+    let observation = observations.first().expect("one observation");
+    assert_eq!(observation.scope, StatisticsObservationScope::TableGlobal);
+    let id = observation
+        .columns
+        .iter()
+        .find(|column| column.column_name == "id")
+        .expect("id stats");
+    assert_eq!(id.sample_count, 6);
+    assert_eq!(id.null_count.as_ref().expect("null count").value, 0);
 }
 
 #[tokio::test]
