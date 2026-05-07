@@ -76,6 +76,9 @@
     reason = "These manifest builders and accessors are internal crate APIs, not end-user APIs."
 )]
 pub mod backends;
+
+/// Foo bar
+pub mod types;
 mod common;
 mod error;
 mod inputs;
