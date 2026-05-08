@@ -12,6 +12,7 @@ import { EmptyState } from './traces/empty-state'
 import { PageHeader } from './traces/page-header'
 import { StatusBar } from './traces/status-bar'
 import { TraceDetail } from './traces/trace-detail'
+import { useTracePlanTabs } from './traces/query-plan-tabs'
 import { TraceList } from './traces/trace-list'
 import { formatTraceError, isQueryTrace } from './traces/trace-utils'
 
@@ -119,6 +120,7 @@ export function TracesPage() {
         onClose={() => setSelectedTraceId(null)}
         onSelectTrace={setSelectedTraceId}
         traceId={selectedTraceId}
+        useExtraTabs={useTracePlanTabs}
       />
     )
   }

@@ -564,19 +564,19 @@ function DetailTabs({ activeTab, extraTabs, onTab }: { activeTab: string; extraT
 }
 
 export function TraceDetail({
-  extraTabs,
   newerTraceId,
   olderTraceId,
   onClose,
   onSelectTrace,
   traceId,
+  useExtraTabs,
 }: {
-  extraTabs?: (detail: GetTraceResponse) => ExtraDetailTab[]
   newerTraceId?: string | null
   olderTraceId?: string | null
   onClose: () => void
   onSelectTrace?: (traceId: string) => void
   traceId: string
+  useExtraTabs?: (detail: GetTraceResponse | null, activeTab: string) => ExtraDetailTab[]
 }) {
   const { detail, error, loading } = useTraceDetail(traceId)
   const [activeTab, setActiveTab] = useState<string>('timeline')
@@ -621,7 +621,7 @@ export function TraceDetail({
   const summary = detail?.summary
   const httpSpans = useMemo(() => detail?.spans.filter(isHttpSpan) ?? [], [detail?.spans])
   const sources = useMemo(() => sourceNames(detail?.spans ?? []), [detail?.spans])
-  const resolvedExtraTabs = useMemo(() => (detail ? extraTabs?.(detail) ?? [] : []), [detail, extraTabs])
+  const resolvedExtraTabs = useExtraTabs?.(detail, activeTab) ?? []
 
   if (loading && !detail) return <div className={s.detailEmpty}><Icon name="Loader" className={s.spinner} color="tertiary" /><Typography.Body>Loading trace…</Typography.Body></div>
   if (error) return <div className={s.detailEmpty}><EmptyState error={error} /></div>
