@@ -1,6 +1,9 @@
 //! Types for modelling source models
 
-#![allow(dead_code)]
+#![allow(
+    dead_code,
+    reason = "Source-model prototype types are not wired into manifest parsing or runtime registration yet."
+)]
 
 // ----- Basic types ---------------------------------------
 
@@ -41,7 +44,7 @@ impl OperationInput {
     fn required(name: &str, ty: TypeRef) -> OperationInput {
         OperationInput {
             name: name.to_string(),
-            ty: ty,
+            ty,
             required: true,
         }
     }
@@ -49,14 +52,27 @@ impl OperationInput {
     fn optional(name: &str, ty: TypeRef) -> OperationInput {
         OperationInput {
             name: name.to_string(),
-            ty: ty,
+            ty,
             required: false,
         }
     }
 }
 
+/// Identifier for a logical source operation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct OperationId(String);
+pub struct OperationId(String);
+
+impl OperationId {
+    /// Creates an operation identifier.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Returns the identifier as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 #[derive(Debug)]
 struct Operation {
@@ -218,7 +234,7 @@ mod tests {
 
     fn gh_issue_list_op() -> Operation {
         Operation {
-            id: OperationId("github.issue.list".into()),
+            id: OperationId::new("github.issue.list"),
             kind: OperationKind::List,
             entity: gt_issue_entity(),
             inputs: vec![

@@ -19,6 +19,7 @@ pub(crate) mod http;
 pub(crate) mod jsonl;
 pub(crate) mod parquet;
 pub(crate) mod shared;
+pub(crate) mod source_model;
 
 pub(crate) fn compile_query_source(
     source: &QuerySource,

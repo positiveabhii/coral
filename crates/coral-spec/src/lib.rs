@@ -77,8 +77,6 @@
 )]
 pub mod backends;
 
-/// Foo bar
-pub mod types;
 mod common;
 mod error;
 mod inputs;
@@ -86,6 +84,8 @@ mod loader;
 mod parser;
 mod schema;
 mod template;
+/// Prototype source-model and projection types.
+pub mod types;
 mod validate;
 
 pub use backends::http::{AuthSpec, BasicAuthSpec, CustomAuthSpec, HeaderAuthSpec};
