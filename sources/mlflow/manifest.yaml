@@ -1,0 +1,818 @@
+dsl_version: 3
+name: mlflow
+version: 0.1.0
+backend: http
+description: >-
+  Query experiments, runs, metrics, params, tags, metric history, and
+  artifacts from an MLflow tracking server.
+inputs:
+  MLFLOW_BASE_URL:
+    kind: variable
+    default: http://localhost:5000
+    hint: |
+      Base URL of your MLflow tracking server, for example
+      `http://localhost:5000` or `http://mlflow-bench`.
+base_url: "{{input.MLFLOW_BASE_URL}}"
+request_headers:
+  - name: Accept
+    from: literal
+    value: application/json
+  - name: Content-Type
+    from: literal
+    value: application/json
+test_queries:
+  - SELECT * FROM mlflow.experiments LIMIT 1
+tables:
+  - name: experiments
+    description: MLflow experiments ordered by recent update
+    guide: |
+      Lists experiments from the tracking server. Results are ordered by
+      `last_update_time DESC` so `LIMIT` reads the newest experiments first.
+      Use `filter` for MLflow experiment search filters and `view_type`
+      for lifecycle visibility (for example `ACTIVE_ONLY`,
+      `DELETED_ONLY`, or `ALL`).
+    filters:
+      - name: filter
+        required: false
+      - name: view_type
+        required: false
+    request:
+      method: POST
+      path: /api/2.0/mlflow/experiments/search
+      query: []
+      body:
+        - path:
+            - max_results
+          from: literal
+          value: 100
+        - path:
+            - order_by
+            - "0"
+          from: literal
+          value: last_update_time DESC
+        - path:
+            - filter
+          from: filter
+          key: filter
+        - path:
+            - view_type
+          from: filter
+          key: view_type
+    response:
+      rows_path:
+        - experiments
+    pagination:
+      mode: cursor_body
+      cursor_body_path:
+        - page_token
+      response_cursor_path:
+        - next_page_token
+      page_size:
+        default: 100
+        max: 1000
+        body_path:
+          - max_results
+    columns:
+      - name: filter
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Optional MLflow experiment search filter
+        expr:
+          kind: from_filter
+          key: filter
+      - name: view_type
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Optional MLflow lifecycle view type
+        expr:
+          kind: from_filter
+          key: view_type
+      - name: experiment_id
+        type: Utf8
+        nullable: false
+        description: Experiment ID
+        expr:
+          kind: path
+          path:
+            - experiment_id
+      - name: name
+        type: Utf8
+        nullable: true
+        description: Experiment name
+        expr:
+          kind: path
+          path:
+            - name
+      - name: artifact_location
+        type: Utf8
+        nullable: true
+        description: Artifact root for the experiment
+        expr:
+          kind: path
+          path:
+            - artifact_location
+      - name: lifecycle_stage
+        type: Utf8
+        nullable: true
+        description: Experiment lifecycle stage
+        expr:
+          kind: path
+          path:
+            - lifecycle_stage
+      - name: creation_time
+        type: Int64
+        nullable: true
+        description: Creation time in epoch milliseconds
+        expr:
+          kind: path
+          path:
+            - creation_time
+      - name: last_update_time
+        type: Int64
+        nullable: true
+        description: Last update time in epoch milliseconds
+        expr:
+          kind: path
+          path:
+            - last_update_time
+  - name: experiment
+    description: Direct lookup for a single MLflow experiment
+    guide: |
+      Requires `experiment_id`. Use this when you already know the
+      experiment ID from the UI URL or from `mlflow.experiments`.
+    filters:
+      - name: experiment_id
+        required: true
+    request:
+      method: GET
+      path: /api/2.0/mlflow/experiments/get
+      query:
+        - name: experiment_id
+          from: filter
+          key: experiment_id
+    response:
+      rows_path:
+        - experiment
+      allow_404_empty: true
+    pagination:
+      mode: none
+    columns:
+      - name: experiment_id
+        type: Utf8
+        nullable: false
+        description: Experiment ID filter
+        expr:
+          kind: from_filter
+          key: experiment_id
+      - name: name
+        type: Utf8
+        nullable: true
+        description: Experiment name
+        expr:
+          kind: path
+          path:
+            - name
+      - name: artifact_location
+        type: Utf8
+        nullable: true
+        description: Artifact root for the experiment
+        expr:
+          kind: path
+          path:
+            - artifact_location
+      - name: lifecycle_stage
+        type: Utf8
+        nullable: true
+        description: Experiment lifecycle stage
+        expr:
+          kind: path
+          path:
+            - lifecycle_stage
+      - name: creation_time
+        type: Int64
+        nullable: true
+        description: Creation time in epoch milliseconds
+        expr:
+          kind: path
+          path:
+            - creation_time
+      - name: last_update_time
+        type: Int64
+        nullable: true
+        description: Last update time in epoch milliseconds
+        expr:
+          kind: path
+          path:
+            - last_update_time
+  - name: runs
+    description: Runs in an MLflow experiment ordered by newest start time
+    guide: |
+      Requires `experiment_id`. Results are ordered by
+      `attributes.start_time DESC` so `LIMIT` reads recent runs first.
+      Use `filter` for MLflow run search filters such as
+      `attributes.status = 'RUNNING'` or `metrics.success_rate > 0.9`.
+      Use `run_view_type` for lifecycle visibility (for example
+      `ACTIVE_ONLY`, `DELETED_ONLY`, or `ALL`).
+    filters:
+      - name: experiment_id
+        required: true
+      - name: filter
+        required: false
+      - name: run_view_type
+        required: false
+    request:
+      method: POST
+      path: /api/2.0/mlflow/runs/search
+      query: []
+      body:
+        - path:
+            - experiment_ids
+            - "0"
+          from: filter
+          key: experiment_id
+        - path:
+            - max_results
+          from: literal
+          value: 100
+        - path:
+            - order_by
+            - "0"
+          from: literal
+          value: attributes.start_time DESC
+        - path:
+            - filter
+          from: filter
+          key: filter
+        - path:
+            - run_view_type
+          from: filter
+          key: run_view_type
+    response:
+      rows_path:
+        - runs
+    pagination:
+      mode: cursor_body
+      cursor_body_path:
+        - page_token
+      response_cursor_path:
+        - next_page_token
+      page_size:
+        default: 100
+        max: 1000
+        body_path:
+          - max_results
+    columns:
+      - name: experiment_id
+        type: Utf8
+        nullable: false
+        description: Experiment ID filter
+        expr:
+          kind: from_filter
+          key: experiment_id
+      - name: filter
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Optional MLflow run search filter
+        expr:
+          kind: from_filter
+          key: filter
+      - name: run_view_type
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Optional MLflow lifecycle view type
+        expr:
+          kind: from_filter
+          key: run_view_type
+      - name: run_id
+        type: Utf8
+        nullable: false
+        description: Run ID
+        expr:
+          kind: path
+          path:
+            - info
+            - run_id
+      - name: run_name
+        type: Utf8
+        nullable: true
+        description: Run name
+        expr:
+          kind: path
+          path:
+            - info
+            - run_name
+      - name: status
+        type: Utf8
+        nullable: true
+        description: Run status
+        expr:
+          kind: path
+          path:
+            - info
+            - status
+      - name: user_id
+        type: Utf8
+        nullable: true
+        description: User ID associated with the run
+        expr:
+          kind: path
+          path:
+            - info
+            - user_id
+      - name: start_time
+        type: Int64
+        nullable: true
+        description: Start time in epoch milliseconds
+        expr:
+          kind: path
+          path:
+            - info
+            - start_time
+      - name: end_time
+        type: Int64
+        nullable: true
+        description: End time in epoch milliseconds
+        expr:
+          kind: path
+          path:
+            - info
+            - end_time
+      - name: artifact_uri
+        type: Utf8
+        nullable: true
+        description: Run artifact URI
+        expr:
+          kind: path
+          path:
+            - info
+            - artifact_uri
+      - name: lifecycle_stage
+        type: Utf8
+        nullable: true
+        description: Run lifecycle stage
+        expr:
+          kind: path
+          path:
+            - info
+            - lifecycle_stage
+      - name: metrics
+        type: Json
+        nullable: true
+        description: Latest metric values logged on the run
+        expr:
+          kind: path
+          path:
+            - data
+            - metrics
+      - name: params
+        type: Json
+        nullable: true
+        description: Run params
+        expr:
+          kind: path
+          path:
+            - data
+            - params
+      - name: tags
+        type: Json
+        nullable: true
+        description: Run tags
+        expr:
+          kind: path
+          path:
+            - data
+            - tags
+  - name: run
+    description: Direct lookup for a single MLflow run
+    guide: |
+      Requires `run_id`. Use this when you already know the run ID from
+      the UI URL or from `mlflow.runs`.
+    filters:
+      - name: run_id
+        required: true
+    request:
+      method: GET
+      path: /api/2.0/mlflow/runs/get
+      query:
+        - name: run_id
+          from: filter
+          key: run_id
+    response:
+      rows_path:
+        - run
+      allow_404_empty: true
+    pagination:
+      mode: none
+    columns:
+      - name: run_id
+        type: Utf8
+        nullable: false
+        description: Run ID filter
+        expr:
+          kind: from_filter
+          key: run_id
+      - name: experiment_id
+        type: Utf8
+        nullable: true
+        description: Experiment ID
+        expr:
+          kind: path
+          path:
+            - info
+            - experiment_id
+      - name: run_name
+        type: Utf8
+        nullable: true
+        description: Run name
+        expr:
+          kind: path
+          path:
+            - info
+            - run_name
+      - name: status
+        type: Utf8
+        nullable: true
+        description: Run status
+        expr:
+          kind: path
+          path:
+            - info
+            - status
+      - name: user_id
+        type: Utf8
+        nullable: true
+        description: User ID associated with the run
+        expr:
+          kind: path
+          path:
+            - info
+            - user_id
+      - name: start_time
+        type: Int64
+        nullable: true
+        description: Start time in epoch milliseconds
+        expr:
+          kind: path
+          path:
+            - info
+            - start_time
+      - name: end_time
+        type: Int64
+        nullable: true
+        description: End time in epoch milliseconds
+        expr:
+          kind: path
+          path:
+            - info
+            - end_time
+      - name: artifact_uri
+        type: Utf8
+        nullable: true
+        description: Run artifact URI
+        expr:
+          kind: path
+          path:
+            - info
+            - artifact_uri
+      - name: lifecycle_stage
+        type: Utf8
+        nullable: true
+        description: Run lifecycle stage
+        expr:
+          kind: path
+          path:
+            - info
+            - lifecycle_stage
+      - name: metrics
+        type: Json
+        nullable: true
+        description: Latest metric values logged on the run
+        expr:
+          kind: path
+          path:
+            - data
+            - metrics
+      - name: params
+        type: Json
+        nullable: true
+        description: Run params
+        expr:
+          kind: path
+          path:
+            - data
+            - params
+      - name: tags
+        type: Json
+        nullable: true
+        description: Run tags
+        expr:
+          kind: path
+          path:
+            - data
+            - tags
+  - name: run_metrics
+    description: Latest metric values for a single MLflow run
+    guide: |
+      Requires `run_id`. Returns one row per latest metric value present
+      in the run summary. Use `mlflow.metric_history` for all logged
+      points of one metric key.
+    filters:
+      - name: run_id
+        required: true
+    request:
+      method: GET
+      path: /api/2.0/mlflow/runs/get
+      query:
+        - name: run_id
+          from: filter
+          key: run_id
+    response:
+      rows_path:
+        - run
+        - data
+        - metrics
+      allow_404_empty: true
+    pagination:
+      mode: none
+    columns:
+      - name: run_id
+        type: Utf8
+        nullable: false
+        description: Run ID filter
+        expr:
+          kind: from_filter
+          key: run_id
+      - name: key
+        type: Utf8
+        nullable: false
+        description: Metric key
+        expr:
+          kind: path
+          path:
+            - key
+      - name: value
+        type: Float64
+        nullable: true
+        description: Latest metric value
+        expr:
+          kind: path
+          path:
+            - value
+      - name: timestamp
+        type: Int64
+        nullable: true
+        description: Metric timestamp in epoch milliseconds
+        expr:
+          kind: path
+          path:
+            - timestamp
+      - name: step
+        type: Int64
+        nullable: true
+        description: Metric step
+        expr:
+          kind: path
+          path:
+            - step
+  - name: run_params
+    description: Params for a single MLflow run
+    guide: |
+      Requires `run_id`. Returns one row per param logged on the run.
+    filters:
+      - name: run_id
+        required: true
+    request:
+      method: GET
+      path: /api/2.0/mlflow/runs/get
+      query:
+        - name: run_id
+          from: filter
+          key: run_id
+    response:
+      rows_path:
+        - run
+        - data
+        - params
+      allow_404_empty: true
+    pagination:
+      mode: none
+    columns:
+      - name: run_id
+        type: Utf8
+        nullable: false
+        description: Run ID filter
+        expr:
+          kind: from_filter
+          key: run_id
+      - name: key
+        type: Utf8
+        nullable: false
+        description: Param key
+        expr:
+          kind: path
+          path:
+            - key
+      - name: value
+        type: Utf8
+        nullable: true
+        description: Param value
+        expr:
+          kind: path
+          path:
+            - value
+  - name: run_tags
+    description: Tags for a single MLflow run
+    guide: |
+      Requires `run_id`. Returns one row per tag logged on the run.
+    filters:
+      - name: run_id
+        required: true
+    request:
+      method: GET
+      path: /api/2.0/mlflow/runs/get
+      query:
+        - name: run_id
+          from: filter
+          key: run_id
+    response:
+      rows_path:
+        - run
+        - data
+        - tags
+      allow_404_empty: true
+    pagination:
+      mode: none
+    columns:
+      - name: run_id
+        type: Utf8
+        nullable: false
+        description: Run ID filter
+        expr:
+          kind: from_filter
+          key: run_id
+      - name: key
+        type: Utf8
+        nullable: false
+        description: Tag key
+        expr:
+          kind: path
+          path:
+            - key
+      - name: value
+        type: Utf8
+        nullable: true
+        description: Tag value
+        expr:
+          kind: path
+          path:
+            - value
+  - name: metric_history
+    description: Logged history for one MLflow metric key in a run
+    guide: |
+      Requires `run_id` and `metric_key`. Returns all logged metric
+      points for that key, ordered by the MLflow API.
+    filters:
+      - name: run_id
+        required: true
+      - name: metric_key
+        required: true
+    request:
+      method: GET
+      path: /api/2.0/mlflow/metrics/get-history
+      query:
+        - name: run_id
+          from: filter
+          key: run_id
+        - name: metric_key
+          from: filter
+          key: metric_key
+    response:
+      rows_path:
+        - metrics
+    pagination:
+      mode: cursor_query
+      cursor_param: page_token
+      response_cursor_path:
+        - next_page_token
+      page_size:
+        default: 1000
+        max: 25000
+        query_param: max_results
+    columns:
+      - name: run_id
+        type: Utf8
+        nullable: false
+        description: Run ID filter
+        expr:
+          kind: from_filter
+          key: run_id
+      - name: metric_key
+        type: Utf8
+        nullable: false
+        description: Metric key filter
+        expr:
+          kind: from_filter
+          key: metric_key
+      - name: key
+        type: Utf8
+        nullable: false
+        description: Metric key returned by MLflow
+        expr:
+          kind: path
+          path:
+            - key
+      - name: value
+        type: Float64
+        nullable: true
+        description: Metric value
+        expr:
+          kind: path
+          path:
+            - value
+      - name: timestamp
+        type: Int64
+        nullable: true
+        description: Metric timestamp in epoch milliseconds
+        expr:
+          kind: path
+          path:
+            - timestamp
+      - name: step
+        type: Int64
+        nullable: true
+        description: Metric step
+        expr:
+          kind: path
+          path:
+            - step
+  - name: artifacts
+    description: Artifact files and directories for an MLflow run
+    guide: |
+      Requires `run_id`. Optionally pass `path` to list a subdirectory,
+      for example `path = 'traces'`. This table lists artifact metadata;
+      it does not download artifact file contents.
+    filters:
+      - name: run_id
+        required: true
+      - name: path
+        required: false
+    request:
+      method: GET
+      path: /api/2.0/mlflow/artifacts/list
+      query:
+        - name: run_id
+          from: filter
+          key: run_id
+        - name: path
+          from: filter
+          key: path
+    response:
+      rows_path:
+        - files
+      allow_404_empty: true
+    pagination:
+      mode: none
+    columns:
+      - name: run_id
+        type: Utf8
+        nullable: false
+        description: Run ID filter
+        expr:
+          kind: from_filter
+          key: run_id
+      - name: path_filter
+        type: Utf8
+        nullable: true
+        virtual: true
+        description: Artifact path filter
+        expr:
+          kind: from_filter
+          key: path
+      - name: path
+        type: Utf8
+        nullable: false
+        description: Artifact path
+        expr:
+          kind: path
+          path:
+            - path
+      - name: is_dir
+        type: Boolean
+        nullable: true
+        description: Whether this artifact entry is a directory
+        expr:
+          kind: path
+          path:
+            - is_dir
+      - name: file_size
+        type: Int64
+        nullable: true
+        description: File size in bytes, when available
+        expr:
+          kind: path
+          path:
+            - file_size
