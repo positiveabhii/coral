@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use coral_spec::types::projection::{ProjectionFilter, ProjectionScalarType, TableProjection};
-use coral_spec::types::source::OperationId;
+use coral_spec::types::source::{
+    Binding, HeaderValue, HttpMethod, OperationId, Surface, SurfaceKind,
+};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::TableProvider;
 use datafusion::datasource::empty::EmptyTable;
@@ -33,6 +35,15 @@ pub(crate) struct ProjectionTableShape {
 pub(crate) struct SourceModelOperationInputs {
     pub(crate) operation: OperationId,
     pub(crate) values: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SourceModelRestRequest {
+    pub(crate) operation: OperationId,
+    pub(crate) method: HttpMethod,
+    pub(crate) url: String,
+    pub(crate) query_params: Vec<(String, String)>,
+    pub(crate) headers: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +88,24 @@ impl SourceModelTableProvider {
             operation: self.operation.clone(),
             values,
         })
+    }
+
+    pub(crate) fn rest_request_from_filters(
+        &self,
+        surface: &Surface,
+        binding: &Binding,
+        source_inputs: &BTreeMap<String, String>,
+        filters: &[Expr],
+        sql_limit: Option<usize>,
+    ) -> Result<SourceModelRestRequest> {
+        let operation_inputs = self.operation_inputs_from_filters(filters)?;
+        build_rest_request(
+            surface,
+            binding,
+            source_inputs,
+            &operation_inputs,
+            sql_limit,
+        )
     }
 }
 
@@ -276,6 +305,162 @@ fn extract_projection_filter_equality(
     Some((name.to_string(), literal_to_string(right)?))
 }
 
+fn build_rest_request(
+    surface: &Surface,
+    binding: &Binding,
+    source_inputs: &BTreeMap<String, String>,
+    operation_inputs: &SourceModelOperationInputs,
+    sql_limit: Option<usize>,
+) -> Result<SourceModelRestRequest> {
+    if binding.surface() != surface.id() {
+        return Err(DataFusionError::Execution(format!(
+            "REST binding '{}' references surface '{}' but received surface '{}'",
+            binding.id().as_str(),
+            binding.surface().as_str(),
+            surface.id().as_str()
+        )));
+    }
+    if surface.kind() != &SurfaceKind::Rest {
+        return Err(DataFusionError::Execution(format!(
+            "REST binding '{}' cannot use non-REST surface '{}'",
+            binding.id().as_str(),
+            surface.id().as_str()
+        )));
+    }
+    if binding.operation() != &operation_inputs.operation {
+        return Err(DataFusionError::Execution(format!(
+            "REST binding for operation '{}' cannot execute inputs for operation '{}'",
+            binding.operation().as_str(),
+            operation_inputs.operation.as_str()
+        )));
+    }
+
+    let http = binding.protocol().as_http();
+    let rendered_path = expand_path_template(http.path(), &operation_inputs.values)?;
+    let mut query_params = Vec::new();
+    for query in http.query() {
+        if let Some(value) = operation_inputs.values.get(query.input().as_str()) {
+            query_params.push((query.name().to_string(), value.clone()));
+        }
+    }
+    if let Some(pagination) = http.pagination() {
+        let page_size = pagination.page_size();
+        let value = sql_limit
+            .map_or(page_size.default(), |limit| {
+                limit.try_into().unwrap_or(u32::MAX)
+            })
+            .min(page_size.max())
+            .max(1);
+        query_params.push((page_size.query_param().to_string(), value.to_string()));
+    }
+
+    let url = build_url(surface.base_url(), &rendered_path, &query_params)?;
+    let headers = build_rest_headers(surface, source_inputs)?;
+
+    Ok(SourceModelRestRequest {
+        operation: operation_inputs.operation.clone(),
+        method: http.method(),
+        url,
+        query_params,
+        headers,
+    })
+}
+
+fn expand_path_template(
+    template: &str,
+    operation_inputs: &BTreeMap<String, String>,
+) -> Result<String> {
+    let mut rendered = String::new();
+    let mut rest = template;
+
+    while let Some(start) = rest.find('{') {
+        rendered.push_str(&rest[..start]);
+        let after_start = &rest[start + 1..];
+        let Some(end) = after_start.find('}') else {
+            return Err(DataFusionError::Execution(format!(
+                "REST path template '{template}' has an unclosed input placeholder"
+            )));
+        };
+        let name = &after_start[..end];
+        if name.is_empty() || name.contains('{') {
+            return Err(DataFusionError::Execution(format!(
+                "REST path template '{template}' has an invalid input placeholder"
+            )));
+        }
+        let value = operation_inputs.get(name).ok_or_else(|| {
+            DataFusionError::Execution(format!(
+                "REST path template '{template}' is missing required operation input '{name}'"
+            ))
+        })?;
+        rendered.push_str(&urlencoding::encode(value));
+        rest = &after_start[end + 1..];
+    }
+
+    if rest.contains('}') {
+        return Err(DataFusionError::Execution(format!(
+            "REST path template '{template}' has an unmatched closing brace"
+        )));
+    }
+    rendered.push_str(rest);
+    Ok(rendered)
+}
+
+fn build_url(base_url: &str, path: &str, query_params: &[(String, String)]) -> Result<String> {
+    let trimmed_path = path.trim();
+    if reqwest::Url::parse(trimmed_path).is_ok() || trimmed_path.starts_with("//") {
+        return Err(DataFusionError::Execution(
+            "REST request path must be relative; absolute URLs are not allowed".to_string(),
+        ));
+    }
+
+    let base = base_url.trim_end_matches('/');
+    let joined = if trimmed_path.starts_with('/') {
+        format!("{base}{trimmed_path}")
+    } else {
+        format!("{base}/{trimmed_path}")
+    };
+    let mut url = reqwest::Url::parse(&joined).map_err(|error| {
+        DataFusionError::Execution(format!("REST request URL '{joined}' is invalid: {error}"))
+    })?;
+    url.query_pairs_mut()
+        .extend_pairs(query_params.iter().map(|(name, value)| (&**name, &**value)));
+    Ok(url.to_string())
+}
+
+fn build_rest_headers(
+    surface: &Surface,
+    source_inputs: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>> {
+    let mut headers = BTreeMap::new();
+
+    for header in surface.headers() {
+        let value = match header.value() {
+            HeaderValue::Literal(value) => value.clone(),
+            HeaderValue::Input(input) => {
+                source_inputs.get(input.as_str()).cloned().ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "REST header '{}' is missing source input '{}'",
+                        header.name(),
+                        input.as_str()
+                    ))
+                })?
+            }
+        };
+        headers.insert(header.name().to_string(), value);
+    }
+
+    let (input, header, prefix) = surface.auth().bearer_token_parts();
+    let token = source_inputs.get(input.as_str()).ok_or_else(|| {
+        DataFusionError::Execution(format!(
+            "REST bearer auth header '{header}' is missing source input '{}'",
+            input.as_str()
+        ))
+    })?;
+    headers.insert(header.to_string(), format!("{prefix}{token}"));
+
+    Ok(headers)
+}
+
 fn field_for_filter(filter: &ProjectionFilter) -> Field {
     Field::new(
         filter.name(),
@@ -294,6 +479,7 @@ fn data_type_for_projection_type(ty: &ProjectionScalarType) -> DataType {
 #[cfg(test)]
 mod tests {
     use coral_spec::types::projection::github_issues_projection;
+    use coral_spec::types::source::{github_issue_list_rest_binding, github_rest_surface};
     use datafusion::datasource::TableProvider;
     use datafusion::logical_expr::{Operator, TableProviderFilterPushDown, binary_expr, col, lit};
 
@@ -432,5 +618,119 @@ mod tests {
                 TableProviderFilterPushDown::Exact,
             ]
         );
+    }
+
+    #[test]
+    fn builds_github_issues_rest_request_from_operation_inputs() {
+        let provider = github_issues_provider();
+        let surface = github_rest_surface();
+        let binding = github_issue_list_rest_binding();
+        let source_inputs = BTreeMap::from([("GITHUB_TOKEN".to_string(), "ghp_test".to_string())]);
+        let request = provider
+            .rest_request_from_filters(
+                &surface,
+                &binding,
+                &source_inputs,
+                &[
+                    col("owner").eq(lit("withcoral")),
+                    col("repo").eq(lit("coral")),
+                    col("state").eq(lit("closed")),
+                ],
+                None,
+            )
+            .expect("request should build from required inputs");
+
+        assert_eq!(request.operation.as_str(), "github.issue.list");
+        assert_eq!(request.method, HttpMethod::Get);
+        assert_eq!(
+            request.url,
+            "https://api.github.com/repos/withcoral/coral/issues?state=closed&per_page=100"
+        );
+        assert_eq!(
+            request.query_params,
+            vec![
+                ("state".to_string(), "closed".to_string()),
+                ("per_page".to_string(), "100".to_string()),
+            ]
+        );
+        assert_eq!(
+            request.headers.get("Accept").map(String::as_str),
+            Some("application/vnd.github+json")
+        );
+        assert_eq!(
+            request
+                .headers
+                .get("X-GitHub-Api-Version")
+                .map(String::as_str),
+            Some("2022-11-28")
+        );
+        assert_eq!(
+            request.headers.get("Authorization").map(String::as_str),
+            Some("Bearer ghp_test")
+        );
+    }
+
+    #[test]
+    fn rest_request_uses_sql_limit_as_page_size_cap() {
+        let provider = github_issues_provider();
+        let surface = github_rest_surface();
+        let binding = github_issue_list_rest_binding();
+        let source_inputs = BTreeMap::from([("GITHUB_TOKEN".to_string(), "ghp_test".to_string())]);
+        let request = provider
+            .rest_request_from_filters(
+                &surface,
+                &binding,
+                &source_inputs,
+                &[
+                    col("owner").eq(lit("withcoral")),
+                    col("repo").eq(lit("coral")),
+                ],
+                Some(25),
+            )
+            .expect("request should build from required inputs");
+
+        assert_eq!(
+            request.url,
+            "https://api.github.com/repos/withcoral/coral/issues?per_page=25"
+        );
+        assert_eq!(
+            request.query_params,
+            vec![("per_page".to_string(), "25".to_string())]
+        );
+    }
+
+    #[test]
+    fn missing_required_path_inputs_do_not_build_rest_requests() {
+        let provider = github_issues_provider();
+        let surface = github_rest_surface();
+        let binding = github_issue_list_rest_binding();
+        let source_inputs = BTreeMap::from([("GITHUB_TOKEN".to_string(), "ghp_test".to_string())]);
+        let error = provider
+            .rest_request_from_filters(
+                &surface,
+                &binding,
+                &source_inputs,
+                &[col("owner").eq(lit("withcoral"))],
+                None,
+            )
+            .expect_err("missing repo should fail before request execution");
+        let message = error.to_string();
+
+        assert!(message.contains("github.issues"));
+        assert!(message.contains("repo"));
+    }
+
+    #[test]
+    fn path_template_expansion_encodes_operation_inputs() {
+        let rendered = expand_path_template(
+            "/repos/{owner}/{repo}/issues",
+            &BTreeMap::from([
+                ("owner".to_string(), "with coral".to_string()),
+                ("repo".to_string(), "coral/core".to_string()),
+            ]),
+        )
+        .expect("path should render");
+
+        assert_eq!(rendered, "/repos/with%20coral/coral%2Fcore/issues");
     }
 }
