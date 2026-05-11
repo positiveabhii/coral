@@ -777,8 +777,10 @@ mod tests {
     use coral_spec::types::source::{github_issue_list_rest_binding, github_rest_surface};
     use datafusion::arrow::array::{Array, Int64Array, StringArray};
     use datafusion::datasource::TableProvider;
+    use datafusion::execution::TaskContext;
     use datafusion::logical_expr::{Operator, TableProviderFilterPushDown, binary_expr, col, lit};
     use datafusion::prelude::SessionContext;
+    use futures::TryStreamExt;
     use serde_json::json;
 
     use super::*;
@@ -951,6 +953,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scan_respects_datafusion_projection() {
+        let provider = github_issues_provider();
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let projection = vec![1, 4];
+        let plan = provider
+            .scan(
+                &state,
+                Some(&projection),
+                &[
+                    col("owner").eq(lit("withcoral")),
+                    col("repo").eq(lit("coral")),
+                ],
+                None,
+            )
+            .await
+            .expect("scan should produce a projected execution plan");
+
+        assert_eq!(
+            plan.schema()
+                .fields()
+                .iter()
+                .map(|field| field.name().as_str())
+                .collect::<Vec<_>>(),
+            vec!["title", "user__login"]
+        );
+
+        let batches = plan
+            .execute(0, Arc::new(TaskContext::default()))
+            .expect("projected plan should execute")
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("projected stream should collect");
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].num_columns(), 2);
+        assert_eq!(batches[0].num_rows(), 0);
+    }
+
+    #[tokio::test]
     async fn scan_rejects_missing_required_inputs() {
         let provider = github_issues_rest_provider();
         let ctx = SessionContext::new();
@@ -1020,6 +1062,48 @@ mod tests {
                 .value(0),
             "withcoral"
         );
+    }
+
+    #[test]
+    fn converts_missing_optional_json_fields_to_nulls() {
+        let provider = github_issues_provider();
+        let operation_values = BTreeMap::from([
+            ("owner".to_string(), "withcoral".to_string()),
+            ("repo".to_string(), "coral".to_string()),
+        ]);
+        let batch = convert_source_model_items(
+            provider.schema(),
+            &provider.shape,
+            &operation_values,
+            &[
+                json!({
+                    "number": 42,
+                    "title": "Missing user",
+                    "state": "open",
+                    "created_at": "2026-05-11T10:00:00Z"
+                }),
+                json!({
+                    "number": 43,
+                    "title": "Null user login",
+                    "state": "closed",
+                    "created_at": "2026-05-11T11:00:00Z",
+                    "user": {
+                        "login": null
+                    }
+                }),
+            ],
+        )
+        .expect("items with missing optional fields should convert");
+
+        let user_login = batch
+            .column_by_name("user__login")
+            .expect("user login column")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("user login should be string");
+
+        assert!(user_login.is_null(0));
+        assert!(user_login.is_null(1));
     }
 
     #[test]
