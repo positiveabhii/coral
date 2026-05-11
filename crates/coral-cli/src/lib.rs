@@ -18,9 +18,13 @@ mod query_error;
 mod source_ops;
 
 use std::borrow::Cow;
-use std::path::PathBuf;
 #[cfg(feature = "embedded-ui")]
 use std::sync::Arc;
+use std::{
+    future::{Future, ready},
+    path::PathBuf,
+    pin::Pin,
+};
 
 use clap::{ArgGroup, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
@@ -28,8 +32,8 @@ use coral_api::v1::ExecuteSqlRequest;
 #[cfg(feature = "embedded-ui")]
 use coral_app::StaticAssetsProvider;
 use coral_client::{
-    AppClient, decode_execute_sql_response, default_workspace, format_batches_json,
-    format_batches_table,
+    AppClient, DecodedStatusError, decode_execute_sql_response, decode_status_error,
+    default_workspace, format_batches_json, format_batches_table,
 };
 use dialoguer::console::measure_text_width;
 use tonic::Request;
@@ -204,37 +208,123 @@ pub enum CliError {
         /// Normalized source name requested by the user.
         source_name: String,
     },
+    /// A non-query command failed with a rendered user-facing diagnostic.
+    #[error("command failed")]
+    Diagnostic {
+        /// Complete stderr diagnostic rendered for the command failure.
+        rendered_stderr: String,
+    },
     /// Any non-renderable internal command failure.
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
 
 impl CliError {
+    pub(crate) fn diagnostic(
+        summary: impl AsRef<str>,
+        detail: impl AsRef<str>,
+        hint: impl AsRef<str>,
+    ) -> Self {
+        Self::Diagnostic {
+            rendered_stderr: render_diagnostic(summary, detail, hint),
+        }
+    }
+
+    pub(crate) fn server_status(status: &tonic::Status) -> Self {
+        Self::Diagnostic {
+            rendered_stderr: render_status_diagnostic(status),
+        }
+    }
+
     #[must_use]
     /// Returns stderr content for user-facing CLI failures.
     pub fn rendered_stderr(&self) -> Option<String> {
         match self {
             Self::Query {
                 rendered_stderr, ..
-            } => Some(rendered_stderr.clone()),
-            Self::SourceNotInstalled { source_name } => Some(format!(
-                "source '{source_name}' is not installed. Run `coral source add {source_name}` to install it, then retry `coral source test {source_name}`.\n"
+            }
+            | Self::Diagnostic { rendered_stderr } => Some(rendered_stderr.clone()),
+            Self::SourceNotInstalled { source_name } => Some(render_diagnostic(
+                format!("Source `{source_name}` is not installed"),
+                format!(
+                    "`{source_name}` is available as a bundled source, but it has not been added to this workspace."
+                ),
+                format!(
+                    "Run `coral source add {source_name}`, then retry `coral source test {source_name}`."
+                ),
             )),
-            Self::SourceNotFound { source_name } => Some(format!(
-                "source '{source_name}' was not found. Run `coral source list` to see installed sources or `coral source discover` to see bundled sources available to install.\n"
+            Self::SourceNotFound { source_name } => Some(render_diagnostic(
+                format!("Source `{source_name}` was not found"),
+                format!("No installed or bundled source named `{source_name}` exists."),
+                "Run `coral source list` to see installed sources or `coral source discover` to see bundled sources available to install.",
             )),
             Self::Internal(_) => None,
         }
     }
 }
 
+impl From<bootstrap::BootstrapError> for CliError {
+    fn from(error: bootstrap::BootstrapError) -> Self {
+        match error {
+            bootstrap::BootstrapError::Startup(error) => Self::diagnostic(
+                "Coral could not start the local server",
+                error.to_string(),
+                "Retry the command. If it keeps failing, set `CORAL_CONFIG_DIR` to a writable directory and try again.",
+            ),
+            bootstrap::BootstrapError::Connect { endpoint, source } => Self::diagnostic(
+                "Coral could not connect to the local server",
+                format!("Failed to connect to `{endpoint}`: {source}"),
+                "Retry the command. If you set `CORAL_ENDPOINT`, check that it points to a running Coral server.",
+            ),
+        }
+    }
+}
+
+fn render_diagnostic(
+    summary: impl AsRef<str>,
+    detail: impl AsRef<str>,
+    hint: impl AsRef<str>,
+) -> String {
+    format!(
+        "Error: {}\nDetail: {}\nHint: {}\n",
+        summary.as_ref(),
+        detail.as_ref(),
+        hint.as_ref()
+    )
+}
+
+fn render_status_diagnostic(status: &tonic::Status) -> String {
+    match decode_status_error(status) {
+        DecodedStatusError::Structured(error) => render_diagnostic(
+            error.summary,
+            if error.detail.is_empty() {
+                status.message().to_string()
+            } else {
+                error.detail
+            },
+            error.hint.unwrap_or_else(|| {
+                "Retry the command. If it keeps failing, check source setup and local Coral state."
+                    .to_string()
+            }),
+        ),
+        DecodedStatusError::Plain(message) => render_diagnostic(
+            "Coral server request failed",
+            message,
+            "Retry the command. If it keeps failing, check source setup and local Coral state.",
+        ),
+    }
+}
+
 impl Command {
     fn required_runtime(&self) -> RequiredRuntime {
         match self {
+            Command::Source(SourceArgs {
+                command: SourceCommand::Lint { .. },
+            })
+            | Command::Completion(_) => RequiredRuntime::None,
             Command::Sql(_) | Command::Source(_) | Command::Onboard | Command::McpStdio(_) => {
                 RequiredRuntime::AppClient
             }
-            Command::Completion(_) => RequiredRuntime::None,
             #[cfg(feature = "embedded-ui")]
             Command::Ui(_) => RequiredRuntime::None,
         }
@@ -251,6 +341,7 @@ impl coral_app::RunErrorTelemetry for CliError {
             Self::Query { error_type, .. } => Cow::Borrowed(error_type.as_str()),
             Self::SourceNotInstalled { .. } => Cow::Borrowed("SOURCE_NOT_INSTALLED"),
             Self::SourceNotFound { .. } => Cow::Borrowed("SOURCE_NOT_FOUND"),
+            Self::Diagnostic { .. } => Cow::Borrowed("COMMAND_FAILED"),
             Self::Internal(_) => Cow::Borrowed("INTERNAL"),
         }
     }
@@ -264,9 +355,21 @@ impl coral_app::RunErrorTelemetry for CliError {
             Self::SourceNotFound { source_name } => {
                 Cow::Owned(format!("source '{source_name}' was not found"))
             }
+            Self::Diagnostic { rendered_stderr } => {
+                Cow::Owned(diagnostic_summary(rendered_stderr))
+            }
             Self::Internal(error) => Cow::Owned(error.to_string()),
         }
     }
+}
+
+fn diagnostic_summary(rendered_stderr: &str) -> String {
+    rendered_stderr
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("Error: "))
+        .unwrap_or("command failed")
+        .to_string()
 }
 
 /// Returns whether this CLI invocation should render telemetry logs to stderr.
@@ -307,9 +410,7 @@ pub async fn run_from_env() -> Result<(), CliError> {
         RequiredRuntime::AppClient => {
             let enable_stderr_logs = command.enables_stderr_logs();
             let is_mcp_stdio = matches!(&command, Command::McpStdio(_));
-            let bootstrap = bootstrap::bootstrap(enable_stderr_logs)
-                .await
-                .map_err(anyhow::Error::from)?;
+            let bootstrap = bootstrap::bootstrap(enable_stderr_logs).await?;
             let app = bootstrap.app.clone();
             let result = if is_mcp_stdio {
                 run_app_command(app, command, Some(&ctx)).await
@@ -321,7 +422,7 @@ pub async fn run_from_env() -> Result<(), CliError> {
             result
         }
         RequiredRuntime::None => {
-            coral_app::run_with_context(&ctx, Box::pin(run_no_runtime_command(command))).await
+            coral_app::run_with_context(&ctx, run_no_runtime_command(command)).await
         }
     }
 }
@@ -392,16 +493,26 @@ pub async fn run(app: AppClient, ctx: coral_app::RunContext) -> Result<(), CliEr
     }
 }
 
-async fn run_no_runtime_command(command: Command) -> Result<(), CliError> {
+type CliFuture = Pin<Box<dyn Future<Output = Result<(), CliError>>>>;
+
+fn run_no_runtime_command(command: Command) -> CliFuture {
     match command {
         Command::Completion(args) => {
             let mut cmd = Cli::command();
             let bin_name = cmd.get_name().to_string();
             generate(args.shell, &mut cmd, bin_name, &mut std::io::stdout());
-            Ok(())
+            Box::pin(ready(Ok(())))
         }
         #[cfg(feature = "embedded-ui")]
-        Command::Ui(args) => run_ui(args).await.map_err(Into::into),
+        Command::Ui(args) => Box::pin(async move { run_ui(args).await.map_err(Into::into) }),
+        Command::Source(SourceArgs {
+            command: SourceCommand::Lint { file },
+        }) => {
+            let result = source_ops::load_validated_manifest_file(&file).map(|_| {
+                println!("Manifest is valid");
+            });
+            Box::pin(ready(result))
+        }
         Command::Sql(_) | Command::Source(_) | Command::Onboard | Command::McpStdio(_) => {
             unreachable!("app client commands are routed through app runtime startup")
         }
@@ -499,10 +610,7 @@ async fn run_source(app: &AppClient, args: SourceArgs) -> Result<(), CliError> {
             source_ops::print_source_info(app, &name, verbose).await?;
         }
         SourceCommand::Add(args) => run_source_add(app, args).await?,
-        SourceCommand::Lint { file } => {
-            source_ops::load_validated_manifest_file(&file)?;
-            println!("Manifest is valid");
-        }
+        SourceCommand::Lint { .. } => unreachable!("source lint is routed without app bootstrap"),
         SourceCommand::Test { name } => {
             source_ops::test_and_print(
                 app,
@@ -616,11 +724,11 @@ async fn run_source_add(app: &AppClient, args: SourceAddArgs) -> Result<(), CliE
     if interactive {
         source_ops::require_interactive()?;
     }
-    let collect = |inputs: &[coral_spec::ManifestInputSpec]| {
+    let collect = |inputs: &[coral_spec::ManifestInputSpec], interactive_command: String| {
         if interactive {
-            source_ops::prompt_for_inputs(inputs)
+            source_ops::prompt_for_inputs(inputs).map_err(Into::into)
         } else {
-            source_ops::collect_inputs_from_env(inputs)
+            source_ops::collect_inputs_from_env(inputs, interactive_command)
         }
     };
     let response = match (name, file) {
@@ -630,18 +738,32 @@ async fn run_source_add(app: &AppClient, args: SourceAddArgs) -> Result<(), CliE
             let available = discover
                 .into_iter()
                 .find(|source| source.name == bundled_name)
-                .ok_or_else(|| anyhow::anyhow!("unknown bundled source '{bundled_name}'"))?;
+                .ok_or_else(|| CliError::SourceNotFound {
+                    source_name: bundled_name.clone(),
+                })?;
             let inputs = available
                 .inputs
                 .iter()
                 .map(source_ops::manifest_input_from_proto)
                 .collect::<Result<Vec<_>, _>>()?;
-            let (variables, secrets) = collect(&inputs)?;
+            let (variables, secrets) = collect(
+                &inputs,
+                format!(
+                    "coral source add {} --interactive",
+                    shell_quote_arg(&available.name)
+                ),
+            )?;
             source_ops::add_bundled_source(app, &available.name, variables, secrets).await?
         }
         (None, Some(file)) => {
             let (manifest_yaml, manifest) = source_ops::load_validated_manifest_file(&file)?;
-            let (variables, secrets) = collect(manifest.declared_inputs())?;
+            let (variables, secrets) = collect(
+                manifest.declared_inputs(),
+                format!(
+                    "coral source add --file {} --interactive",
+                    shell_quote_arg(&file.display().to_string())
+                ),
+            )?;
             source_ops::import_source(app, manifest_yaml, variables, secrets).await?
         }
         _ => unreachable!("clap enforces exactly one of name or file"),
@@ -652,11 +774,23 @@ async fn run_source_add(app: &AppClient, args: SourceAddArgs) -> Result<(), CliE
         .map_err(Into::into)
 }
 
+fn shell_quote_arg(argument: &str) -> String {
+    if !argument.is_empty()
+        && argument
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/'))
+    {
+        return argument.to_string();
+    }
+
+    format!("'{}'", argument.replace('\'', "'\\''"))
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, RequiredRuntime, command_enables_stderr_logs};
+    use super::{Cli, RequiredRuntime, command_enables_stderr_logs, shell_quote_arg};
 
     #[test]
     fn server_command_is_not_available() {
@@ -692,6 +826,14 @@ mod tests {
     }
 
     #[test]
+    fn source_lint_requires_no_runtime() {
+        let cli = Cli::try_parse_from(["coral", "source", "lint", "manifest.yaml"])
+            .expect("source lint parses");
+
+        assert_eq!(cli.command.required_runtime(), RequiredRuntime::None);
+    }
+
+    #[test]
     fn regular_commands_use_normal_app_bootstrap() {
         let cli = Cli::try_parse_from(["coral", "source", "list"]).expect("source list parses");
 
@@ -715,5 +857,17 @@ mod tests {
     #[test]
     fn non_mcp_invocation_disables_stderr_logs() {
         assert!(!command_enables_stderr_logs(["coral", "sql", "SELECT 1"]));
+    }
+
+    #[test]
+    fn shell_quote_arg_quotes_paths_with_shell_metacharacters() {
+        assert_eq!(
+            shell_quote_arg("/tmp/my spec/manifest`demo`.yaml"),
+            "'/tmp/my spec/manifest`demo`.yaml'"
+        );
+        assert_eq!(
+            shell_quote_arg("/tmp/bob's spec.yaml"),
+            "'/tmp/bob'\\''s spec.yaml'"
+        );
     }
 }

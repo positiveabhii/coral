@@ -372,6 +372,15 @@ impl MockServerConfig {
         self.validate_source = MockResult::ok(response);
         self
     }
+
+    pub(crate) fn with_delete_source_error(
+        mut self,
+        code: Code,
+        message: impl Into<String>,
+    ) -> Self {
+        self.delete_source = MockResult::err(code, message);
+        self
+    }
 }
 
 #[derive(Default)]
