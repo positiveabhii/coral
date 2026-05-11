@@ -12,16 +12,20 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use coral_spec::types::projection::{ProjectionFilter, ProjectionScalarType, TableProjection};
 use coral_spec::types::source::{
-    Binding, HeaderValue, HttpMethod, OperationId, Surface, SurfaceKind,
+    Binding, HeaderValue, HttpMethod, JsonPath, OperationId, Surface, SurfaceKind,
 };
+use datafusion::arrow::array::{ArrayRef, Int64Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::TableProvider;
-use datafusion::datasource::empty::EmptyTable;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::{Expr, Operator, TableProviderFilterPushDown, TableType};
 use datafusion::physical_plan::ExecutionPlan;
+use serde_json::Value;
 
 use crate::backends::shared::filter_expr::literal_to_string;
+use crate::backends::shared::json_exec::{Converter, Fetcher, JsonExec, RowFetcher};
+use crate::backends::shared::json_path::get_path_value;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectionTableShape {
@@ -53,6 +57,21 @@ pub(crate) struct SourceModelTableProvider {
     operation: OperationId,
     shape: ProjectionTableShape,
     filters: Vec<ProjectionFilter>,
+    execution: SourceModelExecution,
+}
+
+#[derive(Debug, Clone)]
+enum SourceModelExecution {
+    Empty,
+    Rest(Box<SourceModelRestExecution>),
+}
+
+#[derive(Debug, Clone)]
+struct SourceModelRestExecution {
+    surface: Surface,
+    binding: Binding,
+    source_inputs: BTreeMap<String, String>,
+    client: reqwest::Client,
 }
 
 impl SourceModelTableProvider {
@@ -64,7 +83,111 @@ impl SourceModelTableProvider {
             operation: projection.operation().clone(),
             shape: table_shape_from_projection(projection),
             filters: projection.filters().to_vec(),
+            execution: SourceModelExecution::Empty,
         }
+    }
+
+    pub(crate) fn new_rest(
+        source_schema: impl Into<String>,
+        projection: &TableProjection,
+        surface: Surface,
+        binding: Binding,
+        source_inputs: BTreeMap<String, String>,
+    ) -> Self {
+        let mut provider = Self::new(source_schema, projection);
+        provider.execution = SourceModelExecution::Rest(Box::new(SourceModelRestExecution {
+            surface,
+            binding,
+            source_inputs,
+            client: reqwest::Client::new(),
+        }));
+        provider
+    }
+
+    fn json_exec(
+        &self,
+        operation_inputs: SourceModelOperationInputs,
+        request: Option<SourceModelRestRequest>,
+        items_path: Vec<String>,
+        client: Option<reqwest::Client>,
+        projection: Option<&Vec<usize>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let fetcher: Fetcher = match (request, client) {
+            (Some(request), Some(client)) => Arc::new(SourceModelRestFetchPlan {
+                client,
+                request,
+                items_path,
+            }),
+            _ => Arc::new(EmptySourceModelFetchPlan),
+        };
+
+        let schema = self.shape.schema.clone();
+        let shape = self.shape.clone();
+        let operation_values = operation_inputs.values;
+        let converter: Converter = Arc::new(move |items: &[Value]| {
+            convert_source_model_items(schema.clone(), &shape, &operation_values, items)
+        });
+
+        Ok(Arc::new(JsonExec::new(
+            &self.source_schema,
+            &self.table_name,
+            self.shape.schema.clone(),
+            fetcher,
+            converter,
+            projection.cloned(),
+        )?))
+    }
+
+    fn rest_json_exec(
+        &self,
+        runtime: &SourceModelRestExecution,
+        operation_inputs: SourceModelOperationInputs,
+        projection: Option<&Vec<usize>>,
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let request = build_rest_request(
+            &runtime.surface,
+            &runtime.binding,
+            &runtime.source_inputs,
+            &operation_inputs,
+            limit,
+        )?;
+        let http = runtime.binding.protocol().as_http();
+        let items_path = json_path_segments(http.response().items_path())?;
+
+        self.json_exec(
+            operation_inputs,
+            Some(request),
+            items_path,
+            Some(runtime.client.clone()),
+            projection,
+        )
+    }
+
+    fn empty_json_exec(
+        &self,
+        operation_inputs: SourceModelOperationInputs,
+        projection: Option<&Vec<usize>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.json_exec(operation_inputs, None, Vec::new(), None, projection)
+    }
+
+    pub(crate) fn rest_request_from_filters(
+        &self,
+        surface: &Surface,
+        binding: &Binding,
+        source_inputs: &BTreeMap<String, String>,
+        filters: &[Expr],
+        sql_limit: Option<usize>,
+    ) -> Result<SourceModelRestRequest> {
+        let operation_inputs = self.operation_inputs_from_filters(filters)?;
+        build_rest_request(
+            surface,
+            binding,
+            source_inputs,
+            &operation_inputs,
+            sql_limit,
+        )
     }
 
     pub(crate) fn operation_inputs_from_filters(
@@ -88,24 +211,6 @@ impl SourceModelTableProvider {
             operation: self.operation.clone(),
             values,
         })
-    }
-
-    pub(crate) fn rest_request_from_filters(
-        &self,
-        surface: &Surface,
-        binding: &Binding,
-        source_inputs: &BTreeMap<String, String>,
-        filters: &[Expr],
-        sql_limit: Option<usize>,
-    ) -> Result<SourceModelRestRequest> {
-        let operation_inputs = self.operation_inputs_from_filters(filters)?;
-        build_rest_request(
-            surface,
-            binding,
-            source_inputs,
-            &operation_inputs,
-            sql_limit,
-        )
     }
 }
 
@@ -141,15 +246,92 @@ impl TableProvider for SourceModelTableProvider {
 
     async fn scan(
         &self,
-        state: &dyn datafusion::catalog::Session,
+        _state: &dyn datafusion::catalog::Session,
         projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let _operation_inputs = self.operation_inputs_from_filters(filters)?;
-        EmptyTable::new(self.shape.schema.clone())
-            .scan(state, projection, &[], limit)
-            .await
+        let operation_inputs = self.operation_inputs_from_filters(filters)?;
+        match &self.execution {
+            SourceModelExecution::Empty => self.empty_json_exec(operation_inputs, projection),
+            SourceModelExecution::Rest(runtime) => {
+                self.rest_json_exec(runtime, operation_inputs, projection, limit)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct EmptySourceModelFetchPlan;
+
+#[async_trait]
+impl RowFetcher for EmptySourceModelFetchPlan {
+    async fn fetch(&self) -> Result<Vec<Value>> {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Debug)]
+struct SourceModelRestFetchPlan {
+    client: reqwest::Client,
+    request: SourceModelRestRequest,
+    items_path: Vec<String>,
+}
+
+#[async_trait]
+impl RowFetcher for SourceModelRestFetchPlan {
+    async fn fetch(&self) -> Result<Vec<Value>> {
+        let method = match self.request.method {
+            HttpMethod::Get => reqwest::Method::GET,
+        };
+        let mut request = self.client.request(method, &self.request.url);
+        for (name, value) in &self.request.headers {
+            request = request.header(name, value);
+        }
+
+        let response = request.send().await.map_err(|error| {
+            DataFusionError::Execution(format!(
+                "REST request for operation '{}' failed: {error}",
+                self.request.operation.as_str()
+            ))
+        })?;
+        let status = response.status();
+        let body = response.text().await.map_err(|error| {
+            DataFusionError::Execution(format!(
+                "REST response for operation '{}' could not be read: {error}",
+                self.request.operation.as_str()
+            ))
+        })?;
+
+        if !status.is_success() {
+            return Err(DataFusionError::Execution(format!(
+                "REST request for operation '{}' returned HTTP {status}: {body}",
+                self.request.operation.as_str()
+            )));
+        }
+
+        let payload = serde_json::from_str::<Value>(&body).map_err(|error| {
+            DataFusionError::Execution(format!(
+                "REST response for operation '{}' was not valid JSON: {error}",
+                self.request.operation.as_str()
+            ))
+        })?;
+        let items = get_path_value(&payload, &self.items_path).ok_or_else(|| {
+            DataFusionError::Execution(format!(
+                "REST response for operation '{}' did not contain items at '{}'",
+                self.request.operation.as_str(),
+                display_json_path(&self.items_path)
+            ))
+        })?;
+        let items = items.as_array().ok_or_else(|| {
+            DataFusionError::Execution(format!(
+                "REST response items at '{}' for operation '{}' were not an array",
+                display_json_path(&self.items_path),
+                self.request.operation.as_str()
+            ))
+        })?;
+
+        Ok(items.clone())
     }
 }
 
@@ -461,6 +643,119 @@ fn build_rest_headers(
     Ok(headers)
 }
 
+fn json_path_segments(path: &JsonPath) -> Result<Vec<String>> {
+    let path = path.as_str();
+    if path == "$" {
+        return Ok(Vec::new());
+    }
+
+    let rest = path.strip_prefix("$.").ok_or_else(|| {
+        DataFusionError::Execution(format!(
+            "REST response items path '{path}' must start with '$' or '$.'"
+        ))
+    })?;
+    if rest.is_empty() || rest.contains('[') || rest.contains(']') || rest.contains("..") {
+        return Err(DataFusionError::Execution(format!(
+            "REST response items path '{path}' is not supported by the source-model spike"
+        )));
+    }
+
+    Ok(rest.split('.').map(str::to_string).collect())
+}
+
+fn display_json_path(segments: &[String]) -> String {
+    if segments.is_empty() {
+        "$".to_string()
+    } else {
+        format!("$.{}", segments.join("."))
+    }
+}
+
+fn convert_source_model_items(
+    schema: SchemaRef,
+    shape: &ProjectionTableShape,
+    operation_values: &BTreeMap<String, String>,
+    items: &[Value],
+) -> Result<RecordBatch> {
+    let filter_only = shape
+        .filter_only_columns
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let arrays = schema
+        .fields()
+        .iter()
+        .map(|field| source_model_array_for_field(field, &filter_only, operation_values, items))
+        .collect::<Result<Vec<_>>>()?;
+
+    RecordBatch::try_new(schema, arrays).map_err(|error| {
+        DataFusionError::ArrowError(Box::new(error), Some("source-model conversion".to_string()))
+    })
+}
+
+fn source_model_array_for_field(
+    field: &Field,
+    filter_only: &HashSet<&str>,
+    operation_values: &BTreeMap<String, String>,
+    items: &[Value],
+) -> Result<ArrayRef> {
+    match field.data_type() {
+        DataType::Utf8 => {
+            let values = items.iter().map(|item| {
+                source_model_field_value(field.name(), filter_only, operation_values, item)
+                    .and_then(json_value_to_string)
+            });
+            Ok(Arc::new(values.collect::<StringArray>()) as ArrayRef)
+        }
+        DataType::Int64 => {
+            let values = items.iter().map(|item| {
+                source_model_field_value(field.name(), filter_only, operation_values, item)
+                    .and_then(json_value_to_i64)
+            });
+            Ok(Arc::new(values.collect::<Int64Array>()) as ArrayRef)
+        }
+        other => Err(DataFusionError::Execution(format!(
+            "source-model column '{}' uses unsupported Arrow type {other:?}",
+            field.name()
+        ))),
+    }
+}
+
+fn source_model_field_value(
+    name: &str,
+    filter_only: &HashSet<&str>,
+    operation_values: &BTreeMap<String, String>,
+    item: &Value,
+) -> Option<Value> {
+    if filter_only.contains(name) {
+        return operation_values.get(name).cloned().map(Value::String);
+    }
+
+    let path = name
+        .split("__")
+        .map(str::to_string)
+        .collect::<Vec<String>>();
+    get_path_value(item, &path).cloned()
+}
+
+fn json_value_to_string(value: Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(value) => Some(value),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        other => Some(other.to_string()),
+    }
+}
+
+fn json_value_to_i64(value: Value) -> Option<i64> {
+    match value {
+        Value::Number(value) => value.as_i64(),
+        Value::String(value) => value.parse().ok(),
+        _ => None,
+    }
+}
+
 fn field_for_filter(filter: &ProjectionFilter) -> Field {
     Field::new(
         filter.name(),
@@ -480,13 +775,26 @@ fn data_type_for_projection_type(ty: &ProjectionScalarType) -> DataType {
 mod tests {
     use coral_spec::types::projection::github_issues_projection;
     use coral_spec::types::source::{github_issue_list_rest_binding, github_rest_surface};
+    use datafusion::arrow::array::{Array, Int64Array, StringArray};
     use datafusion::datasource::TableProvider;
     use datafusion::logical_expr::{Operator, TableProviderFilterPushDown, binary_expr, col, lit};
+    use datafusion::prelude::SessionContext;
+    use serde_json::json;
 
     use super::*;
 
     fn github_issues_provider() -> SourceModelTableProvider {
         SourceModelTableProvider::new("github", &github_issues_projection())
+    }
+
+    fn github_issues_rest_provider() -> SourceModelTableProvider {
+        SourceModelTableProvider::new_rest(
+            "github",
+            &github_issues_projection(),
+            github_rest_surface(),
+            github_issue_list_rest_binding(),
+            BTreeMap::from([("GITHUB_TOKEN".to_string(), "ghp_test".to_string())]),
+        )
     }
 
     #[test]
@@ -617,6 +925,100 @@ mod tests {
                 TableProviderFilterPushDown::Exact,
                 TableProviderFilterPushDown::Exact,
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn rest_provider_scan_produces_json_exec() {
+        let provider = github_issues_rest_provider();
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let plan = provider
+            .scan(
+                &state,
+                None,
+                &[
+                    col("owner").eq(lit("withcoral")),
+                    col("repo").eq(lit("coral")),
+                ],
+                Some(10),
+            )
+            .await
+            .expect("scan should produce a source-model execution plan");
+
+        assert_eq!(plan.name(), "JsonExec");
+        assert_eq!(plan.schema(), provider.schema());
+    }
+
+    #[tokio::test]
+    async fn scan_rejects_missing_required_inputs() {
+        let provider = github_issues_rest_provider();
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let error = provider
+            .scan(&state, None, &[col("owner").eq(lit("withcoral"))], Some(10))
+            .await
+            .expect_err("missing repo should fail during scan");
+        let message = error.to_string();
+
+        assert!(message.contains("github.issues"));
+        assert!(message.contains("repo"));
+        assert!(message.contains("operation input/column"));
+    }
+
+    #[test]
+    fn converts_rest_items_using_projection_columns_and_filter_values() {
+        let provider = github_issues_provider();
+        let operation_values = BTreeMap::from([
+            ("owner".to_string(), "withcoral".to_string()),
+            ("repo".to_string(), "coral".to_string()),
+        ]);
+        let batch = convert_source_model_items(
+            provider.schema(),
+            &provider.shape,
+            &operation_values,
+            &[json!({
+                "number": 42,
+                "title": "Spike issue",
+                "state": "open",
+                "created_at": "2026-05-11T10:00:00Z",
+                "user": {
+                    "login": "simonwhitaker"
+                }
+            })],
+        )
+        .expect("items should convert");
+
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(
+            batch
+                .column_by_name("number")
+                .expect("number column")
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("number should be int64")
+                .value(0),
+            42
+        );
+        assert_eq!(
+            batch
+                .column_by_name("user__login")
+                .expect("user login column")
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("user login should be string")
+                .value(0),
+            "simonwhitaker"
+        );
+        assert_eq!(
+            batch
+                .column_by_name("owner")
+                .expect("owner column")
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("owner should be string")
+                .value(0),
+            "withcoral"
         );
     }
 
