@@ -6,7 +6,7 @@ mod error;
 mod server;
 
 #[cfg(test)]
-pub(crate) use error::MAX_STATUS_DETAIL_BYTES;
+pub(crate) use error::MAX_STATUS_VALUE_BYTES;
 pub(crate) use error::{app_status, core_status};
 
 pub use error::AppError;
