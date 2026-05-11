@@ -27,6 +27,8 @@ use crate::backends::shared::filter_expr::literal_to_string;
 use crate::backends::shared::json_exec::{Converter, Fetcher, JsonExec, RowFetcher};
 use crate::backends::shared::json_path::get_path_value;
 
+const DEFAULT_SOURCE_MODEL_USER_AGENT: &str = concat!("coral/", env!("CARGO_PKG_VERSION"));
+
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectionTableShape {
     pub(crate) schema: SchemaRef,
@@ -285,6 +287,14 @@ impl RowFetcher for SourceModelRestFetchPlan {
             HttpMethod::Get => reqwest::Method::GET,
         };
         let mut request = self.client.request(method, &self.request.url);
+        if !self
+            .request
+            .headers
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case("User-Agent"))
+        {
+            request = request.header(reqwest::header::USER_AGENT, DEFAULT_SOURCE_MODEL_USER_AGENT);
+        }
         for (name, value) in &self.request.headers {
             request = request.header(name, value);
         }
@@ -773,30 +783,66 @@ fn data_type_for_projection_type(ty: &ProjectionScalarType) -> DataType {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::env;
+
     use coral_spec::types::projection::github_issues_projection;
     use coral_spec::types::source::{github_issue_list_rest_binding, github_rest_surface};
     use datafusion::arrow::array::{Array, Int64Array, StringArray};
+    use datafusion::arrow::util::pretty::pretty_format_batches;
     use datafusion::datasource::TableProvider;
     use datafusion::execution::TaskContext;
     use datafusion::logical_expr::{Operator, TableProviderFilterPushDown, binary_expr, col, lit};
     use datafusion::prelude::SessionContext;
     use futures::TryStreamExt;
     use serde_json::json;
+    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
+    use crate::runtime::schema_provider::StaticSchemaProvider;
 
     fn github_issues_provider() -> SourceModelTableProvider {
         SourceModelTableProvider::new("github", &github_issues_projection())
     }
 
     fn github_issues_rest_provider() -> SourceModelTableProvider {
+        github_issues_rest_provider_with_token("ghp_test")
+    }
+
+    fn github_issues_rest_provider_with_token(
+        token: impl Into<String>,
+    ) -> SourceModelTableProvider {
         SourceModelTableProvider::new_rest(
             "github",
             &github_issues_projection(),
             github_rest_surface(),
             github_issue_list_rest_binding(),
+            BTreeMap::from([("GITHUB_TOKEN".to_string(), token.into())]),
+        )
+    }
+
+    fn github_issues_rest_provider_with_base_url(base_url: &str) -> SourceModelTableProvider {
+        SourceModelTableProvider::new_rest(
+            "github",
+            &github_issues_projection(),
+            github_rest_surface().with_base_url(base_url),
+            github_issue_list_rest_binding(),
             BTreeMap::from([("GITHUB_TOKEN".to_string(), "ghp_test".to_string())]),
         )
+    }
+
+    fn register_github_issues(ctx: &SessionContext, provider: SourceModelTableProvider) {
+        let catalog = ctx.catalog("datafusion").expect("default catalog");
+        catalog
+            .register_schema(
+                "github",
+                Arc::new(StaticSchemaProvider::new(HashMap::from([(
+                    "issues".to_string(),
+                    Arc::new(provider) as Arc<dyn TableProvider>,
+                )]))),
+            )
+            .expect("github schema should register");
     }
 
     #[test]
@@ -1006,6 +1052,157 @@ mod tests {
         assert!(message.contains("github.issues"));
         assert!(message.contains("repo"));
         assert!(message.contains("operation input/column"));
+    }
+
+    #[tokio::test]
+    async fn datafusion_query_fetches_github_issues_from_source_model_provider() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/withcoral/coral/issues"))
+            .and(query_param("state", "closed"))
+            .and(query_param("per_page", "10"))
+            .and(header("Accept", "application/vnd.github+json"))
+            .and(header("X-GitHub-Api-Version", "2022-11-28"))
+            .and(header("Authorization", "Bearer ghp_test"))
+            .and(header("User-Agent", DEFAULT_SOURCE_MODEL_USER_AGENT))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {
+                    "number": 101,
+                    "title": "First closed issue",
+                    "state": "closed",
+                    "created_at": "2026-05-11T10:00:00Z",
+                    "user": { "login": "simonwhitaker" }
+                },
+                {
+                    "number": 102,
+                    "title": "Second closed issue",
+                    "state": "closed",
+                    "created_at": "2026-05-11T11:00:00Z",
+                    "user": { "login": "octocat" }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let ctx = SessionContext::new();
+        register_github_issues(
+            &ctx,
+            github_issues_rest_provider_with_base_url(&server.uri()),
+        );
+
+        let batches = ctx
+            .sql(
+                "SELECT number, title, state \
+                 FROM github.issues \
+                 WHERE owner = 'withcoral' \
+                   AND repo = 'coral' \
+                   AND state = 'closed' \
+                 LIMIT 10",
+            )
+            .await
+            .expect("source-model query should plan")
+            .collect()
+            .await
+            .expect("source-model query should execute");
+
+        let batch = batches.first().expect("one batch");
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(
+            batch
+                .column_by_name("number")
+                .expect("number column")
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("number should be int64")
+                .values(),
+            &[101, 102]
+        );
+        assert_eq!(
+            batch
+                .column_by_name("title")
+                .expect("title column")
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("title should be string")
+                .value(0),
+            "First closed issue"
+        );
+        assert_eq!(
+            batch
+                .column_by_name("state")
+                .expect("state column")
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("state should be string")
+                .value(1),
+            "closed"
+        );
+    }
+
+    #[tokio::test]
+    async fn datafusion_query_without_required_github_owner_fails_clearly() {
+        let ctx = SessionContext::new();
+        register_github_issues(&ctx, github_issues_rest_provider());
+
+        let error = ctx
+            .sql(
+                "SELECT number, title, state \
+                 FROM github.issues \
+                 WHERE repo = 'coral' \
+                 LIMIT 10",
+            )
+            .await
+            .expect("source-model query should plan")
+            .collect()
+            .await
+            .expect_err("missing owner should fail during scan");
+        let message = error.to_string();
+
+        assert!(message.contains("github.issues"));
+        assert!(message.contains("owner"));
+        assert!(message.contains("operation input/column"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live GitHub API access and GITHUB_TOKEN"]
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::print_stderr,
+        reason = "ignored live source-model harness reads GITHUB_TOKEN and prints rerunnable CLI-visible output"
+    )]
+    async fn live_github_issues_source_model() {
+        let token = env::var_os("GITHUB_TOKEN")
+            .and_then(|value| value.into_string().ok())
+            .expect(
+                "set GITHUB_TOKEN to a GitHub token, for example: GITHUB_TOKEN=\"$(gh auth token)\"",
+            );
+        let ctx = SessionContext::new();
+        register_github_issues(&ctx, github_issues_rest_provider_with_token(token));
+
+        let batches = ctx
+            .sql(
+                "SELECT number, title, state \
+                 FROM github.issues \
+                 WHERE owner = 'withcoral' \
+                   AND repo = 'coral' \
+                   AND state = 'closed' \
+                 LIMIT 10",
+            )
+            .await
+            .expect("live source-model query should plan")
+            .collect()
+            .await
+            .expect("live source-model query should execute");
+
+        let row_count = batches
+            .iter()
+            .map(datafusion::arrow::record_batch::RecordBatch::num_rows)
+            .sum::<usize>();
+        assert!(row_count <= 10);
+        eprintln!(
+            "{}",
+            pretty_format_batches(&batches).expect("live batches should render")
+        );
     }
 
     #[test]
