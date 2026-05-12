@@ -786,8 +786,10 @@ mod tests {
     use std::collections::HashMap;
     use std::env;
 
-    use coral_spec::types::projection::github_issues_projection;
-    use coral_spec::types::source::{github_issue_list_rest_binding, github_rest_surface};
+    use coral_spec::types::projection::{github_issue_search_projection, github_issues_projection};
+    use coral_spec::types::source::{
+        github_issue_list_rest_binding, github_issue_search_rest_binding, github_rest_surface,
+    };
     use datafusion::arrow::array::{Array, Int64Array, StringArray};
     use datafusion::arrow::util::pretty::pretty_format_batches;
     use datafusion::datasource::TableProvider;
@@ -832,6 +834,32 @@ mod tests {
         )
     }
 
+    fn github_issue_search_provider() -> SourceModelTableProvider {
+        SourceModelTableProvider::new("github", &github_issue_search_projection())
+    }
+
+    fn github_issue_search_rest_provider_with_token(
+        token: impl Into<String>,
+    ) -> SourceModelTableProvider {
+        SourceModelTableProvider::new_rest(
+            "github",
+            &github_issue_search_projection(),
+            github_rest_surface(),
+            github_issue_search_rest_binding(),
+            BTreeMap::from([("GITHUB_TOKEN".to_string(), token.into())]),
+        )
+    }
+
+    fn github_issue_search_rest_provider_with_base_url(base_url: &str) -> SourceModelTableProvider {
+        SourceModelTableProvider::new_rest(
+            "github",
+            &github_issue_search_projection(),
+            github_rest_surface().with_base_url(base_url),
+            github_issue_search_rest_binding(),
+            BTreeMap::from([("GITHUB_TOKEN".to_string(), "ghp_test".to_string())]),
+        )
+    }
+
     fn register_github_issues(ctx: &SessionContext, provider: SourceModelTableProvider) {
         let catalog = ctx.catalog("datafusion").expect("default catalog");
         catalog
@@ -839,6 +867,19 @@ mod tests {
                 "github",
                 Arc::new(StaticSchemaProvider::new(HashMap::from([(
                     "issues".to_string(),
+                    Arc::new(provider) as Arc<dyn TableProvider>,
+                )]))),
+            )
+            .expect("github schema should register");
+    }
+
+    fn register_github_issue_search(ctx: &SessionContext, provider: SourceModelTableProvider) {
+        let catalog = ctx.catalog("datafusion").expect("default catalog");
+        catalog
+            .register_schema(
+                "github",
+                Arc::new(StaticSchemaProvider::new(HashMap::from([(
+                    "issue_search".to_string(),
                     Arc::new(provider) as Arc<dyn TableProvider>,
                 )]))),
             )
@@ -1139,6 +1180,158 @@ mod tests {
         );
     }
 
+    #[test]
+    fn extracts_required_github_issue_search_query_filter_as_operation_input() {
+        let provider = github_issue_search_provider();
+        let inputs = provider
+            .operation_inputs_from_filters(&[
+                col("q").eq(lit("repo:withcoral/coral is:issue")),
+                col("sort").eq(lit("updated")),
+                col("order").eq(lit("desc")),
+            ])
+            .expect("q filter should satisfy required operation input");
+
+        assert_eq!(inputs.operation.as_str(), "github.issue.search");
+        assert_eq!(
+            inputs.values,
+            BTreeMap::from([
+                ("order".to_string(), "desc".to_string()),
+                ("q".to_string(), "repo:withcoral/coral is:issue".to_string()),
+                ("sort".to_string(), "updated".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn builds_github_issue_search_rest_request_from_operation_inputs() {
+        let provider = github_issue_search_provider();
+        let surface = github_rest_surface();
+        let binding = github_issue_search_rest_binding();
+        let source_inputs = BTreeMap::from([("GITHUB_TOKEN".to_string(), "ghp_test".to_string())]);
+        let request = provider
+            .rest_request_from_filters(
+                &surface,
+                &binding,
+                &source_inputs,
+                &[
+                    col("q").eq(lit("repo:withcoral/coral is:issue")),
+                    col("sort").eq(lit("updated")),
+                    col("order").eq(lit("desc")),
+                ],
+                Some(5),
+            )
+            .expect("request should build from required search input");
+
+        assert_eq!(request.operation.as_str(), "github.issue.search");
+        assert_eq!(request.method, HttpMethod::Get);
+        assert_eq!(
+            request.url,
+            "https://api.github.com/search/issues?q=repo%3Awithcoral%2Fcoral+is%3Aissue&sort=updated&order=desc&per_page=5"
+        );
+        assert_eq!(
+            request.query_params,
+            vec![
+                ("q".to_string(), "repo:withcoral/coral is:issue".to_string()),
+                ("sort".to_string(), "updated".to_string()),
+                ("order".to_string(), "desc".to_string()),
+                ("per_page".to_string(), "5".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn datafusion_query_fetches_github_issue_search_from_wrapped_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/search/issues"))
+            .and(query_param("q", "repo:withcoral/coral is:issue"))
+            .and(query_param("sort", "updated"))
+            .and(query_param("order", "desc"))
+            .and(query_param("per_page", "2"))
+            .and(header("Accept", "application/vnd.github+json"))
+            .and(header("X-GitHub-Api-Version", "2022-11-28"))
+            .and(header("Authorization", "Bearer ghp_test"))
+            .and(header("User-Agent", DEFAULT_SOURCE_MODEL_USER_AGENT))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total_count": 41,
+                "incomplete_results": false,
+                "items": [
+                    {
+                        "number": 201,
+                        "title": "Search result one",
+                        "state": "open",
+                        "created_at": "2026-05-12T09:00:00Z",
+                        "html_url": "https://github.com/withcoral/coral/issues/201",
+                        "user": { "login": "simonwhitaker" }
+                    },
+                    {
+                        "number": 202,
+                        "title": "Search result two",
+                        "state": "closed",
+                        "created_at": "2026-05-12T10:00:00Z",
+                        "html_url": "https://github.com/withcoral/coral/issues/202",
+                        "user": { "login": "octocat" }
+                    }
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let ctx = SessionContext::new();
+        register_github_issue_search(
+            &ctx,
+            github_issue_search_rest_provider_with_base_url(&server.uri()),
+        );
+
+        let batches = ctx
+            .sql(
+                "SELECT number, title, state, html_url \
+                 FROM github.issue_search \
+                 WHERE q = 'repo:withcoral/coral is:issue' \
+                   AND sort = 'updated' \
+                   AND order = 'desc' \
+                 LIMIT 2",
+            )
+            .await
+            .expect("source-model search query should plan")
+            .collect()
+            .await
+            .expect("source-model search query should execute");
+
+        let batch = batches.first().expect("one batch");
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(
+            batch
+                .column_by_name("number")
+                .expect("number column")
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("number should be int64")
+                .values(),
+            &[201, 202]
+        );
+        assert_eq!(
+            batch
+                .column_by_name("title")
+                .expect("title column")
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("title should be string")
+                .value(0),
+            "Search result one"
+        );
+        assert_eq!(
+            batch
+                .column_by_name("html_url")
+                .expect("html_url column")
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("html_url should be string")
+                .value(1),
+            "https://github.com/withcoral/coral/issues/202"
+        );
+    }
+
     #[tokio::test]
     async fn datafusion_query_without_required_github_owner_fails_clearly() {
         let ctx = SessionContext::new();
@@ -1202,6 +1395,48 @@ mod tests {
         eprintln!(
             "{}",
             pretty_format_batches(&batches).expect("live batches should render")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live GitHub API access and GITHUB_TOKEN"]
+    #[allow(
+        clippy::disallowed_methods,
+        clippy::print_stderr,
+        reason = "ignored live source-model harness reads GITHUB_TOKEN and prints rerunnable CLI-visible output"
+    )]
+    async fn live_github_issue_search_source_model() {
+        let token = env::var_os("GITHUB_TOKEN")
+            .and_then(|value| value.into_string().ok())
+            .expect(
+                "set GITHUB_TOKEN to a GitHub token, for example: GITHUB_TOKEN=\"$(gh auth token)\"",
+            );
+        let ctx = SessionContext::new();
+        register_github_issue_search(&ctx, github_issue_search_rest_provider_with_token(token));
+
+        let batches = ctx
+            .sql(
+                "SELECT number, title, state, html_url \
+                 FROM github.issue_search \
+                 WHERE q = 'repo:withcoral/coral is:issue' \
+                   AND sort = 'updated' \
+                   AND order = 'desc' \
+                 LIMIT 10",
+            )
+            .await
+            .expect("live source-model search query should plan")
+            .collect()
+            .await
+            .expect("live source-model search query should execute");
+
+        let row_count = batches
+            .iter()
+            .map(datafusion::arrow::record_batch::RecordBatch::num_rows)
+            .sum::<usize>();
+        assert!(row_count <= 10);
+        eprintln!(
+            "{}",
+            pretty_format_batches(&batches).expect("live search batches should render")
         );
     }
 

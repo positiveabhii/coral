@@ -424,6 +424,45 @@ pub fn github_issue_list_rest_binding() -> Binding {
     }
 }
 
+pub fn github_issue_search_rest_binding() -> Binding {
+    Binding {
+        id: BindingId::new("github.issue.search.http"),
+        operation: OperationId::new("github.issue.search"),
+        surface: github_rest_surface().id,
+        protocol: BindingProtocol::Http(HttpBinding {
+            method: HttpMethod::Get,
+            path: "/search/issues".to_string(),
+            query: vec![
+                QueryParamBinding {
+                    name: "q".to_string(),
+                    input: InputId::new("q"),
+                },
+                QueryParamBinding {
+                    name: "sort".to_string(),
+                    input: InputId::new("sort"),
+                },
+                QueryParamBinding {
+                    name: "order".to_string(),
+                    input: InputId::new("order"),
+                },
+            ],
+            // GitHub search also returns total_count and incomplete_results.
+            // This spike projects rows only; response-level metadata needs an
+            // explicit model concept before it should be exposed to SQL.
+            response: ResponseBinding {
+                items_path: JsonPath("$.items".to_string()),
+            },
+            pagination: Some(Pagination::LinkHeader {
+                page_size: PageSize {
+                    query_param: "per_page".to_string(),
+                    default: 30,
+                    max: 100,
+                },
+            }),
+        }),
+    }
+}
+
 // ----- Tests ---------------------------------------
 
 #[cfg(test)]
@@ -448,12 +487,29 @@ mod tests {
         }
     }
 
+    fn gh_issue_search_op() -> Operation {
+        Operation {
+            id: OperationId::new("github.issue.search"),
+            kind: OperationKind::List,
+            entity: gt_issue_entity(),
+            inputs: vec![
+                OperationInput::required("q", TypeRef::Scalar(ScalarType::String)),
+                OperationInput::optional("sort", TypeRef::Scalar(ScalarType::String)),
+                OperationInput::optional("order", TypeRef::Scalar(ScalarType::String)),
+            ],
+            returns: TypeRef::collection(TypeRef::Entity(gt_issue_entity())),
+        }
+    }
+
     fn gh_source_model() -> SourceModel {
         SourceModel {
             source: "github".to_string(),
             surfaces: vec![github_rest_surface()],
-            operations: vec![gh_issue_list_op()],
-            bindings: vec![github_issue_list_rest_binding()],
+            operations: vec![gh_issue_list_op(), gh_issue_search_op()],
+            bindings: vec![
+                github_issue_list_rest_binding(),
+                github_issue_search_rest_binding(),
+            ],
         }
     }
 
@@ -461,7 +517,7 @@ mod tests {
     fn source_model_can_be_created() {
         let gh_source_model = gh_source_model();
 
-        assert_eq!(gh_source_model.operations.len(), 1);
+        assert_eq!(gh_source_model.operations.len(), 2);
         assert_eq!(gh_source_model.operations[0].kind, OperationKind::List);
         assert_eq!(gh_source_model.surfaces.len(), 1);
         assert_eq!(gh_source_model.surfaces[0].kind, SurfaceKind::Rest);
@@ -485,6 +541,33 @@ mod tests {
             .page_size();
         assert_eq!(page_size.query_param(), "per_page");
         assert_eq!(page_size.default(), 100);
+        assert_eq!(page_size.max(), 100);
+    }
+
+    #[test]
+    fn github_issue_search_rest_binding_matches_wrapped_response_shape() {
+        let binding = github_issue_search_rest_binding();
+        let http = binding.protocol().as_http();
+
+        assert_eq!(binding.operation().as_str(), "github.issue.search");
+        assert_eq!(binding.surface().as_str(), "github.rest");
+        assert_eq!(http.method(), HttpMethod::Get);
+        assert_eq!(http.path(), "/search/issues");
+        assert_eq!(
+            http.query()
+                .iter()
+                .map(|query| (query.name(), query.input().as_str()))
+                .collect::<Vec<_>>(),
+            vec![("q", "q"), ("sort", "sort"), ("order", "order")]
+        );
+        assert_eq!(http.response().items_path().as_str(), "$.items");
+
+        let page_size = http
+            .pagination()
+            .expect("github issue search should expose a page-size parameter")
+            .page_size();
+        assert_eq!(page_size.query_param(), "per_page");
+        assert_eq!(page_size.default(), 30);
         assert_eq!(page_size.max(), 100);
     }
 }

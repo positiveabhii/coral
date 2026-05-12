@@ -163,6 +163,27 @@ pub fn github_issues_projection() -> TableProjection {
     )
 }
 
+/// Returns the spike projection for `github.issue_search`.
+pub fn github_issue_search_projection() -> TableProjection {
+    TableProjection::new(
+        "github.issue_search",
+        OperationId::new("github.issue.search"),
+        vec![
+            ProjectionColumn::new("number", ProjectionScalarType::Integer, false),
+            ProjectionColumn::new("title", ProjectionScalarType::String, false),
+            ProjectionColumn::new("state", ProjectionScalarType::String, false),
+            ProjectionColumn::new("created_at", ProjectionScalarType::String, false),
+            ProjectionColumn::new("user__login", ProjectionScalarType::String, true),
+            ProjectionColumn::new("html_url", ProjectionScalarType::String, true),
+        ],
+        vec![
+            ProjectionFilter::required("q", ProjectionScalarType::String),
+            ProjectionFilter::optional("sort", ProjectionScalarType::String),
+            ProjectionFilter::optional("order", ProjectionScalarType::String),
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +223,28 @@ mod tests {
 
         assert_eq!(required, vec!["owner", "repo"]);
         assert!(!state_filter.is_required());
+    }
+
+    #[test]
+    fn github_issue_search_references_issue_search_operation() {
+        let projection = github_issue_search_projection();
+
+        assert_eq!(projection.name(), "github.issue_search");
+        assert_eq!(projection.operation().as_str(), "github.issue.search");
+    }
+
+    #[test]
+    fn github_issue_search_reports_filter_requirements() {
+        let projection = github_issue_search_projection();
+        let required = projection.required_filter_names();
+        let optional_filters = projection
+            .filters()
+            .iter()
+            .filter(|filter| !filter.is_required())
+            .map(ProjectionFilter::name)
+            .collect::<Vec<_>>();
+
+        assert_eq!(required, vec!["q"]);
+        assert_eq!(optional_filters, vec!["sort", "order"]);
     }
 }
