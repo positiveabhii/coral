@@ -646,7 +646,10 @@ async fn run_source_add(app: &AppClient, args: SourceAddArgs) -> Result<(), CliE
                 source_ops::add_bundled_source_with_credentials(app, &available.name, inputs)
                     .await?
             } else {
-                let (variables, secrets) = source_ops::collect_inputs_from_env(&inputs)?;
+                let (variables, secrets) = source_ops::collect_inputs_from_env(
+                    &inputs,
+                    format!("coral source add --interactive {}", available.name),
+                )?;
                 source_ops::add_bundled_source(app, &available.name, variables, secrets).await?
             }
         }
@@ -658,8 +661,13 @@ async fn run_source_add(app: &AppClient, args: SourceAddArgs) -> Result<(), CliE
                 )?;
                 source_ops::import_source_with_credentials(app, manifest_yaml, inputs).await?
             } else {
-                let (variables, secrets) =
-                    source_ops::collect_inputs_from_env(manifest.declared_inputs())?;
+                let (variables, secrets) = source_ops::collect_inputs_from_env(
+                    manifest.declared_inputs(),
+                    format!(
+                        "coral source add --interactive --file {}",
+                        source_ops::shell_quote_arg(&file.display().to_string())
+                    ),
+                )?;
                 source_ops::import_source(app, manifest_yaml, variables, secrets).await?
             }
         }

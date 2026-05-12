@@ -15,17 +15,18 @@ use coral_api::v1::{
     OAuthCredentialClientId, OAuthCredentialClientSecret, OAuthCredentialCompleted,
     OAuthCredentialEndpoints, OAuthCredentialInput, OAuthCredentialRetrieval, OAuthCredentialScope,
     OAuthCredentialScopes, OauthCredentialClientSecretTransport, OauthCredentialPkceMode,
-    OauthCredentialScopeDelimiter, Source, SourceConfigCredentialMethod, SourceCredential,
-    SourceCredentialMethod, SourceInfo, SourceInputSpec, SourceOrigin as ProtoSourceOrigin,
-    SourceSecret, SourceSecretInput, SourceVariable, SourceVariableInput, ValidateSourceRequest,
-    ValidateSourceResponse, create_bundled_source_with_o_auth_response, import_source_response,
+    OauthCredentialRedirectUriPortMode, OauthCredentialScopeDelimiter, Source,
+    SourceConfigCredentialMethod, SourceCredential, SourceCredentialMethod, SourceInfo,
+    SourceInputSpec, SourceOrigin as ProtoSourceOrigin, SourceSecret, SourceSecretInput,
+    SourceVariable, SourceVariableInput, ValidateSourceRequest, ValidateSourceResponse,
+    create_bundled_source_with_o_auth_response, import_source_response,
     source_credential_method::Method as ProtoCredentialMethod,
     source_input_spec::Input as ProtoSourceInput,
 };
 use coral_spec::{
     ManifestCredentialMethodKind, ManifestCredentialSpec, ManifestInputKind, ManifestInputSpec,
     ManifestOAuthClientSecretTransport, ManifestOAuthCredentialSpec, ManifestOAuthPkceMode,
-    ManifestOAuthScopeDelimiter,
+    ManifestOAuthRedirectUriPortMode, ManifestOAuthScopeDelimiter,
 };
 use tonic::{Request, Response, Status};
 
@@ -598,6 +599,7 @@ fn oauth_to_proto(oauth: ManifestOAuthCredentialSpec) -> OAuthAuthorizationCodeC
                     transport: proto_oauth_client_secret_transport(secret.transport) as i32,
                 }),
         }),
+        redirect_uri_port: proto_redirect_uri_port_mode(oauth.redirect_uri_port) as i32,
         scopes: oauth.scopes.map(|scopes| OAuthCredentialScopes {
             scope: Some(OAuthCredentialScope {
                 delimiter: proto_oauth_scope_delimiter(scopes.scope.delimiter) as i32,
@@ -605,6 +607,15 @@ fn oauth_to_proto(oauth: ManifestOAuthCredentialSpec) -> OAuthAuthorizationCodeC
             }),
         }),
         pkce: proto_oauth_pkce_mode(oauth.flow.pkce) as i32,
+    }
+}
+
+fn proto_redirect_uri_port_mode(
+    mode: ManifestOAuthRedirectUriPortMode,
+) -> OauthCredentialRedirectUriPortMode {
+    match mode {
+        ManifestOAuthRedirectUriPortMode::Fixed => OauthCredentialRedirectUriPortMode::Fixed,
+        ManifestOAuthRedirectUriPortMode::Random => OauthCredentialRedirectUriPortMode::Random,
     }
 }
 
@@ -649,6 +660,7 @@ mod tests {
         ManifestCredentialMethod, ManifestCredentialMethodKind, ManifestCredentialSpec,
         ManifestOAuthClientIdSpec, ManifestOAuthClientSpec, ManifestOAuthCredentialSpec,
         ManifestOAuthFlowKind, ManifestOAuthFlowSpec, ManifestOAuthPkceMode,
+        ManifestOAuthRedirectUriPortMode,
     };
 
     #[test]
@@ -671,6 +683,7 @@ mod tests {
                                 pkce: ManifestOAuthPkceMode::Required,
                             },
                             redirect_uri: "http://127.0.0.1:53682/oauth/callback".to_string(),
+                            redirect_uri_port: ManifestOAuthRedirectUriPortMode::Fixed,
                             authorization_url: "https://provider.example.com/oauth/authorize"
                                 .to_string(),
                             token_url: "https://provider.example.com/oauth/token".to_string(),
@@ -705,6 +718,11 @@ mod tests {
         match credential.methods[0].method.as_ref().expect("method") {
             ProtoCredentialMethod::OauthAuthorizationCode(oauth) => {
                 assert_eq!(oauth.redirect_uri, "http://127.0.0.1:53682/oauth/callback");
+                assert_eq!(
+                    OauthCredentialRedirectUriPortMode::try_from(oauth.redirect_uri_port)
+                        .expect("redirect uri port mode"),
+                    OauthCredentialRedirectUriPortMode::Fixed
+                );
                 assert_eq!(
                     OauthCredentialPkceMode::try_from(oauth.pkce).expect("pkce"),
                     OauthCredentialPkceMode::Required
