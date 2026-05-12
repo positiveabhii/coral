@@ -1,9 +1,10 @@
 //! Source-related client-side transport decoding helpers.
 
 use coral_api::v1::{
-    OAuthAuthorizationCodeCredentialMethod, OauthCredentialClientSecretTransport,
-    OauthCredentialPkceMode, OauthCredentialRedirectUriPortMode, OauthCredentialScopeDelimiter,
-    SourceCredential, SourceCredentialMethod, SourceInputSpec,
+    OAuthAuthorizationCodeCredentialMethod, OAuthCredentialTokenRequestBodyFormat,
+    OauthCredentialClientSecretTransport, OauthCredentialPkceMode,
+    OauthCredentialRedirectUriPortMode, OauthCredentialScopeDelimiter, SourceCredential,
+    SourceCredentialMethod, SourceInputSpec,
     source_credential_method::Method as ProtoCredentialMethod,
     source_input_spec::Input as ProtoSourceInput,
 };
@@ -13,7 +14,8 @@ use coral_spec::{
     ManifestOAuthClientSecretTransport, ManifestOAuthClientSpec, ManifestOAuthCredentialSpec,
     ManifestOAuthFlowKind, ManifestOAuthFlowSpec, ManifestOAuthPkceMode,
     ManifestOAuthRedirectUriPortMode, ManifestOAuthScopeDelimiter, ManifestOAuthScopeSpec,
-    ManifestOAuthScopesSpec,
+    ManifestOAuthScopesSpec, ManifestOAuthTokenRequestBodyFormat, ManifestOAuthTokenRequestHeader,
+    ManifestOAuthTokenRequestSpec,
 };
 
 /// Errors returned while decoding source input metadata from the gRPC API.
@@ -34,6 +36,9 @@ pub enum SourceInputDecodeError {
     /// The OAuth redirect URI port mode was missing or unknown.
     #[error("unknown oauth redirect URI port mode")]
     UnknownOAuthRedirectUriPortMode,
+    /// The OAuth token request body format was missing or unknown.
+    #[error("unknown oauth token request body format")]
+    UnknownOAuthTokenRequestBodyFormat,
     /// The OAuth credential method did not include provider endpoints.
     #[error("oauth credential method is missing endpoints")]
     MissingOAuthEndpoints,
@@ -148,6 +153,12 @@ fn oauth_authorization_code_from_proto(
         redirect_uri_port_mode: redirect_uri_port_mode_from_proto(oauth.redirect_uri_port_mode)?,
         authorization_url: endpoints.authorization_url.clone(),
         token_url: endpoints.token_url.clone(),
+        token_request: oauth
+            .token_request
+            .as_ref()
+            .map(oauth_token_request_from_proto)
+            .transpose()?
+            .unwrap_or_default(),
         client,
         scopes: oauth
             .scopes
@@ -166,6 +177,37 @@ fn oauth_pkce_from_proto(pkce: i32) -> Result<ManifestOAuthPkceMode, SourceInput
         }
     };
     Ok(pkce)
+}
+
+fn oauth_token_request_from_proto(
+    token_request: &coral_api::v1::OAuthCredentialTokenRequest,
+) -> Result<ManifestOAuthTokenRequestSpec, SourceInputDecodeError> {
+    Ok(ManifestOAuthTokenRequestSpec {
+        body_format: token_request_body_format_from_proto(token_request.body_format)?,
+        headers: token_request
+            .headers
+            .iter()
+            .map(|header| ManifestOAuthTokenRequestHeader {
+                name: header.name.clone(),
+                value: header.value.clone(),
+            })
+            .collect(),
+    })
+}
+
+fn token_request_body_format_from_proto(
+    format: i32,
+) -> Result<ManifestOAuthTokenRequestBodyFormat, SourceInputDecodeError> {
+    match OAuthCredentialTokenRequestBodyFormat::try_from(format) {
+        Ok(
+            OAuthCredentialTokenRequestBodyFormat::OauthCredentialTokenRequestBodyFormatForm
+            | OAuthCredentialTokenRequestBodyFormat::OauthCredentialTokenRequestBodyFormatUnspecified,
+        ) => Ok(ManifestOAuthTokenRequestBodyFormat::Form),
+        Ok(OAuthCredentialTokenRequestBodyFormat::OauthCredentialTokenRequestBodyFormatJson) => {
+            Ok(ManifestOAuthTokenRequestBodyFormat::Json)
+        }
+        Err(_) => Err(SourceInputDecodeError::UnknownOAuthTokenRequestBodyFormat),
+    }
 }
 
 fn redirect_uri_port_mode_from_proto(
@@ -254,7 +296,9 @@ mod tests {
 
     use coral_api::v1::{
         OAuthAuthorizationCodeCredentialMethod, OAuthCredentialClient, OAuthCredentialClientId,
-        OAuthCredentialEndpoints, SourceConfigCredentialMethod, SourceSecretInput,
+        OAuthCredentialEndpoints, OAuthCredentialTokenRequest,
+        OAuthCredentialTokenRequestBodyFormat, OAuthCredentialTokenRequestHeader,
+        SourceConfigCredentialMethod, SourceSecretInput,
         source_credential_method::Method as ProtoCredentialMethod,
         source_input_spec::Input as ProtoSourceInput,
     };
@@ -294,6 +338,13 @@ mod tests {
                                     }),
                                     redirect_uri_port_mode:
                                         OauthCredentialRedirectUriPortMode::Random as i32,
+                                    token_request: Some(OAuthCredentialTokenRequest {
+                                        body_format: OAuthCredentialTokenRequestBodyFormat::OauthCredentialTokenRequestBodyFormatJson as i32,
+                                        headers: vec![OAuthCredentialTokenRequestHeader {
+                                            name: "Provider-Version".to_string(),
+                                            value: "2026-03-11".to_string(),
+                                        }],
+                                    }),
                                     scopes: None,
                                 },
                             )),
@@ -325,6 +376,25 @@ mod tests {
                 .expect("oauth")
                 .redirect_uri_port_mode,
             ManifestOAuthRedirectUriPortMode::Random
+        );
+        assert_eq!(
+            credential.methods[0]
+                .oauth
+                .as_ref()
+                .expect("oauth")
+                .token_request
+                .body_format,
+            ManifestOAuthTokenRequestBodyFormat::Json
+        );
+        assert_eq!(
+            credential.methods[0]
+                .oauth
+                .as_ref()
+                .expect("oauth")
+                .token_request
+                .headers[0]
+                .name,
+            "Provider-Version"
         );
         assert_eq!(
             credential.methods[0]
@@ -372,6 +442,7 @@ mod tests {
                                 }),
                                 redirect_uri_port_mode: OauthCredentialRedirectUriPortMode::Fixed
                                     as i32,
+                                token_request: None,
                                 scopes: None,
                             },
                         )),

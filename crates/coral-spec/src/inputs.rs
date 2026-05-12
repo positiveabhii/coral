@@ -88,6 +88,8 @@ pub struct ManifestOAuthCredentialSpec {
     pub authorization_url: String,
     /// Provider token endpoint URL.
     pub token_url: String,
+    /// Token exchange request configuration.
+    pub token_request: ManifestOAuthTokenRequestSpec,
     /// OAuth client configuration.
     pub client: ManifestOAuthClientSpec,
     /// Optional OAuth scope parameter configuration.
@@ -121,6 +123,33 @@ pub enum ManifestOAuthRedirectBindPort {
     Fixed(u16),
     /// Bind port 0 and let the OS choose a free port.
     Random,
+}
+
+/// OAuth token exchange request configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestOAuthTokenRequestSpec {
+    /// How token request parameters are encoded.
+    pub body_format: ManifestOAuthTokenRequestBodyFormat,
+    /// Literal headers sent with the token request.
+    pub headers: Vec<ManifestOAuthTokenRequestHeader>,
+}
+
+/// Supported OAuth token request body encodings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManifestOAuthTokenRequestBodyFormat {
+    /// Send token request parameters as `application/x-www-form-urlencoded`.
+    Form,
+    /// Send token request parameters as JSON.
+    Json,
+}
+
+/// One literal header sent with the OAuth token request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestOAuthTokenRequestHeader {
+    /// Header name.
+    pub name: String,
+    /// Header value.
+    pub value: String,
 }
 
 /// Supported OAuth credential retrieval flow settings.
@@ -474,6 +503,11 @@ fn parse_oauth(
     validate_url(input_key, "authorization_url", &authorization_url)?;
     let token_url = required_string(endpoints, "token_url", input_key, "oauth.endpoints")?;
     validate_url(input_key, "token_url", &token_url)?;
+    let token_request = oauth
+        .get("token_request")
+        .map(|token_request| parse_oauth_token_request(input_key, token_request))
+        .transpose()?
+        .unwrap_or_default();
     let client = oauth
         .get("client")
         .ok_or_else(|| {
@@ -492,6 +526,7 @@ fn parse_oauth(
         redirect_uri_port_mode,
         authorization_url,
         token_url,
+        token_request,
         client,
         scopes,
     })
@@ -503,6 +538,87 @@ fn default_redirect_uri_port_mode(raw: &str) -> ManifestOAuthRedirectUriPortMode
     } else {
         ManifestOAuthRedirectUriPortMode::Fixed
     }
+}
+
+impl Default for ManifestOAuthTokenRequestSpec {
+    fn default() -> Self {
+        Self {
+            body_format: ManifestOAuthTokenRequestBodyFormat::Form,
+            headers: Vec::new(),
+        }
+    }
+}
+
+fn parse_oauth_token_request(
+    input_key: &str,
+    value: &Value,
+) -> Result<ManifestOAuthTokenRequestSpec> {
+    let token_request = value.as_object().ok_or_else(|| {
+        ManifestError::validation(format!(
+            "manifest input '{input_key}' oauth.token_request must be a mapping"
+        ))
+    })?;
+    let body_format = token_request
+        .get("body_format")
+        .map(|value| parse_token_request_body_format(input_key, value))
+        .transpose()?
+        .unwrap_or(ManifestOAuthTokenRequestBodyFormat::Form);
+    let headers = token_request
+        .get("headers")
+        .map(|headers| parse_token_request_headers(input_key, headers))
+        .transpose()?
+        .unwrap_or_default();
+    Ok(ManifestOAuthTokenRequestSpec {
+        body_format,
+        headers,
+    })
+}
+
+fn parse_token_request_body_format(
+    input_key: &str,
+    value: &Value,
+) -> Result<ManifestOAuthTokenRequestBodyFormat> {
+    match value.as_str() {
+        Some("form") => Ok(ManifestOAuthTokenRequestBodyFormat::Form),
+        Some("json") => Ok(ManifestOAuthTokenRequestBodyFormat::Json),
+        Some(other) => Err(ManifestError::validation(format!(
+            "manifest input '{input_key}' oauth.token_request.body_format has unsupported value '{other}'"
+        ))),
+        None => Err(ManifestError::validation(format!(
+            "manifest input '{input_key}' oauth.token_request.body_format must be a string"
+        ))),
+    }
+}
+
+fn parse_token_request_headers(
+    input_key: &str,
+    value: &Value,
+) -> Result<Vec<ManifestOAuthTokenRequestHeader>> {
+    let headers = value.as_array().ok_or_else(|| {
+        ManifestError::validation(format!(
+            "manifest input '{input_key}' oauth.token_request.headers must be a list"
+        ))
+    })?;
+    headers
+        .iter()
+        .enumerate()
+        .map(|(index, header)| parse_token_request_header(input_key, index, header))
+        .collect()
+}
+
+fn parse_token_request_header(
+    input_key: &str,
+    index: usize,
+    value: &Value,
+) -> Result<ManifestOAuthTokenRequestHeader> {
+    let header = value.as_object().ok_or_else(|| {
+        ManifestError::validation(format!(
+            "manifest input '{input_key}' oauth.token_request.headers[{index}] must be a mapping"
+        ))
+    })?;
+    let name = required_string(header, "name", input_key, "oauth.token_request.headers[]")?;
+    let value = required_string(header, "value", input_key, "oauth.token_request.headers[]")?;
+    Ok(ManifestOAuthTokenRequestHeader { name, value })
 }
 
 fn parse_redirect_uri_port_mode(
@@ -912,7 +1028,8 @@ mod tests {
     use super::{
         ManifestCredentialMethodKind, ManifestInputKind, ManifestInputSpec,
         ManifestOAuthClientSecretTransport, ManifestOAuthPkceMode, ManifestOAuthRedirectBindPort,
-        ManifestOAuthRedirectUriPortMode, ManifestOAuthScopeDelimiter, collect_source_inputs_value,
+        ManifestOAuthRedirectUriPortMode, ManifestOAuthScopeDelimiter,
+        ManifestOAuthTokenRequestBodyFormat, collect_source_inputs_value,
     };
     use crate::{ManifestError, Result};
 
@@ -1077,11 +1194,42 @@ tables: []
             oauth.redirect_bind_port().expect("bind port"),
             ManifestOAuthRedirectBindPort::Fixed(53682)
         );
+        assert_eq!(
+            oauth.token_request.body_format,
+            ManifestOAuthTokenRequestBodyFormat::Form
+        );
         assert_eq!(oauth.client.id.default.as_deref(), Some("default-client"));
         assert_eq!(
             oauth.scopes.as_ref().expect("scopes").scope.delimiter,
             ManifestOAuthScopeDelimiter::Space
         );
+    }
+
+    #[test]
+    fn parses_oauth_json_token_request_with_headers() {
+        let inputs = collect(
+            &oauth_input(
+                r"
+              id:
+                default: default-client
+",
+            )
+            .replace(
+                "            client:\n",
+                "            token_request:\n              body_format: json\n              headers:\n                - name: Provider-Version\n                  value: \"2026-03-11\"\n            client:\n",
+            ),
+        )
+        .expect("inputs");
+        let oauth = inputs[0].credential.as_ref().expect("credential").methods[0]
+            .oauth
+            .as_ref()
+            .expect("oauth");
+        assert_eq!(
+            oauth.token_request.body_format,
+            ManifestOAuthTokenRequestBodyFormat::Json
+        );
+        assert_eq!(oauth.token_request.headers[0].name, "Provider-Version");
+        assert_eq!(oauth.token_request.headers[0].value, "2026-03-11");
     }
 
     #[test]

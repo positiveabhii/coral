@@ -14,9 +14,10 @@ use coral_api::v1::{
     OAuthAuthorizationCodeCredentialMethod, OAuthCredentialAuthorization, OAuthCredentialClient,
     OAuthCredentialClientId, OAuthCredentialClientSecret, OAuthCredentialCompleted,
     OAuthCredentialEndpoints, OAuthCredentialInput, OAuthCredentialRetrieval, OAuthCredentialScope,
-    OAuthCredentialScopes, OauthCredentialClientSecretTransport, OauthCredentialPkceMode,
-    OauthCredentialRedirectUriPortMode, OauthCredentialScopeDelimiter, Source,
-    SourceConfigCredentialMethod, SourceCredential, SourceCredentialMethod, SourceInfo,
+    OAuthCredentialScopes, OAuthCredentialTokenRequest, OAuthCredentialTokenRequestBodyFormat,
+    OAuthCredentialTokenRequestHeader, OauthCredentialClientSecretTransport,
+    OauthCredentialPkceMode, OauthCredentialRedirectUriPortMode, OauthCredentialScopeDelimiter,
+    Source, SourceConfigCredentialMethod, SourceCredential, SourceCredentialMethod, SourceInfo,
     SourceInputSpec, SourceOrigin as ProtoSourceOrigin, SourceSecret, SourceSecretInput,
     SourceVariable, SourceVariableInput, ValidateSourceRequest, ValidateSourceResponse,
     create_bundled_source_with_o_auth_response, import_source_response,
@@ -27,6 +28,7 @@ use coral_spec::{
     ManifestCredentialMethodKind, ManifestCredentialSpec, ManifestInputKind, ManifestInputSpec,
     ManifestOAuthClientSecretTransport, ManifestOAuthCredentialSpec, ManifestOAuthPkceMode,
     ManifestOAuthRedirectUriPortMode, ManifestOAuthScopeDelimiter,
+    ManifestOAuthTokenRequestBodyFormat,
 };
 use tonic::{Request, Response, Status};
 
@@ -600,6 +602,19 @@ fn oauth_to_proto(oauth: ManifestOAuthCredentialSpec) -> OAuthAuthorizationCodeC
                 }),
         }),
         redirect_uri_port_mode: proto_redirect_uri_port_mode(oauth.redirect_uri_port_mode) as i32,
+        token_request: Some(OAuthCredentialTokenRequest {
+            body_format: proto_oauth_token_request_body_format(oauth.token_request.body_format)
+                as i32,
+            headers: oauth
+                .token_request
+                .headers
+                .into_iter()
+                .map(|header| OAuthCredentialTokenRequestHeader {
+                    name: header.name,
+                    value: header.value,
+                })
+                .collect(),
+        }),
         scopes: oauth.scopes.map(|scopes| OAuthCredentialScopes {
             scope: Some(OAuthCredentialScope {
                 delimiter: proto_oauth_scope_delimiter(scopes.scope.delimiter) as i32,
@@ -607,6 +622,19 @@ fn oauth_to_proto(oauth: ManifestOAuthCredentialSpec) -> OAuthAuthorizationCodeC
             }),
         }),
         pkce: proto_oauth_pkce_mode(oauth.flow.pkce) as i32,
+    }
+}
+
+fn proto_oauth_token_request_body_format(
+    format: ManifestOAuthTokenRequestBodyFormat,
+) -> OAuthCredentialTokenRequestBodyFormat {
+    match format {
+        ManifestOAuthTokenRequestBodyFormat::Form => {
+            OAuthCredentialTokenRequestBodyFormat::OauthCredentialTokenRequestBodyFormatForm
+        }
+        ManifestOAuthTokenRequestBodyFormat::Json => {
+            OAuthCredentialTokenRequestBodyFormat::OauthCredentialTokenRequestBodyFormatJson
+        }
     }
 }
 
@@ -660,7 +688,7 @@ mod tests {
         ManifestCredentialMethod, ManifestCredentialMethodKind, ManifestCredentialSpec,
         ManifestOAuthClientIdSpec, ManifestOAuthClientSpec, ManifestOAuthCredentialSpec,
         ManifestOAuthFlowKind, ManifestOAuthFlowSpec, ManifestOAuthPkceMode,
-        ManifestOAuthRedirectUriPortMode,
+        ManifestOAuthRedirectUriPortMode, ManifestOAuthTokenRequestSpec,
     };
 
     #[test]
@@ -687,6 +715,7 @@ mod tests {
                             authorization_url: "https://provider.example.com/oauth/authorize"
                                 .to_string(),
                             token_url: "https://provider.example.com/oauth/token".to_string(),
+                            token_request: ManifestOAuthTokenRequestSpec::default(),
                             client: ManifestOAuthClientSpec {
                                 id: ManifestOAuthClientIdSpec {
                                     default: Some("default-client".to_string()),

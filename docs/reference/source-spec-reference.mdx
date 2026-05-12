@@ -828,6 +828,20 @@ Scopes are declared under `scopes.scope`; `delimiter: space` represents
 refresh tokens and OAuth metadata alongside the source secret, but automatic
 token refresh is not implemented yet.
 
+`token_request` customizes the token exchange. `body_format` is `form` by
+default, matching `application/x-www-form-urlencoded`; set it to `json` for
+providers that require a JSON token body. `headers` is an optional list of
+literal headers to include on the token request, for provider API-version
+headers or similar token-endpoint requirements:
+
+```yaml
+token_request:
+  body_format: json
+  headers:
+    - name: Notion-Version
+      value: "2026-03-11"
+```
+
 At runtime, installed source inputs are also surfaced through `coral.inputs`.
 This is useful when agents or scripts need to inspect non-secret source config
 such as a Datadog site or Jira base URL and compose absolute URLs or

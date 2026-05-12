@@ -13,8 +13,9 @@ use chrono::{DateTime, Utc};
 use coral_spec::{
     ManifestOAuthClientSecretTransport, ManifestOAuthCredentialSpec, ManifestOAuthPkceMode,
     ManifestOAuthRedirectBindPort, ManifestOAuthScopeDelimiter,
+    ManifestOAuthTokenRequestBodyFormat,
 };
-use reqwest::header::{ACCEPT, AUTHORIZATION};
+use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderName, HeaderValue};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -609,14 +610,29 @@ async fn exchange_authorization_code(
     session: &OAuthSessionConfig,
     code: &str,
 ) -> Result<TokenResponse, AppError> {
-    let mut form = vec![
+    let mut params = BTreeMap::from([
         ("grant_type", "authorization_code".to_string()),
         ("code", code.to_string()),
         ("redirect_uri", session.provider_redirect_uri.clone()),
-    ];
+    ]);
     let mut request = http
         .post(&session.oauth.token_url)
         .header(ACCEPT, "application/json");
+    for header in &session.oauth.token_request.headers {
+        let name = HeaderName::try_from(header.name.as_str()).map_err(|error| {
+            AppError::InvalidInput(format!(
+                "invalid OAuth token request header name '{}': {error}",
+                header.name
+            ))
+        })?;
+        let value = HeaderValue::try_from(header.value.as_str()).map_err(|error| {
+            AppError::InvalidInput(format!(
+                "invalid OAuth token request header value for '{}': {error}",
+                header.name
+            ))
+        })?;
+        request = request.header(name, value);
+    }
     match (
         session.client_secret.as_deref(),
         session
@@ -633,11 +649,11 @@ async fn exchange_authorization_code(
             );
         }
         (Some(secret), Some(ManifestOAuthClientSecretTransport::RequestBody)) => {
-            form.push(("client_id", session.client_id.clone()));
-            form.push(("client_secret", secret.to_string()));
+            params.insert("client_id", session.client_id.clone());
+            params.insert("client_secret", secret.to_string());
         }
         (None, None) => {
-            form.push(("client_id", session.client_id.clone()));
+            params.insert("client_id", session.client_id.clone());
         }
         _ => {
             return Err(AppError::FailedPrecondition(
@@ -646,9 +662,13 @@ async fn exchange_authorization_code(
         }
     }
     if let Some(verifier) = session.code_verifier.as_deref() {
-        form.push(("code_verifier", verifier.to_string()));
+        params.insert("code_verifier", verifier.to_string());
     }
-    let response = request.form(&form).send().await.map_err(|error| {
+    let request = match session.oauth.token_request.body_format {
+        ManifestOAuthTokenRequestBodyFormat::Form => request.form(&params),
+        ManifestOAuthTokenRequestBodyFormat::Json => request.json(&params),
+    };
+    let response = request.send().await.map_err(|error| {
         AppError::FailedPrecondition(format!("OAuth token exchange request failed: {error}"))
     })?;
     let status = response.status();
@@ -825,8 +845,10 @@ mod tests {
         ManifestOAuthClientSecretTransport, ManifestOAuthClientSpec, ManifestOAuthCredentialSpec,
         ManifestOAuthFlowKind, ManifestOAuthFlowSpec, ManifestOAuthPkceMode,
         ManifestOAuthRedirectUriPortMode, ManifestOAuthScopeDelimiter, ManifestOAuthScopeSpec,
-        ManifestOAuthScopesSpec,
+        ManifestOAuthScopesSpec, ManifestOAuthTokenRequestBodyFormat,
+        ManifestOAuthTokenRequestHeader, ManifestOAuthTokenRequestSpec,
     };
+    use serde_json::Value;
     use tokio::sync::oneshot;
     use tokio::task::JoinHandle;
     use tokio::{io::AsyncReadExt as _, io::AsyncWriteExt as _};
@@ -1203,6 +1225,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn oauth_session_supports_json_token_request_with_headers() {
+        let fixture = OAuthFixture::new(None);
+        let redirect_port = free_loopback_port();
+        let mut oauth = oauth_spec(
+            &fixture.token_url,
+            redirect_port,
+            ManifestOAuthPkceMode::Disabled,
+            confidential_client(ManifestOAuthClientSecretTransport::BasicAuth),
+        );
+        oauth.token_request = ManifestOAuthTokenRequestSpec {
+            body_format: ManifestOAuthTokenRequestBodyFormat::Json,
+            headers: vec![ManifestOAuthTokenRequestHeader {
+                name: "Provider-Version".to_string(),
+                value: "2026-03-11".to_string(),
+            }],
+        };
+        let manager = OAuthCredentialManager::new();
+
+        let (authorization_tx, authorization_rx) = oneshot::channel();
+        let authorize = manager.authorize(
+            StartOAuthCredentialRequest {
+                input_key: "API_TOKEN",
+                oauth: &oauth,
+                credential_inputs: vec![
+                    ("OAUTH_CLIENT_ID".to_string(), "client".to_string()),
+                    ("OAUTH_CLIENT_SECRET".to_string(), "secret".to_string()),
+                ],
+            },
+            move |authorization| async move {
+                authorization_tx
+                    .send(authorization.authorization_url)
+                    .map_err(|_authorization_url| {
+                        crate::bootstrap::AppError::FailedPrecondition(
+                            "authorization receiver closed".to_string(),
+                        )
+                    })
+            },
+        );
+        let callback = async {
+            let authorization_url = authorization_rx.await.expect("authorization url");
+            callback(&authorization_url).await;
+        };
+
+        let (completed, ()) = tokio::join!(authorize, callback);
+        completed.expect("authorize oauth");
+        let captured = fixture.token_server.await.expect("token server");
+        assert_eq!(
+            captured.authorization.as_deref(),
+            Some("Basic Y2xpZW50OnNlY3JldA==")
+        );
+        assert_eq!(
+            captured.headers.get("provider-version").map(String::as_str),
+            Some("2026-03-11")
+        );
+        assert_eq!(
+            captured.json.get("grant_type").and_then(Value::as_str),
+            Some("authorization_code")
+        );
+        let expected_redirect_uri = format!("http://127.0.0.1:{redirect_port}/oauth/callback");
+        assert_eq!(
+            captured.json.get("redirect_uri").and_then(Value::as_str),
+            Some(expected_redirect_uri.as_str())
+        );
+        assert_eq!(captured.json.get("client_id"), None);
+        assert_eq!(captured.json.get("client_secret"), None);
+    }
+
+    #[tokio::test]
     async fn random_redirect_port_is_used_for_authorization_callback_and_token_exchange() {
         let fixture = OAuthFixture::new(None);
         let oauth = oauth_spec_with_redirect_uri(
@@ -1365,6 +1455,7 @@ mod tests {
             redirect_uri_port_mode,
             authorization_url: "https://provider.example.com/oauth/authorize".to_string(),
             token_url: token_url.to_string(),
+            token_request: ManifestOAuthTokenRequestSpec::default(),
             client,
             scopes: Some(ManifestOAuthScopesSpec {
                 scope: ManifestOAuthScopeSpec {
@@ -1438,7 +1529,9 @@ mod tests {
 
     struct CapturedTokenRequest {
         authorization: Option<String>,
+        headers: BTreeMap<String, String>,
         form: BTreeMap<String, String>,
+        json: Value,
     }
 
     fn read_http_request(stream: &mut std::net::TcpStream) -> CapturedTokenRequest {
@@ -1484,12 +1577,22 @@ mod tests {
                 .or_else(|| line.strip_prefix("Authorization: "))
                 .map(ToString::to_string)
         });
+        let headers = headers
+            .lines()
+            .filter_map(|line| {
+                let (name, value) = line.split_once(": ")?;
+                Some((name.to_ascii_lowercase(), value.to_string()))
+            })
+            .collect();
         let form = url::form_urlencoded::parse(body.as_bytes())
             .into_owned()
             .collect();
+        let json = serde_json::from_str(body).unwrap_or(Value::Null);
         CapturedTokenRequest {
             authorization,
+            headers,
             form,
+            json,
         }
     }
 }

@@ -171,6 +171,7 @@
         "redirect_uri": { "type": "string", "minLength": 1 },
         "redirect_uri_port_mode": { "type": "string", "enum": ["fixed", "random"] },
         "endpoints": { "$ref": "#/$defs/oauth_endpoints" },
+        "token_request": { "$ref": "#/$defs/oauth_token_request" },
         "client": { "$ref": "#/$defs/oauth_client" },
         "scopes": { "$ref": "#/$defs/oauth_scopes" }
       }
@@ -191,6 +192,26 @@
       "properties": {
         "authorization_url": { "type": "string", "minLength": 1 },
         "token_url": { "type": "string", "minLength": 1 }
+      }
+    },
+    "oauth_token_request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "body_format": { "type": "string", "enum": ["form", "json"] },
+        "headers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/oauth_token_request_header" }
+        }
+      }
+    },
+    "oauth_token_request_header": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "value"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "value": { "type": "string" }
       }
     },
     "oauth_client": {

@@ -121,6 +121,8 @@ message OAuthAuthorizationCodeCredentialMethod {
   OauthCredentialPkceMode pkce = 5;
   // Loopback callback port binding mode.
   OauthCredentialRedirectUriPortMode redirect_uri_port_mode = 6;
+  // Token exchange request configuration.
+  OAuthCredentialTokenRequest token_request = 7;
 }
 
 // Supported OAuth PKCE modes.
@@ -142,6 +144,32 @@ enum OauthCredentialRedirectUriPortMode {
   OAUTH_CREDENTIAL_REDIRECT_URI_PORT_MODE_FIXED = 1;
   // Bind a random free port and use it for authorization and token exchange.
   OAUTH_CREDENTIAL_REDIRECT_URI_PORT_MODE_RANDOM = 2;
+}
+
+// OAuth token exchange request configuration.
+message OAuthCredentialTokenRequest {
+  // How token request parameters are encoded.
+  OAuthCredentialTokenRequestBodyFormat body_format = 1;
+  // Literal headers sent with the token request.
+  repeated OAuthCredentialTokenRequestHeader headers = 2;
+}
+
+// Supported OAuth token request body encodings.
+enum OAuthCredentialTokenRequestBodyFormat {
+  // Token request body format is unspecified.
+  OAUTH_CREDENTIAL_TOKEN_REQUEST_BODY_FORMAT_UNSPECIFIED = 0;
+  // Send token request parameters as application/x-www-form-urlencoded.
+  OAUTH_CREDENTIAL_TOKEN_REQUEST_BODY_FORMAT_FORM = 1;
+  // Send token request parameters as JSON.
+  OAUTH_CREDENTIAL_TOKEN_REQUEST_BODY_FORMAT_JSON = 2;
+}
+
+// One literal header sent with the OAuth token request.
+message OAuthCredentialTokenRequestHeader {
+  // Header name.
+  string name = 1;
+  // Header value.
+  string value = 2;
 }
 
 // OAuth provider endpoints.

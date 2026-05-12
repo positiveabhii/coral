@@ -102,7 +102,8 @@ pub use inputs::{
     ManifestOAuthClientSecretTransport, ManifestOAuthClientSpec, ManifestOAuthCredentialSpec,
     ManifestOAuthFlowKind, ManifestOAuthFlowSpec, ManifestOAuthPkceMode,
     ManifestOAuthRedirectBindPort, ManifestOAuthRedirectUriPortMode, ManifestOAuthScopeDelimiter,
-    ManifestOAuthScopeSpec, ManifestOAuthScopesSpec, resolve_inputs,
+    ManifestOAuthScopeSpec, ManifestOAuthScopesSpec, ManifestOAuthTokenRequestBodyFormat,
+    ManifestOAuthTokenRequestHeader, ManifestOAuthTokenRequestSpec, resolve_inputs,
 };
 pub use loader::load_manifest_path;
 pub use parser::{
