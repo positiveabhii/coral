@@ -391,9 +391,7 @@ impl coral_app::RunErrorTelemetry for CliError {
             Self::SourceNotFound { source_name } => {
                 Cow::Owned(format!("source '{source_name}' was not found"))
             }
-            Self::Diagnostic { rendered_stderr } => {
-                Cow::Owned(diagnostic_summary(rendered_stderr))
-            }
+            Self::Diagnostic { rendered_stderr } => Cow::Owned(diagnostic_summary(rendered_stderr)),
             Self::Internal(error) => Cow::Owned(error.to_string()),
         }
     }
