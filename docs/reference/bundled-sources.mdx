@@ -24,6 +24,7 @@ If the source you need is not available, you can extend Coral by [writing a cust
 | [datadog](#datadog) | `http` | Query monitors, events, incidents, dashboards, hosts, services, APM dependencies, downtimes, SLOs, synthetic tests, users, logs, spans, and metrics from Datadog. |
 | [github](#github) | `http` | Query repositories, issues, pull requests, workflows, organizations, users, teams, and API metadata from GitHub (Cloud or Enterprise). |
 | [gitlab](#gitlab) | `http` | Query projects, groups, issues, merge requests, pipelines, deployments, packages, users, and instance metadata from GitLab (Cloud or self-hosted). |
+| [gmail](#gmail) | `http` | Query Gmail profile metadata, labels, messages, threads, drafts, history, filters, and send-as aliases from the authenticated mailbox. |
 | [grafana](#grafana) | `http` | Query dashboards, folders, datasources, alert rules, annotations, contact points, teams, users, and dashboard panels from Grafana (Cloud or self-hosted). |
 | [incident_io](#incident_io) | `http` | Query incidents, alerts, escalations, schedules, status pages, workflows, teams, users, and catalog resources from incident.io. |
 | [intercom](#intercom) | `http` | Query contacts, companies, conversations, admins, tags, teams, segments, data attributes, collections, articles, and ticket types from Intercom. |
@@ -189,6 +190,27 @@ Base URL of your GitLab instance. Keep the default for
 Create a personal access token (PAT) with the `read_api` scope;
 some admin tables require elevated scopes.
 See [GitLab PAT docs](https://docs.gitlab.com/user/profile/personal_access_tokens/).
+
+### `gmail`
+
+`GMAIL_USER_ID` (optional)<br />
+default `me`
+
+Gmail user ID to query. Use `me` for the authenticated Google
+account, or an email address when the token has delegated access.
+
+`GMAIL_TOKEN` (required)
+
+Use an OAuth access token with the
+`https://www.googleapis.com/auth/gmail.readonly` scope.
+
+To connect interactively, choose "Connect with Google" and provide a
+Google OAuth client ID and client secret when prompted. Gmail access
+tokens expire; rerun `coral source add --interactive gmail` when the
+stored token needs to be replaced.
+
+To paste a token manually instead, obtain one from your own OAuth
+flow with the same read-only Gmail scope.
 
 ### `grafana`
 
