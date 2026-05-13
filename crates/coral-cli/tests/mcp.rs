@@ -276,7 +276,10 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
     let build = client
         .read_resource(ReadResourceRequestParams::new("coral://build"))
         .await?;
-    assert_eq!(text_content(&build), env!("CORAL_LONG_VERSION"));
+    assert_eq!(
+        text_content(&build),
+        concat!("coral ", env!("CORAL_LONG_VERSION"))
+    );
 
     let guide = client
         .read_resource(ReadResourceRequestParams::new("coral://guide"))
