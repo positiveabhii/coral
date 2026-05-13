@@ -1,9 +1,10 @@
 name: slack
-version: 2.1.0
+version: 2.1.1
 dsl_version: 3
 backend: http
 description: >-
-  Query channels, messages, thread replies, and users from your Slack workspace.
+  Query channels, messages, thread replies, users, and rich message payloads
+  from your Slack workspace.
 inputs:
   SLACK_TOKEN:
     kind: secret
@@ -14,7 +15,9 @@ inputs:
       If you already have a Slack app with the required scopes, you can
       find your Bot User OAuth Token on its OAuth & Permissions page. The
       required scopes are: channels:read, channels:history, groups:read,
-      groups:history, users:read, users:read.email.
+      groups:history, users:read, users:read.email. Add `files:read` if you
+      plan to inspect or download the private file URLs exposed in message
+      payloads.
 
       If you don't have a Slack app, you can
       [create one with the required scopes pre-filled](https://api.slack.com/apps?new_app=1&manifest_json=%7B%22display_information%22%3A%7B%22name%22%3A%22Coral%22%2C%22description%22%3A%22Coral+data+access%22%7D%2C%22oauth_config%22%3A%7B%22scopes%22%3A%7B%22bot%22%3A%5B%22channels%3Aread%22%2C%22groups%3Aread%22%2C%22channels%3Ahistory%22%2C%22groups%3Ahistory%22%2C%22users%3Aread%22%2C%22users%3Aread.email%22%5D%7D%7D%2C%22features%22%3A%7B%22bot_user%22%3A%7B%22display_name%22%3A%22Coral%22%2C%22always_online%22%3Afalse%7D%7D%7D).
@@ -29,6 +32,28 @@ auth:
       template: Bearer {{input.SLACK_TOKEN}}
 test_queries:
   - SELECT * FROM slack.channels LIMIT 1
+  - >
+    SELECT ts, thread_ts, text, files, attachments, blocks, file_id,
+    file_name, file_title, file_mimetype, file_filetype, file_url_private,
+    file_url_private_download, file_thumb_360, file_thumb_720, file_ids,
+    attachment_image_urls, block_types
+    FROM slack.messages
+    WHERE channel = 'C0AFMHJTMK8'
+      AND thread_ts = '1777984891.794389'
+      AND ts = CAST('2026-05-06T09:13:30.599469Z' AS TIMESTAMP)
+  - >
+    SELECT ts, text, files, attachments, blocks, file_id, file_name,
+    file_title, file_mimetype, file_filetype, file_url_private,
+    file_url_private_download, file_thumb_360, file_thumb_720, file_ids,
+    attachment_image_urls, block_image_urls
+    FROM slack.thread_replies
+    WHERE channel = 'C061S50CQN6'
+      AND thread_ts = '1778134793.636129'
+      AND ts IN (
+        CAST('2026-05-07T09:13:40.100149Z' AS TIMESTAMP),
+        CAST('2026-05-07T09:20:23.517609Z' AS TIMESTAMP),
+        CAST('2026-05-07T11:26:51.125419Z' AS TIMESTAMP)
+      )
 tables:
   - name: channels
     description: Slack channels with topic, purpose, and member count
@@ -128,6 +153,31 @@ tables:
       returned `ts` column is a normal UTC `Timestamp`, so use SQL
       predicates such as `ts >= CAST('2026-05-01T00:00:00Z' AS TIMESTAMP)`
       when you want ISO-style filtering after the channel history is fetched.
+
+      Rich message payloads are exposed as `files`, `attachments`, and
+      `blocks` JSON columns, with the first attached file flattened into
+      convenience columns like `file_id`, `file_name`, and
+      `file_url_private_download`. The full arrays are also joined into
+      compact string columns such as `file_ids`, `attachment_image_urls`,
+      and `block_image_urls` when you want to inspect every value without
+      unpacking JSON manually.
+
+      Example:
+
+      ```sql
+      SELECT ts, text, files, attachments, blocks
+      FROM slack.messages
+      WHERE channel = 'C0AFMHJTMK8'
+      ORDER BY ts;
+      ```
+
+      To inspect the first attached file directly:
+
+      ```sql
+      SELECT ts, file_id, file_name, file_mimetype, file_url_private_download
+      FROM slack.messages
+      WHERE channel = 'C0AFMHJTMK8' AND file_id IS NOT NULL;
+      ```
     request:
       method: GET
       path: /api/conversations.history
@@ -182,6 +232,274 @@ tables:
           kind: path
           path:
             - text
+      - name: files
+        type: Json
+        nullable: true
+        description: Raw file payloads attached to the message
+        expr:
+          kind: path
+          path:
+            - files
+      - name: attachments
+        type: Json
+        nullable: true
+        description: Raw legacy attachment payloads attached to the message
+        expr:
+          kind: path
+          path:
+            - attachments
+      - name: blocks
+        type: Json
+        nullable: true
+        description: Raw block payloads attached to the message
+        expr:
+          kind: path
+          path:
+            - blocks
+      - name: file_id
+        type: Utf8
+        nullable: true
+        description: ID of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - id
+      - name: file_name
+        type: Utf8
+        nullable: true
+        description: Name of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - name
+      - name: file_title
+        type: Utf8
+        nullable: true
+        description: Title of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - title
+      - name: file_mimetype
+        type: Utf8
+        nullable: true
+        description: MIME type of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - mimetype
+      - name: file_filetype
+        type: Utf8
+        nullable: true
+        description: Slack file type of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - filetype
+      - name: file_url_private
+        type: Utf8
+        nullable: true
+        description: Private URL of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - url_private
+      - name: file_url_private_download
+        type: Utf8
+        nullable: true
+        description: Download URL of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - url_private_download
+      - name: file_thumb_360
+        type: Utf8
+        nullable: true
+        description: 360px thumbnail URL of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - thumb_360
+      - name: file_thumb_720
+        type: Utf8
+        nullable: true
+        description: 720px thumbnail URL of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - thumb_720
+      - name: file_ids
+        type: Utf8
+        nullable: true
+        description: IDs of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - id
+          separator: " | "
+      - name: file_names
+        type: Utf8
+        nullable: true
+        description: Names of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - name
+          separator: " | "
+      - name: file_titles
+        type: Utf8
+        nullable: true
+        description: Titles of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - title
+          separator: " | "
+      - name: file_mimetypes
+        type: Utf8
+        nullable: true
+        description: MIME types of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - mimetype
+          separator: " | "
+      - name: file_filetypes
+        type: Utf8
+        nullable: true
+        description: Slack file types of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - filetype
+          separator: " | "
+      - name: file_url_privates
+        type: Utf8
+        nullable: true
+        description: Private URLs of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - url_private
+          separator: " | "
+      - name: file_url_private_downloads
+        type: Utf8
+        nullable: true
+        description: Download URLs of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - url_private_download
+          separator: " | "
+      - name: file_thumb_360s
+        type: Utf8
+        nullable: true
+        description: 360px thumbnail URLs of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - thumb_360
+          separator: " | "
+      - name: file_thumb_720s
+        type: Utf8
+        nullable: true
+        description: 720px thumbnail URLs of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - thumb_720
+          separator: " | "
+      - name: attachment_titles
+        type: Utf8
+        nullable: true
+        description: Titles of all legacy attachments, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - attachments
+          item_path:
+            - title
+          separator: " | "
+      - name: attachment_title_links
+        type: Utf8
+        nullable: true
+        description: Title links of all legacy attachments, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - attachments
+          item_path:
+            - title_link
+          separator: " | "
+      - name: attachment_image_urls
+        type: Utf8
+        nullable: true
+        description: Image URLs of all legacy attachments, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - attachments
+          item_path:
+            - image_url
+          separator: " | "
+      - name: block_types
+        type: Utf8
+        nullable: true
+        description: Types of all message blocks, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - blocks
+          item_path:
+            - type
+          separator: " | "
+      - name: block_image_urls
+        type: Utf8
+        nullable: true
+        description: Image URLs from all image blocks, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - blocks
+          item_path:
+            - image_url
+          separator: " | "
       - name: ts
         type: Timestamp
         nullable: false
@@ -261,6 +579,23 @@ tables:
       its raw Slack message timestamp as `thread_ts`. The `oldest` and
       `latest` filters also expect raw Slack timestamp strings such as
       `1777593600.000000`, not ISO-8601 timestamps.
+
+      Rich reply payloads are exposed in the same way as channel history,
+      with `files`, `attachments`, and `blocks` JSON columns plus the
+      flattened first-file convenience columns. The array-joined
+      convenience columns like `file_ids`, `attachment_image_urls`, and
+      `block_image_urls` make it easy to inspect multiple files or image
+      previews in one row.
+
+      Example:
+
+      ```sql
+      SELECT ts, text, files, attachments, blocks, file_id, file_name
+      FROM slack.thread_replies
+      WHERE channel = 'C061S50CQN6'
+        AND thread_ts = '1778134793.636129'
+      ORDER BY ts;
+      ```
     request:
       method: GET
       path: /api/conversations.replies
@@ -331,6 +666,274 @@ tables:
           kind: path
           path:
             - text
+      - name: files
+        type: Json
+        nullable: true
+        description: Raw file payloads attached to the reply
+        expr:
+          kind: path
+          path:
+            - files
+      - name: attachments
+        type: Json
+        nullable: true
+        description: Raw legacy attachment payloads attached to the reply
+        expr:
+          kind: path
+          path:
+            - attachments
+      - name: blocks
+        type: Json
+        nullable: true
+        description: Raw block payloads attached to the reply
+        expr:
+          kind: path
+          path:
+            - blocks
+      - name: file_id
+        type: Utf8
+        nullable: true
+        description: ID of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - id
+      - name: file_name
+        type: Utf8
+        nullable: true
+        description: Name of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - name
+      - name: file_title
+        type: Utf8
+        nullable: true
+        description: Title of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - title
+      - name: file_mimetype
+        type: Utf8
+        nullable: true
+        description: MIME type of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - mimetype
+      - name: file_filetype
+        type: Utf8
+        nullable: true
+        description: Slack file type of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - filetype
+      - name: file_url_private
+        type: Utf8
+        nullable: true
+        description: Private URL of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - url_private
+      - name: file_url_private_download
+        type: Utf8
+        nullable: true
+        description: Download URL of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - url_private_download
+      - name: file_thumb_360
+        type: Utf8
+        nullable: true
+        description: 360px thumbnail URL of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - thumb_360
+      - name: file_thumb_720
+        type: Utf8
+        nullable: true
+        description: 720px thumbnail URL of the first attached file, if any
+        expr:
+          kind: first_array_item_path
+          path:
+            - files
+          item_path:
+            - thumb_720
+      - name: file_ids
+        type: Utf8
+        nullable: true
+        description: IDs of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - id
+          separator: " | "
+      - name: file_names
+        type: Utf8
+        nullable: true
+        description: Names of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - name
+          separator: " | "
+      - name: file_titles
+        type: Utf8
+        nullable: true
+        description: Titles of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - title
+          separator: " | "
+      - name: file_mimetypes
+        type: Utf8
+        nullable: true
+        description: MIME types of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - mimetype
+          separator: " | "
+      - name: file_filetypes
+        type: Utf8
+        nullable: true
+        description: Slack file types of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - filetype
+          separator: " | "
+      - name: file_url_privates
+        type: Utf8
+        nullable: true
+        description: Private URLs of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - url_private
+          separator: " | "
+      - name: file_url_private_downloads
+        type: Utf8
+        nullable: true
+        description: Download URLs of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - url_private_download
+          separator: " | "
+      - name: file_thumb_360s
+        type: Utf8
+        nullable: true
+        description: 360px thumbnail URLs of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - thumb_360
+          separator: " | "
+      - name: file_thumb_720s
+        type: Utf8
+        nullable: true
+        description: 720px thumbnail URLs of all attached files, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - files
+          item_path:
+            - thumb_720
+          separator: " | "
+      - name: attachment_titles
+        type: Utf8
+        nullable: true
+        description: Titles of all legacy attachments, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - attachments
+          item_path:
+            - title
+          separator: " | "
+      - name: attachment_title_links
+        type: Utf8
+        nullable: true
+        description: Title links of all legacy attachments, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - attachments
+          item_path:
+            - title_link
+          separator: " | "
+      - name: attachment_image_urls
+        type: Utf8
+        nullable: true
+        description: Image URLs of all legacy attachments, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - attachments
+          item_path:
+            - image_url
+          separator: " | "
+      - name: block_types
+        type: Utf8
+        nullable: true
+        description: Types of all message blocks, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - blocks
+          item_path:
+            - type
+          separator: " | "
+      - name: block_image_urls
+        type: Utf8
+        nullable: true
+        description: Image URLs from all image blocks, joined with ` | `
+        expr:
+          kind: join_array_path
+          path:
+            - blocks
+          item_path:
+            - image_url
+          separator: " | "
       - name: ts
         type: Timestamp
         nullable: false
