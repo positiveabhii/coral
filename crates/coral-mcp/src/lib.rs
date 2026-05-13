@@ -67,7 +67,7 @@ pub struct BuildIdentity {
 impl Default for BuildIdentity {
     fn default() -> Self {
         Self {
-            long_version: "coral unknown",
+            long_version: "unknown",
             version: env!("CARGO_PKG_VERSION"),
             sha: "unknown",
             wip_tree: None,
