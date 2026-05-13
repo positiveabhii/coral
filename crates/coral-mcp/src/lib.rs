@@ -12,7 +12,7 @@
 //! The exposed MCP surface is intentionally small:
 //!
 //! - tools: `sql`, paginated `list_tables`, `search_tables`, `describe_table`, `list_columns`, and optionally `feedback`
-//! - resources: `coral://guide`, `coral://tables`, `coral://build`
+//! - resources: `coral://guide`, `coral://tables`
 //!
 //! Protocol lifecycle, initialization, and stdio transport behavior should stay
 //! inside the SDK integration rather than being reimplemented locally.
@@ -37,42 +37,22 @@ pub use error::McpError;
 pub(crate) use server::CoralMcpServer;
 
 /// Optional MCP surface features.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct McpOptions {
     /// Expose the feedback submission tool.
     pub feedback_enabled: bool,
     /// Optional W3C traceparent used to parent each MCP request span.
     pub trace_parent: Option<String>,
-    /// Build identity for the running MCP binary.
-    pub build_identity: BuildIdentity,
-}
-
-/// Build identity exposed through the MCP `coral://build` resource.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BuildIdentity {
-    /// Full `coral --version` output for the running binary.
+    /// Full version string for the running binary, used in the MCP `serverInfo` response.
     pub long_version: &'static str,
-    /// Package version for the running binary.
-    pub version: &'static str,
-    /// Short git commit SHA for the running binary.
-    pub sha: &'static str,
-    /// Debug-only working-tree hash captured at build time.
-    pub wip_tree: Option<&'static str>,
-    /// Debug-only source checkout path captured at build time.
-    pub source_path: Option<&'static str>,
-    /// Build profile, usually `debug` or `release`.
-    pub profile: &'static str,
 }
 
-impl Default for BuildIdentity {
+impl Default for McpOptions {
     fn default() -> Self {
         Self {
-            long_version: "unknown",
-            version: env!("CARGO_PKG_VERSION"),
-            sha: "unknown",
-            wip_tree: None,
-            source_path: None,
-            profile: "release",
+            feedback_enabled: false,
+            trace_parent: None,
+            long_version: env!("CARGO_PKG_VERSION"),
         }
     }
 }

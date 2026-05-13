@@ -5,8 +5,6 @@ use coral_api::v1::{ListTablesResponse, Source, Table, TableSummary};
 use rmcp::model::{AnnotateAble, RawResource, Resource};
 use serde_json::{Value, json};
 
-use crate::BuildIdentity;
-
 static INITIAL_INSTRUCTIONS: &str = "You are connected to Coral. Read `coral://guide` for query patterns, use `list_tables`, `search_tables`, `describe_table`, and `list_columns` to inspect queryable tables, and use `sql` for final queries.";
 static GUIDE_TEMPLATE: &str = include_str!("../guide_template.md");
 
@@ -26,17 +24,6 @@ pub(crate) fn tables_resource(visible_table_count: usize) -> Resource {
         .with_description(tables_resource_description(visible_table_count))
         .with_mime_type("application/json")
         .no_annotation()
-}
-
-pub(crate) fn build_resource() -> Resource {
-    RawResource::new("coral://build", "build")
-        .with_description("Coral MCP runtime build identity: version, git SHA, working-tree hash, source path. Use to confirm the running binary matches the worktree being inspected.")
-        .with_mime_type("text/plain")
-        .no_annotation()
-}
-
-pub(crate) fn build_resource_content(build_identity: BuildIdentity) -> String {
-    format!("coral {}", build_identity.long_version)
 }
 
 pub(crate) fn guide_resource_content(sources: &[Source], tables: &[TableSummary]) -> String {

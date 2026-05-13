@@ -10,7 +10,6 @@
 mod bootstrap;
 mod branding;
 mod browser;
-mod build_info;
 #[cfg(feature = "embedded-ui")]
 mod embedded_ui;
 pub mod env;
@@ -37,8 +36,6 @@ use tonic::Request;
 
 #[cfg(test)]
 use tempfile as _;
-
-pub use build_info::{BuildIdentity, build_identity};
 
 /// Default loopback port used by `coral ui` to expose a browser-facing
 /// gRPC-Web surface.
@@ -444,20 +441,12 @@ async fn run_app_command(
             onboard::run(&app).await?;
         }
         Command::McpStdio(args) => {
-            let identity = build_identity();
             Box::pin(coral_mcp::run_stdio_with_client(
                 app,
                 coral_mcp::McpOptions {
                     feedback_enabled: args.enable_feedback,
                     trace_parent: ctx.and_then(|ctx| ctx.trace_parent.clone()),
-                    build_identity: coral_mcp::BuildIdentity {
-                        long_version: identity.long_version,
-                        version: identity.version,
-                        sha: identity.sha,
-                        wip_tree: identity.wip_tree,
-                        source_path: identity.source_path,
-                        profile: identity.profile,
-                    },
+                    long_version: env!("CORAL_LONG_VERSION"),
                 },
             ))
             .await

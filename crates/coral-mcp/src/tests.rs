@@ -253,7 +253,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .iter()
             .map(|resource| resource.uri.as_str())
             .collect::<Vec<_>>(),
-        vec!["coral://guide", "coral://tables", "coral://build"]
+        vec!["coral://guide", "coral://tables"]
     );
     assert!(
         initial_resources[0]
@@ -262,12 +262,6 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .expect("guide description")
             .contains("0 configured source")
     );
-
-    let build = client
-        .read_resource(ReadResourceRequestParams::new("coral://build"))
-        .await
-        .expect("read build resource");
-    assert_eq!(text_content(&build), "coral unknown");
 
     let initial_guide = client
         .read_resource(ReadResourceRequestParams::new("coral://guide"))

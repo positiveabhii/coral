@@ -270,15 +270,7 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             .iter()
             .map(|resource| resource.uri.as_str())
             .collect::<Vec<_>>(),
-        vec!["coral://guide", "coral://tables", "coral://build"]
-    );
-
-    let build = client
-        .read_resource(ReadResourceRequestParams::new("coral://build"))
-        .await?;
-    assert_eq!(
-        text_content(&build),
-        concat!("coral ", env!("CORAL_LONG_VERSION"))
+        vec!["coral://guide", "coral://tables"]
     );
 
     let guide = client
