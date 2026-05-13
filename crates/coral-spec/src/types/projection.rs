@@ -1,14 +1,20 @@
 //! SQL-facing projections over source model operations.
 
-use super::source::OperationId;
+use super::source::{
+    EntityField, OperationId, OperationInput, ScalarType, SourceModel, TypeRef, github_source_model,
+};
 
-/// Scalar types supported by source-model table projections.
+/// Types supported by source-model table projections.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectionScalarType {
     /// UTF-8 string values.
     String,
     /// Signed 64-bit integer values.
     Integer,
+    /// Boolean values.
+    Boolean,
+    /// JSON value serialized as UTF-8 text for the current SQL surface.
+    Json,
 }
 
 /// One response field exposed by a table projection.
@@ -98,8 +104,7 @@ pub struct TableProjection {
 }
 
 impl TableProjection {
-    /// Creates a table projection.
-    pub fn new(
+    fn new(
         name: impl Into<String>,
         operation: OperationId,
         columns: Vec<ProjectionColumn>,
@@ -111,6 +116,28 @@ impl TableProjection {
             columns,
             filters,
         }
+    }
+
+    /// Creates a table projection by resolving an operation's source entity.
+    pub fn from_source_operation(
+        model: &SourceModel,
+        name: impl Into<String>,
+        operation: OperationId,
+    ) -> Option<Self> {
+        let operation_model = model.operation(&operation)?;
+        let entity = model.entity(operation_model.entity())?;
+        let columns = entity
+            .fields()
+            .iter()
+            .map(projection_column_for_entity_field)
+            .collect::<Vec<_>>();
+        let filters = operation_model
+            .inputs()
+            .iter()
+            .map(projection_filter_for_operation_input)
+            .collect::<Vec<_>>();
+
+        Some(Self::new(name, operation, columns, filters))
     }
 
     /// Returns the fully qualified SQL table name.
@@ -145,43 +172,48 @@ impl TableProjection {
 
 /// Returns the spike projection for `github.issues`.
 pub fn github_issues_projection() -> TableProjection {
-    TableProjection::new(
+    TableProjection::from_source_operation(
+        &github_source_model(),
         "github.issues",
         OperationId::new("github.issue.list"),
-        vec![
-            ProjectionColumn::new("number", ProjectionScalarType::Integer, false),
-            ProjectionColumn::new("title", ProjectionScalarType::String, false),
-            ProjectionColumn::new("state", ProjectionScalarType::String, false),
-            ProjectionColumn::new("created_at", ProjectionScalarType::String, false),
-            ProjectionColumn::new("user__login", ProjectionScalarType::String, true),
-        ],
-        vec![
-            ProjectionFilter::required("owner", ProjectionScalarType::String),
-            ProjectionFilter::required("repo", ProjectionScalarType::String),
-            ProjectionFilter::optional("state", ProjectionScalarType::String),
-        ],
     )
+    .expect("github issue list operation should resolve")
 }
 
 /// Returns the spike projection for `github.issue_search`.
 pub fn github_issue_search_projection() -> TableProjection {
-    TableProjection::new(
+    TableProjection::from_source_operation(
+        &github_source_model(),
         "github.issue_search",
         OperationId::new("github.issue.search"),
-        vec![
-            ProjectionColumn::new("number", ProjectionScalarType::Integer, false),
-            ProjectionColumn::new("title", ProjectionScalarType::String, false),
-            ProjectionColumn::new("state", ProjectionScalarType::String, false),
-            ProjectionColumn::new("created_at", ProjectionScalarType::String, false),
-            ProjectionColumn::new("user__login", ProjectionScalarType::String, true),
-            ProjectionColumn::new("html_url", ProjectionScalarType::String, true),
-        ],
-        vec![
-            ProjectionFilter::required("q", ProjectionScalarType::String),
-            ProjectionFilter::optional("sort", ProjectionScalarType::String),
-            ProjectionFilter::optional("order", ProjectionScalarType::String),
-        ],
     )
+    .expect("github issue search operation should resolve")
+}
+
+fn projection_column_for_entity_field(field: &EntityField) -> ProjectionColumn {
+    ProjectionColumn::new(
+        field.name(),
+        projection_type_for_type_ref(field.ty()),
+        field.nullable(),
+    )
+}
+
+fn projection_filter_for_operation_input(input: &OperationInput) -> ProjectionFilter {
+    let ty = projection_type_for_type_ref(input.ty());
+    if input.is_required() {
+        ProjectionFilter::required(input.name(), ty)
+    } else {
+        ProjectionFilter::optional(input.name(), ty)
+    }
+}
+
+fn projection_type_for_type_ref(ty: &TypeRef) -> ProjectionScalarType {
+    match ty {
+        TypeRef::Scalar(ScalarType::String) => ProjectionScalarType::String,
+        TypeRef::Scalar(ScalarType::Integer) => ProjectionScalarType::Integer,
+        TypeRef::Scalar(ScalarType::Boolean) => ProjectionScalarType::Boolean,
+        TypeRef::Entity(_) | TypeRef::Collection(_) => ProjectionScalarType::Json,
+    }
 }
 
 #[cfg(test)]
@@ -207,8 +239,21 @@ mod tests {
 
         assert_eq!(
             column_names,
-            vec!["number", "title", "state", "created_at", "user__login"]
+            vec!["number", "title", "state", "created_at", "html_url", "user"]
         );
+    }
+
+    #[test]
+    fn github_issues_projects_nested_user_as_json_column() {
+        let projection = github_issues_projection();
+        let user = projection
+            .columns()
+            .iter()
+            .find(|column| column.name() == "user")
+            .expect("user column");
+
+        assert_eq!(user.ty(), &ProjectionScalarType::Json);
+        assert!(user.nullable());
     }
 
     #[test]

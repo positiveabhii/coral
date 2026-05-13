@@ -14,7 +14,7 @@ use coral_spec::types::projection::{ProjectionFilter, ProjectionScalarType, Tabl
 use coral_spec::types::source::{
     Binding, HeaderValue, HttpMethod, JsonPath, OperationId, Surface, SurfaceKind,
 };
-use datafusion::arrow::array::{ArrayRef, Int64Array, StringArray};
+use datafusion::arrow::array::{ArrayRef, BooleanArray, Int64Array, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::TableProvider;
@@ -724,6 +724,13 @@ fn source_model_array_for_field(
             });
             Ok(Arc::new(values.collect::<Int64Array>()) as ArrayRef)
         }
+        DataType::Boolean => {
+            let values = items.iter().map(|item| {
+                source_model_field_value(field.name(), filter_only, operation_values, item)
+                    .and_then(json_value_to_bool)
+            });
+            Ok(Arc::new(values.collect::<BooleanArray>()) as ArrayRef)
+        }
         other => Err(DataFusionError::Execution(format!(
             "source-model column '{}' uses unsupported Arrow type {other:?}",
             field.name()
@@ -766,6 +773,14 @@ fn json_value_to_i64(value: Value) -> Option<i64> {
     }
 }
 
+fn json_value_to_bool(value: Value) -> Option<bool> {
+    match value {
+        Value::Bool(value) => Some(value),
+        Value::String(value) => value.parse().ok(),
+        _ => None,
+    }
+}
+
 fn field_for_filter(filter: &ProjectionFilter) -> Field {
     Field::new(
         filter.name(),
@@ -778,6 +793,8 @@ fn data_type_for_projection_type(ty: &ProjectionScalarType) -> DataType {
     match ty {
         ProjectionScalarType::String => DataType::Utf8,
         ProjectionScalarType::Integer => DataType::Int64,
+        ProjectionScalarType::Boolean => DataType::Boolean,
+        ProjectionScalarType::Json => DataType::Utf8,
     }
 }
 
@@ -902,7 +919,8 @@ mod tests {
                 ("title", &DataType::Utf8),
                 ("state", &DataType::Utf8),
                 ("created_at", &DataType::Utf8),
-                ("user__login", &DataType::Utf8),
+                ("html_url", &DataType::Utf8),
+                ("user", &DataType::Utf8),
                 ("owner", &DataType::Utf8),
                 ("repo", &DataType::Utf8),
             ]
@@ -916,7 +934,7 @@ mod tests {
 
         assert_eq!(
             shape.output_columns,
-            vec!["number", "title", "state", "created_at", "user__login"]
+            vec!["number", "title", "state", "created_at", "html_url", "user"]
         );
         assert_eq!(shape.filter_only_columns, vec!["owner", "repo"]);
         assert_eq!(shape.required_filters, vec!["owner", "repo"]);
@@ -1044,7 +1062,7 @@ mod tests {
         let provider = github_issues_provider();
         let ctx = SessionContext::new();
         let state = ctx.state();
-        let projection = vec![1, 4];
+        let projection = vec![1, 5];
         let plan = provider
             .scan(
                 &state,
@@ -1064,7 +1082,7 @@ mod tests {
                 .iter()
                 .map(|field| field.name().as_str())
                 .collect::<Vec<_>>(),
-            vec!["title", "user__login"]
+            vec!["title", "user"]
         );
 
         let batches = plan
@@ -1112,6 +1130,7 @@ mod tests {
                     "title": "First closed issue",
                     "state": "closed",
                     "created_at": "2026-05-11T10:00:00Z",
+                    "html_url": "https://github.com/withcoral/coral/issues/101",
                     "user": { "login": "simonwhitaker" }
                 },
                 {
@@ -1119,6 +1138,7 @@ mod tests {
                     "title": "Second closed issue",
                     "state": "closed",
                     "created_at": "2026-05-11T11:00:00Z",
+                    "html_url": "https://github.com/withcoral/coral/issues/102",
                     "user": { "login": "octocat" }
                 }
             ])))
@@ -1177,6 +1197,71 @@ mod tests {
                 .expect("state should be string")
                 .value(1),
             "closed"
+        );
+    }
+
+    #[tokio::test]
+    async fn datafusion_query_can_extract_nested_entity_json_field() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/withcoral/coral/issues"))
+            .and(query_param("state", "closed"))
+            .and(query_param("per_page", "1"))
+            .and(header("Authorization", "Bearer ghp_test"))
+            .and(header("User-Agent", DEFAULT_SOURCE_MODEL_USER_AGENT))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {
+                    "number": 101,
+                    "title": "First closed issue",
+                    "state": "closed",
+                    "created_at": "2026-05-11T10:00:00Z",
+                    "html_url": "https://github.com/withcoral/coral/issues/101",
+                    "user": {
+                        "login": "simonwhitaker",
+                        "id": 1,
+                        "html_url": "https://github.com/simonwhitaker",
+                        "type": "User",
+                        "site_admin": false
+                    }
+                }
+            ])))
+            .mount(&server)
+            .await;
+
+        let mut ctx = SessionContext::new();
+        crate::runtime::json::register_json_support(&mut ctx)
+            .expect("JSON functions should register");
+        register_github_issues(
+            &ctx,
+            github_issues_rest_provider_with_base_url(&server.uri()),
+        );
+
+        let batches = ctx
+            .sql(
+                "SELECT number, json_get_str(user, 'login') AS user__login \
+                 FROM github.issues \
+                 WHERE owner = 'withcoral' \
+                   AND repo = 'coral' \
+                   AND state = 'closed' \
+                 LIMIT 1",
+            )
+            .await
+            .expect("source-model JSON query should plan")
+            .collect()
+            .await
+            .expect("source-model JSON query should execute");
+
+        let batch = batches.first().expect("one batch");
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(
+            batch
+                .column_by_name("user__login")
+                .expect("user login column")
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("user login should be string")
+                .value(0),
+            "simonwhitaker"
         );
     }
 
@@ -1369,12 +1454,14 @@ mod tests {
             .expect(
                 "set GITHUB_TOKEN to a GitHub token, for example: GITHUB_TOKEN=\"$(gh auth token)\"",
             );
-        let ctx = SessionContext::new();
+        let mut ctx = SessionContext::new();
+        crate::runtime::json::register_json_support(&mut ctx)
+            .expect("JSON support should register");
         register_github_issues(&ctx, github_issues_rest_provider_with_token(token));
 
         let batches = ctx
             .sql(
-                "SELECT number, title, state \
+                "SELECT '#' || number as number, title, state, json_get_str(user, 'login') as user__login \
                  FROM github.issues \
                  WHERE owner = 'withcoral' \
                    AND repo = 'coral' \
@@ -1411,12 +1498,14 @@ mod tests {
             .expect(
                 "set GITHUB_TOKEN to a GitHub token, for example: GITHUB_TOKEN=\"$(gh auth token)\"",
             );
-        let ctx = SessionContext::new();
+        let mut ctx = SessionContext::new();
+        crate::runtime::json::register_json_support(&mut ctx)
+            .expect("JSON support should register");
         register_github_issue_search(&ctx, github_issue_search_rest_provider_with_token(token));
 
         let batches = ctx
             .sql(
-                "SELECT number, title, state, html_url \
+                "SELECT '#' || number as number, title, state, json_get_str(user, 'login') as user__login \
                  FROM github.issue_search \
                  WHERE q = 'repo:withcoral/coral is:issue' \
                    AND sort = 'updated' \
@@ -1456,6 +1545,7 @@ mod tests {
                 "title": "Spike issue",
                 "state": "open",
                 "created_at": "2026-05-11T10:00:00Z",
+                "html_url": "https://github.com/withcoral/coral/issues/42",
                 "user": {
                     "login": "simonwhitaker"
                 }
@@ -1474,14 +1564,18 @@ mod tests {
                 .value(0),
             42
         );
+        let user = batch
+            .column_by_name("user")
+            .expect("user column")
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("user should be JSON text");
+        let user_value = serde_json::from_str::<Value>(user.value(0)).expect("valid user JSON");
         assert_eq!(
-            batch
-                .column_by_name("user__login")
-                .expect("user login column")
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .expect("user login should be string")
-                .value(0),
+            user_value
+                .get("login")
+                .and_then(Value::as_str)
+                .expect("user login"),
             "simonwhitaker"
         );
         assert_eq!(
@@ -1512,30 +1606,30 @@ mod tests {
                     "number": 42,
                     "title": "Missing user",
                     "state": "open",
-                    "created_at": "2026-05-11T10:00:00Z"
+                    "created_at": "2026-05-11T10:00:00Z",
+                    "html_url": "https://github.com/withcoral/coral/issues/42"
                 }),
                 json!({
                     "number": 43,
-                    "title": "Null user login",
+                    "title": "Null user",
                     "state": "closed",
                     "created_at": "2026-05-11T11:00:00Z",
-                    "user": {
-                        "login": null
-                    }
+                    "html_url": "https://github.com/withcoral/coral/issues/43",
+                    "user": null
                 }),
             ],
         )
         .expect("items with missing optional fields should convert");
 
-        let user_login = batch
-            .column_by_name("user__login")
-            .expect("user login column")
+        let user = batch
+            .column_by_name("user")
+            .expect("user column")
             .as_any()
             .downcast_ref::<StringArray>()
-            .expect("user login should be string");
+            .expect("user should be JSON text");
 
-        assert!(user_login.is_null(0));
-        assert!(user_login.is_null(1));
+        assert!(user.is_null(0));
+        assert!(user.is_null(1));
     }
 
     #[test]

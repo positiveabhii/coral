@@ -12,20 +12,21 @@
 // ----- Basic types ---------------------------------------
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-enum ScalarType {
-    /// Add docs
+pub enum ScalarType {
     String,
+    Integer,
+    Boolean,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum TypeRef {
+pub enum TypeRef {
     Scalar(ScalarType),
     Entity(EntityId),
     Collection(Box<TypeRef>),
 }
 
 impl TypeRef {
-    fn collection(inner: TypeRef) -> Self {
+    pub fn collection(inner: TypeRef) -> Self {
         Self::Collection(Box::new(inner))
     }
 }
@@ -33,19 +34,19 @@ impl TypeRef {
 // ----- Operations ---------------------------------------
 
 #[derive(Debug, PartialEq)]
-enum OperationKind {
+pub enum OperationKind {
     List,
 }
 
 #[derive(Debug)]
-struct OperationInput {
+pub struct OperationInput {
     name: String,
     ty: TypeRef,
     required: bool,
 }
 
 impl OperationInput {
-    fn required(name: &str, ty: TypeRef) -> OperationInput {
+    pub fn required(name: &str, ty: TypeRef) -> OperationInput {
         OperationInput {
             name: name.to_string(),
             ty,
@@ -53,12 +54,24 @@ impl OperationInput {
         }
     }
 
-    fn optional(name: &str, ty: TypeRef) -> OperationInput {
+    pub fn optional(name: &str, ty: TypeRef) -> OperationInput {
         OperationInput {
             name: name.to_string(),
             ty,
             required: false,
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn ty(&self) -> &TypeRef {
+        &self.ty
+    }
+
+    pub fn is_required(&self) -> bool {
+        self.required
     }
 }
 
@@ -79,18 +92,94 @@ impl OperationId {
 }
 
 #[derive(Debug)]
-struct Operation {
+pub struct Operation {
     id: OperationId,
     kind: OperationKind,
     entity: EntityId,
     inputs: Vec<OperationInput>,
-    returns: TypeRef,
+}
+
+impl Operation {
+    pub fn id(&self) -> &OperationId {
+        &self.id
+    }
+
+    pub fn kind(&self) -> &OperationKind {
+        &self.kind
+    }
+
+    pub fn entity(&self) -> &EntityId {
+        &self.entity
+    }
+
+    pub fn inputs(&self) -> &[OperationInput] {
+        &self.inputs
+    }
 }
 
 // ----- Entities ---------------------------------------
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct EntityId(String);
+pub struct EntityId(String);
+
+impl EntityId {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntityField {
+    name: String,
+    ty: TypeRef,
+    nullable: bool,
+}
+
+impl EntityField {
+    pub fn new(name: impl Into<String>, ty: TypeRef, nullable: bool) -> Self {
+        Self {
+            name: name.into(),
+            ty,
+            nullable,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn ty(&self) -> &TypeRef {
+        &self.ty
+    }
+
+    pub fn nullable(&self) -> bool {
+        self.nullable
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entity {
+    id: EntityId,
+    fields: Vec<EntityField>,
+}
+
+impl Entity {
+    pub fn new(id: EntityId, fields: Vec<EntityField>) -> Self {
+        Self { id, fields }
+    }
+
+    pub fn id(&self) -> &EntityId {
+        &self.id
+    }
+
+    pub fn fields(&self) -> &[EntityField] {
+        &self.fields
+    }
+}
 
 // ----- Surface ---------------------------------------
 
@@ -368,11 +457,113 @@ impl JsonPath {
 
 // ----- Source Model ---------------------------------------
 
-struct SourceModel {
+pub struct SourceModel {
     source: String, // e.g. "github"
+    entities: Vec<Entity>,
     surfaces: Vec<Surface>,
     operations: Vec<Operation>,
     bindings: Vec<Binding>,
+}
+
+impl SourceModel {
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn entities(&self) -> &[Entity] {
+        &self.entities
+    }
+
+    pub fn surfaces(&self) -> &[Surface] {
+        &self.surfaces
+    }
+
+    pub fn operations(&self) -> &[Operation] {
+        &self.operations
+    }
+
+    pub fn bindings(&self) -> &[Binding] {
+        &self.bindings
+    }
+
+    pub fn entity(&self, id: &EntityId) -> Option<&Entity> {
+        self.entities.iter().find(|entity| entity.id() == id)
+    }
+
+    pub fn operation(&self, id: &OperationId) -> Option<&Operation> {
+        self.operations
+            .iter()
+            .find(|operation| operation.id() == id)
+    }
+}
+
+pub fn github_user_entity() -> Entity {
+    Entity::new(
+        EntityId::new("github.user"),
+        vec![
+            EntityField::new("login", TypeRef::Scalar(ScalarType::String), false),
+            EntityField::new("id", TypeRef::Scalar(ScalarType::Integer), false),
+            EntityField::new("html_url", TypeRef::Scalar(ScalarType::String), false),
+            EntityField::new("type", TypeRef::Scalar(ScalarType::String), false),
+            EntityField::new("site_admin", TypeRef::Scalar(ScalarType::Boolean), false),
+        ],
+    )
+}
+
+pub fn github_issue_entity() -> Entity {
+    Entity::new(
+        EntityId::new("github.issue"),
+        vec![
+            EntityField::new("number", TypeRef::Scalar(ScalarType::Integer), false),
+            EntityField::new("title", TypeRef::Scalar(ScalarType::String), false),
+            EntityField::new("state", TypeRef::Scalar(ScalarType::String), false),
+            EntityField::new("created_at", TypeRef::Scalar(ScalarType::String), false),
+            EntityField::new("html_url", TypeRef::Scalar(ScalarType::String), false),
+            EntityField::new("user", TypeRef::Entity(EntityId::new("github.user")), true),
+        ],
+    )
+}
+
+pub fn github_issue_list_operation() -> Operation {
+    Operation {
+        id: OperationId::new("github.issue.list"),
+        kind: OperationKind::List,
+        entity: EntityId::new("github.issue"),
+        inputs: vec![
+            OperationInput::required("owner", TypeRef::Scalar(ScalarType::String)),
+            OperationInput::required("repo", TypeRef::Scalar(ScalarType::String)),
+            OperationInput::optional("state", TypeRef::Scalar(ScalarType::String)),
+        ],
+    }
+}
+
+pub fn github_issue_search_operation() -> Operation {
+    Operation {
+        id: OperationId::new("github.issue.search"),
+        kind: OperationKind::List,
+        entity: EntityId::new("github.issue"),
+        inputs: vec![
+            OperationInput::required("q", TypeRef::Scalar(ScalarType::String)),
+            OperationInput::optional("sort", TypeRef::Scalar(ScalarType::String)),
+            OperationInput::optional("order", TypeRef::Scalar(ScalarType::String)),
+        ],
+    }
+}
+
+pub fn github_source_model() -> SourceModel {
+    SourceModel {
+        source: "github".to_string(),
+        entities: vec![github_issue_entity(), github_user_entity()],
+        surfaces: vec![github_rest_surface()],
+        operations: vec![
+            github_issue_list_operation(),
+            github_issue_search_operation(),
+        ],
+        bindings: vec![
+            github_issue_list_rest_binding(),
+            github_issue_search_rest_binding(),
+        ],
+    }
 }
 
 pub fn github_rest_surface() -> Surface {
@@ -469,58 +660,43 @@ pub fn github_issue_search_rest_binding() -> Binding {
 mod tests {
     use super::*;
 
-    fn gt_issue_entity() -> EntityId {
-        EntityId("github.issue".into())
-    }
+    #[test]
+    fn source_model_can_be_created() {
+        let gh_source_model = github_source_model();
 
-    fn gh_issue_list_op() -> Operation {
-        Operation {
-            id: OperationId::new("github.issue.list"),
-            kind: OperationKind::List,
-            entity: gt_issue_entity(),
-            inputs: vec![
-                OperationInput::required("owner", TypeRef::Scalar(ScalarType::String)),
-                OperationInput::required("repo", TypeRef::Scalar(ScalarType::String)),
-                OperationInput::optional("state", TypeRef::Scalar(ScalarType::String)),
-            ],
-            returns: TypeRef::collection(TypeRef::Entity(gt_issue_entity())),
-        }
-    }
-
-    fn gh_issue_search_op() -> Operation {
-        Operation {
-            id: OperationId::new("github.issue.search"),
-            kind: OperationKind::List,
-            entity: gt_issue_entity(),
-            inputs: vec![
-                OperationInput::required("q", TypeRef::Scalar(ScalarType::String)),
-                OperationInput::optional("sort", TypeRef::Scalar(ScalarType::String)),
-                OperationInput::optional("order", TypeRef::Scalar(ScalarType::String)),
-            ],
-            returns: TypeRef::collection(TypeRef::Entity(gt_issue_entity())),
-        }
-    }
-
-    fn gh_source_model() -> SourceModel {
-        SourceModel {
-            source: "github".to_string(),
-            surfaces: vec![github_rest_surface()],
-            operations: vec![gh_issue_list_op(), gh_issue_search_op()],
-            bindings: vec![
-                github_issue_list_rest_binding(),
-                github_issue_search_rest_binding(),
-            ],
-        }
+        assert_eq!(gh_source_model.operations().len(), 2);
+        assert_eq!(gh_source_model.operations()[0].kind(), &OperationKind::List);
+        assert_eq!(gh_source_model.surfaces().len(), 1);
+        assert_eq!(gh_source_model.surfaces()[0].kind(), &SurfaceKind::Rest);
     }
 
     #[test]
-    fn source_model_can_be_created() {
-        let gh_source_model = gh_source_model();
+    fn github_issue_models_user_as_entity_field() {
+        let issue = github_issue_entity();
+        let user = issue
+            .fields()
+            .iter()
+            .find(|field| field.name() == "user")
+            .expect("issue user field");
 
-        assert_eq!(gh_source_model.operations.len(), 2);
-        assert_eq!(gh_source_model.operations[0].kind, OperationKind::List);
-        assert_eq!(gh_source_model.surfaces.len(), 1);
-        assert_eq!(gh_source_model.surfaces[0].kind, SurfaceKind::Rest);
+        assert_eq!(user.ty(), &TypeRef::Entity(EntityId::new("github.user")));
+        assert!(user.nullable());
+    }
+
+    #[test]
+    fn github_operations_reference_issue_entity() {
+        let model = github_source_model();
+        let issue = EntityId::new("github.issue");
+
+        assert_eq!(
+            model
+                .operations()
+                .iter()
+                .map(Operation::entity)
+                .collect::<Vec<_>>(),
+            vec![&issue, &issue]
+        );
+        assert!(model.entity(&issue).is_some());
     }
 
     #[test]
