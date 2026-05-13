@@ -270,7 +270,7 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             .iter()
             .map(|resource| resource.uri.as_str())
             .collect::<Vec<_>>(),
-        vec!["coral://build", "coral://guide", "coral://tables"]
+        vec!["coral://guide", "coral://tables", "coral://build"]
     );
 
     let build = client
