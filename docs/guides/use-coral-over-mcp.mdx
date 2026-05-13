@@ -22,6 +22,7 @@ Before setting up a client, make sure you have [connected at least one source](/
 | Tool     | `feedback`       | Store a local blocked-agent feedback report and upload an anonymous copy to Coral when enabled |
 | Resource | `coral://guide`  | Usage guide for agents                                  |
 | Resource | `coral://tables` | JSON summaries of queryable tables and required filters |
+| Resource | `coral://build`  | Runtime build identity for verifying the running binary |
 
 Clients see the same installed sources and query results as `coral sql`. You set up sources with the CLI, then agents query them over MCP.
 `list_tables` returns table summaries in pages and accepts optional `schema`, `limit`, and `offset` arguments. Use each table's `sql_reference` value in `FROM` and `JOIN` clauses. Do not quote the whole `schema.table` string: write `github.pulls` or `"github"."pulls"`, not `"github.pulls"`.

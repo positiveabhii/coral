@@ -26,13 +26,13 @@ use tonic::Request;
 use crate::{
     McpOptions,
     surface::{
-        ColumnSummary, TableSummary, build_tool_result, compile_metadata_regex,
-        describe_table_arguments, describe_table_tool, feedback_tool, guide_resource,
-        guide_resource_content, initial_instructions, internal_status, list_columns_arguments,
-        list_columns_tool, list_tables_arguments, list_tables_tool, list_tables_value, page_items,
-        paged_value, required_string_argument, search_tables_arguments, search_tables_tool,
-        sql_tool, status_to_error_data, tables_resource, tables_resource_content,
-        tool_error_from_status, tool_error_result,
+        ColumnSummary, TableSummary, build_resource, build_resource_content, build_tool_result,
+        compile_metadata_regex, describe_table_arguments, describe_table_tool, feedback_tool,
+        guide_resource, guide_resource_content, initial_instructions, internal_status,
+        list_columns_arguments, list_columns_tool, list_tables_arguments, list_tables_tool,
+        list_tables_value, page_items, paged_value, required_string_argument,
+        search_tables_arguments, search_tables_tool, sql_tool, status_to_error_data,
+        tables_resource, tables_resource_content, tool_error_from_status, tool_error_result,
     },
     telemetry,
 };
@@ -570,6 +570,7 @@ impl ServerHandler for CoralMcpServer {
             Ok(ListResourcesResult::with_all_items(vec![
                 guide_resource(&sources, visible_table_count),
                 tables_resource(visible_table_count),
+                build_resource(),
             ]))
         })
         .await
@@ -586,6 +587,12 @@ impl ServerHandler for CoralMcpServer {
         );
         telemetry::instrument_protocol(span, async {
             match request.uri.as_str() {
+                "coral://build" => {
+                    let text = build_resource_content(self.options.build_identity);
+                    Ok(ReadResourceResult::new(vec![
+                        ResourceContents::text(text, request.uri).with_mime_type("text/plain"),
+                    ]))
+                }
                 "coral://guide" => {
                     let (sources, tables) = self
                         .load_sources_and_table_summaries()
