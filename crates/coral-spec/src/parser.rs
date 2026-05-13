@@ -215,6 +215,58 @@ tables:
     }
 
     #[test]
+    fn bindable_on_non_http_accepts_at_spec_layer() {
+        let manifest = parse_source_manifest_yaml(
+            r"
+name: demo
+version: 1.0.0
+dsl_version: 3
+backend: jsonl
+tables:
+  - name: messages
+    description: Demo messages
+    filters:
+      - name: id
+        bindable: true
+    source:
+      location: file:///tmp/demo/
+    columns:
+      - name: id
+        type: Utf8
+",
+        )
+        .expect("spec layer should accept bindable filters on non-http sources");
+
+        assert_eq!(manifest.schema_name(), "demo");
+    }
+
+    #[test]
+    fn http_rate_limit_max_concurrency_zero_rejects() {
+        let error = parse_source_manifest_yaml(
+            r"
+name: demo
+version: 1.0.0
+dsl_version: 3
+backend: http
+base_url: https://example.com
+rate_limit:
+  max_concurrency: 0
+tables:
+  - name: messages
+    description: Demo messages
+    request:
+      path: /messages
+    columns:
+      - name: id
+        type: Utf8
+",
+        )
+        .expect_err("zero concurrency should fail schema validation");
+
+        assert!(error.to_string().contains("max_concurrency"));
+    }
+
+    #[test]
     fn parse_source_manifest_rejects_duplicate_table_names() {
         let error = parse_source_manifest_yaml(
             r"

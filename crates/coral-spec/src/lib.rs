@@ -85,7 +85,9 @@ mod schema;
 mod template;
 mod validate;
 
-pub use backends::http::{AuthSpec, BasicAuthSpec, CustomAuthSpec, HeaderAuthSpec};
+pub use backends::http::{
+    AuthSpec, BasicAuthSpec, CustomAuthSpec, DependentJoinTableConfig, HeaderAuthSpec,
+};
 pub(crate) use common::validate_test_queries;
 pub use common::{
     BodyFieldSpec, BodySpec, ColumnSpec, ExprSpec, FilterMode, FilterSpec, FunctionArgBinding,
@@ -93,7 +95,7 @@ pub use common::{
     QueryParamSpec, RequestRouteSpec, RequestSpec, ResponseBodyFormat, ResponseSpec, RowStrategy,
     SourceBackend, SourceManifestCommon, SourceTableFunctionSpec, TableCommon,
     TableFunctionArgSpec, TimestampInput, ValidatedPagination, ValidatedPaginationMode,
-    ValueSourceSpec,
+    ValueSourceSpec, WireType,
 };
 pub use error::{ManifestError, Result};
 pub use inputs::{ManifestInputKind, ManifestInputSpec, resolve_inputs};
