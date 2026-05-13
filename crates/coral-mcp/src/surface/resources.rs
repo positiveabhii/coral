@@ -36,7 +36,7 @@ pub(crate) fn build_resource() -> Resource {
 }
 
 pub(crate) fn build_resource_content(build_identity: BuildIdentity) -> String {
-    build_identity.long_version.to_owned()
+    format!("coral {}", build_identity.long_version)
 }
 
 pub(crate) fn guide_resource_content(sources: &[Source], tables: &[TableSummary]) -> String {
