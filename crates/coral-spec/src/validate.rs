@@ -27,17 +27,32 @@ pub(crate) fn validate_table_names<'a>(
     Ok(())
 }
 
-pub(crate) fn validate_http_table(
-    schema: &str,
-    table_name: &str,
-    filters: &[FilterSpec],
-    columns: &[ColumnSpec],
-    request: &RequestSpec,
-    requests: &[RequestRouteSpec],
-    pagination: &PaginationSpec,
-    search_index: bool,
-    dependent_join: &DependentJoinTableConfig,
-) -> Result<()> {
+#[derive(Clone, Copy)]
+pub(crate) struct HttpTableValidation<'a> {
+    pub(crate) schema: &'a str,
+    pub(crate) table_name: &'a str,
+    pub(crate) filters: &'a [FilterSpec],
+    pub(crate) columns: &'a [ColumnSpec],
+    pub(crate) request: &'a RequestSpec,
+    pub(crate) requests: &'a [RequestRouteSpec],
+    pub(crate) pagination: &'a PaginationSpec,
+    pub(crate) search_index: bool,
+    pub(crate) dependent_join: &'a DependentJoinTableConfig,
+}
+
+pub(crate) fn validate_http_table(input: HttpTableValidation<'_>) -> Result<()> {
+    let HttpTableValidation {
+        schema,
+        table_name,
+        filters,
+        columns,
+        request,
+        requests,
+        pagination,
+        search_index,
+        dependent_join,
+    } = input;
+
     if request.path.raw().trim().is_empty() {
         return Err(ManifestError::validation(format!(
             "{schema}.{table_name} has an empty request.path"
@@ -80,13 +95,11 @@ fn validate_http_dependent_join_config(
     search_index: bool,
     dependent_join: &DependentJoinTableConfig,
 ) -> Result<()> {
-    if search_index {
-        for filter in filters.iter().filter(|filter| filter.bindable) {
-            return Err(ManifestError::validation(format!(
-                "filter '{}': cannot be bindable because table '{}.{}' is declared as search_index. Search-index-backed endpoints do not return complete result sets under filtered queries and are unsafe for dependent joins.",
-                filter.name, schema, table_name
-            )));
-        }
+    if search_index && let Some(filter) = filters.iter().find(|filter| filter.bindable) {
+        return Err(ManifestError::validation(format!(
+            "filter '{}': cannot be bindable because table '{}.{}' is declared as search_index. Search-index-backed endpoints do not return complete result sets under filtered queries and are unsafe for dependent joins.",
+            filter.name, schema, table_name
+        )));
     }
 
     validate_non_zero_cap(
@@ -655,8 +668,8 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        validate_filters_and_column_exprs, validate_http_function, validate_http_function_names,
-        validate_http_table, validate_table_names,
+        HttpTableValidation, validate_filters_and_column_exprs, validate_http_function,
+        validate_http_function_names, validate_http_table, validate_table_names,
     };
     use crate::common::{
         ColumnSpec, ExprSpec, FilterMode, FilterSpec, FunctionArgBinding, PaginationSpec,
@@ -716,17 +729,18 @@ mod tests {
         request: &RequestSpec,
         requests: &[RequestRouteSpec],
     ) -> crate::Result<()> {
-        validate_http_table(
-            "demo",
-            "messages",
+        let columns = [test_column()];
+        validate_http_table(HttpTableValidation {
+            schema: "demo",
+            table_name: "messages",
             filters,
-            &[test_column()],
+            columns: &columns,
             request,
             requests,
-            &PaginationSpec::default(),
-            false,
-            &crate::DependentJoinTableConfig::default(),
-        )
+            pagination: &PaginationSpec::default(),
+            search_index: false,
+            dependent_join: &crate::DependentJoinTableConfig::default(),
+        })
     }
 
     fn function_with_request_value(value: ValueSourceSpec) -> SourceTableFunctionSpec {
@@ -1001,17 +1015,20 @@ mod tests {
 
     #[test]
     fn bindable_on_search_index_rejects() {
-        let error = validate_http_table(
-            "demo",
-            "messages",
-            &[bindable_filter("id")],
-            &[test_column()],
-            &base_request(),
-            &[],
-            &PaginationSpec::default(),
-            true,
-            &crate::DependentJoinTableConfig::default(),
-        )
+        let filters = [bindable_filter("id")];
+        let columns = [test_column()];
+        let request = base_request();
+        let error = validate_http_table(HttpTableValidation {
+            schema: "demo",
+            table_name: "messages",
+            filters: &filters,
+            columns: &columns,
+            request: &request,
+            requests: &[],
+            pagination: &PaginationSpec::default(),
+            search_index: true,
+            dependent_join: &crate::DependentJoinTableConfig::default(),
+        })
         .expect_err("search-index table should reject bindable filters");
 
         assert!(error.to_string().contains(
@@ -1069,17 +1086,20 @@ mod tests {
         ];
 
         for (config, expected) in cases {
-            let error = validate_http_table(
-                "demo",
-                "messages",
-                &test_filters(),
-                &[test_column()],
-                &base_request(),
-                &[],
-                &PaginationSpec::default(),
-                false,
-                &config,
-            )
+            let filters = test_filters();
+            let columns = [test_column()];
+            let request = base_request();
+            let error = validate_http_table(HttpTableValidation {
+                schema: "demo",
+                table_name: "messages",
+                filters: &filters,
+                columns: &columns,
+                request: &request,
+                requests: &[],
+                pagination: &PaginationSpec::default(),
+                search_index: false,
+                dependent_join: &config,
+            })
             .expect_err("zero table cap should fail");
 
             assert!(

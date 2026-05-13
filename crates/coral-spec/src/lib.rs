@@ -105,6 +105,7 @@ pub use parser::{
 };
 pub use template::{ParsedTemplate, TemplateNamespace, TemplatePart, TemplateToken};
 pub(crate) use validate::{
-    validate_columns, validate_filters_and_column_exprs, validate_http_function,
-    validate_http_function_names, validate_http_table, validate_table_names,
+    HttpTableValidation, validate_columns, validate_filters_and_column_exprs,
+    validate_http_function, validate_http_function_names, validate_http_table,
+    validate_table_names,
 };

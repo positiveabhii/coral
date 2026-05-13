@@ -16,9 +16,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::{
-    ColumnSpec, FilterSpec, HeaderSpec, ManifestError, ManifestInputKind, ManifestInputSpec,
-    PaginationSpec, ParsedTemplate, RequestRouteSpec, RequestSpec, ResponseSpec, Result,
-    SourceBackend, SourceManifestCommon, SourceTableFunctionSpec, TableCommon,
+    ColumnSpec, FilterSpec, HeaderSpec, HttpTableValidation, ManifestError, ManifestInputKind,
+    ManifestInputSpec, PaginationSpec, ParsedTemplate, RequestRouteSpec, RequestSpec, ResponseSpec,
+    Result, SourceBackend, SourceManifestCommon, SourceTableFunctionSpec, TableCommon,
     inputs::collect_source_inputs_value, validate::validate_template, validate_http_function,
     validate_http_function_names, validate_http_table, validate_table_names, validate_test_queries,
 };
@@ -250,17 +250,17 @@ fn validate_rate_limit(schema: &str, spec: &RateLimitSpec) -> Result<()> {
 
 impl RawHttpTableSpec {
     fn into_validated(self, schema: &str) -> Result<HttpTableSpec> {
-        validate_http_table(
+        validate_http_table(HttpTableValidation {
             schema,
-            &self.name,
-            &self.filters,
-            &self.columns,
-            &self.request,
-            &self.requests,
-            &self.pagination,
-            self.search_index,
-            &self.dependent_join,
-        )?;
+            table_name: &self.name,
+            filters: &self.filters,
+            columns: &self.columns,
+            request: &self.request,
+            requests: &self.requests,
+            pagination: &self.pagination,
+            search_index: self.search_index,
+            dependent_join: &self.dependent_join,
+        })?;
 
         Ok(HttpTableSpec {
             common: TableCommon::new(

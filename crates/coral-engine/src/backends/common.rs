@@ -111,6 +111,10 @@ pub(crate) trait CompiledBackendSource: Send + Sync {
 
     fn source_name(&self) -> &str;
 
+    fn backend_kind(&self) -> &'static str;
+
+    fn has_bindable_filters(&self) -> bool;
+
     async fn register(
         &self,
         ctx: &SessionContext,

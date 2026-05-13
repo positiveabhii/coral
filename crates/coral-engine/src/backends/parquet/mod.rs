@@ -223,6 +223,18 @@ impl CompiledBackendSource for ParquetCompiledSource {
         &self.manifest.common.name
     }
 
+    fn backend_kind(&self) -> &'static str {
+        "parquet"
+    }
+
+    fn has_bindable_filters(&self) -> bool {
+        self.manifest
+            .tables
+            .iter()
+            .flat_map(FileTableSpec::filters)
+            .any(|filter| filter.bindable)
+    }
+
     async fn register(&self, ctx: &SessionContext) -> Result<BackendRegistration> {
         let mut tables: HashMap<String, Arc<dyn TableProvider>> = HashMap::new();
         let mut table_infos = Vec::with_capacity(self.manifest.tables.len());
