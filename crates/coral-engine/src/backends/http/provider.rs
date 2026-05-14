@@ -67,6 +67,10 @@ impl HttpSourceTableProvider {
         &self.source_schema
     }
 
+    pub(crate) fn client(&self) -> &HttpSourceClient {
+        &self.backend
+    }
+
     pub(crate) fn table_spec(&self) -> &Arc<HttpTableSpec> {
         &self.table
     }
