@@ -149,6 +149,7 @@ fn mock_sql_response(sql: &str) -> ExecuteSqlResponse {
     ExecuteSqlResponse {
         arrow_ipc_stream: encode_arrow_ipc_stream(&schema, &[batch]).expect("encode arrow ipc"),
         row_count,
+        plan: None,
     }
 }
 
@@ -187,6 +188,7 @@ fn mock_coral_tables_response() -> ExecuteSqlResponse {
     ExecuteSqlResponse {
         arrow_ipc_stream: encode_arrow_ipc_stream(&schema, &[batch]).expect("encode arrow ipc"),
         row_count: 3,
+        plan: None,
     }
 }
 

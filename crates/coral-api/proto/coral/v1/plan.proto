@@ -1,0 +1,161 @@
+syntax = "proto3";
+
+package coral.v1;
+
+// Minimal analytical plan attached to query execution.
+message AnalyticalPlan {
+  // Stable identifier for this planned query execution.
+  string plan_id = 1;
+  // Workspace that scoped planning and execution.
+  string workspace = 2;
+  // User or caller intent captured before execution.
+  PlanIntent intent = 3;
+  // Source names that were successfully loaded into the query runtime.
+  repeated string workspace_sources_loaded = 4;
+  // Tables referenced by planning when that metadata is available.
+  repeated ReferencedTable referenced_tables = 5;
+  // Executable steps in the plan.
+  repeated PlanStep steps = 6;
+  // Policy checks considered by planning.
+  repeated PolicyCheck policy_checks = 7;
+  // Cost estimate for this plan.
+  CostEstimate cost_estimate = 8;
+  // Execution evidence recorded for this plan.
+  PlanExecution execution = 9;
+  // Memory integration status for this plan.
+  MemoryStatus memory_status = 10;
+}
+
+// Captures the original plan intent.
+message PlanIntent {
+  // Concrete intent payload.
+  oneof intent {
+    // SQL intent.
+    SqlIntent sql = 1;
+  }
+}
+
+// SQL statement provided as the original intent.
+message SqlIntent {
+  // Original SQL statement.
+  string sql = 1;
+}
+
+// One table referenced by a plan.
+message ReferencedTable {
+  // Table schema or source name.
+  string schema = 1;
+  // Table name.
+  string table = 2;
+}
+
+// One executable plan step.
+message PlanStep {
+  // Concrete step payload.
+  oneof step {
+    // Step that executes SQL in the relational engine.
+    RelationalSqlStep relational_sql = 1;
+  }
+}
+
+// SQL step for the relational query engine.
+message RelationalSqlStep {
+  // SQL statement executed by this step.
+  string sql = 1;
+}
+
+// One policy check considered for a plan.
+message PolicyCheck {
+  // Concrete policy check payload.
+  oneof check {
+    // Local default policy check.
+    LocalDefaultPolicyCheck local_default = 1;
+  }
+}
+
+// Local default policy check.
+message LocalDefaultPolicyCheck {
+  // Policy check status.
+  PolicyCheckStatus status = 1;
+}
+
+// Status of a policy check.
+enum PolicyCheckStatus {
+  // Policy check status was not specified.
+  POLICY_CHECK_STATUS_UNSPECIFIED = 0;
+  // Policy check was not evaluated.
+  POLICY_CHECK_STATUS_NOT_EVALUATED = 1;
+}
+
+// Cost estimate for a plan.
+message CostEstimate {
+  // Cost estimate status.
+  CostEstimateStatus status = 1;
+}
+
+// Status of a plan cost estimate.
+enum CostEstimateStatus {
+  // Cost estimate status was not specified.
+  COST_ESTIMATE_STATUS_UNSPECIFIED = 0;
+  // Cost estimate is unknown.
+  COST_ESTIMATE_STATUS_UNKNOWN = 1;
+}
+
+// Execution evidence recorded while running a plan.
+message PlanExecution {
+  // Execution status.
+  PlanExecutionStatus status = 1;
+  // Trace id linked to the query span when tracing is configured.
+  string trace_id = 2;
+  // Row count is meaningful only when row_count_recorded is true.
+  uint64 row_count = 3;
+  // Distinguishes an unknown row count from a recorded zero-row result.
+  bool row_count_recorded = 4;
+  // Stable error type for failed executions when available.
+  string error_type = 5;
+  // Non-fatal warnings observed during source loading or execution.
+  repeated PlanWarning warnings = 6;
+  // RFC 3339 timestamp for execution start, if recorded.
+  string started_at = 7;
+  // RFC 3339 timestamp for execution completion, if recorded.
+  string completed_at = 8;
+}
+
+// Status of plan execution.
+enum PlanExecutionStatus {
+  // Execution status was not specified.
+  PLAN_EXECUTION_STATUS_UNSPECIFIED = 0;
+  // Execution has not started.
+  PLAN_EXECUTION_STATUS_NOT_STARTED = 1;
+  // Execution is currently running.
+  PLAN_EXECUTION_STATUS_RUNNING = 2;
+  // Execution completed successfully.
+  PLAN_EXECUTION_STATUS_OK = 3;
+  // Execution failed.
+  PLAN_EXECUTION_STATUS_ERROR = 4;
+}
+
+// Non-fatal plan warning.
+message PlanWarning {
+  // Concrete warning payload.
+  oneof warning {
+    // Source loading was skipped but planning continued.
+    SourceSkippedWarning source_skipped = 1;
+  }
+}
+
+// Warning emitted when a source load was skipped.
+message SourceSkippedWarning {
+  // Source associated with the warning.
+  string source = 1;
+  // Human-readable warning message.
+  string message = 2;
+}
+
+// Memory integration status for a plan.
+enum MemoryStatus {
+  // Memory status was not specified.
+  MEMORY_STATUS_UNSPECIFIED = 0;
+  // Memory integration does not apply to this plan.
+  MEMORY_STATUS_NOT_APPLICABLE = 1;
+}

@@ -3,6 +3,7 @@ syntax = "proto3";
 package coral.v1;
 
 import "coral/v1/catalog.proto";
+import "coral/v1/plan.proto";
 import "coral/v1/resources.proto";
 
 // Executes one SQL statement against the sources registered in one workspace.
@@ -19,6 +20,8 @@ message ExecuteSqlResponse {
   bytes arrow_ipc_stream = 1;
   // Total row count returned by the query.
   int64 row_count = 2;
+  // Analytical plan and execution evidence for this query.
+  AnalyticalPlan plan = 3;
 }
 
 // Explains one SQL statement by producing query-engine plan renderings without

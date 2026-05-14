@@ -188,6 +188,7 @@ mod tests {
         ExecuteSqlResponse {
             arrow_ipc_stream: encode_arrow_ipc_stream(&schema, &[batch]).expect("encode"),
             row_count: 2,
+            plan: None,
         }
     }
 
@@ -222,6 +223,7 @@ mod tests {
         let response = ExecuteSqlResponse {
             arrow_ipc_stream: encode_arrow_ipc_stream(&schema, &[]).expect("encode"),
             row_count: 0,
+            plan: None,
         };
         let decoded = decode_execute_sql_response(&response).expect("decode");
         assert_eq!(decoded.row_count(), 0);

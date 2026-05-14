@@ -34,6 +34,7 @@
 pub mod bootstrap;
 mod feedback;
 mod identity;
+mod plan;
 mod query;
 mod sources;
 mod state;

@@ -11,10 +11,10 @@ use coral_api::v1::{
 use tonic::{Request, Response, Status};
 
 use crate::bootstrap::core_status;
-use crate::query::manager::QueryManager;
+use crate::query::manager::{PlannedQueryExecution, QueryManager};
 use crate::transport::{
-    grpc_span, instrument_grpc, query_status, table_summary_to_proto, table_to_proto,
-    workspace_name_from_proto,
+    analytical_plan_to_proto, grpc_span, instrument_grpc, query_status, table_summary_to_proto,
+    table_to_proto, workspace_name_from_proto,
 };
 
 #[derive(Clone)]
@@ -107,10 +107,9 @@ impl QueryServiceApi for QueryService {
         instrument_grpc(span, async move {
             let inner = request.into_inner();
             let workspace_name = workspace_name_from_proto(inner.workspace.as_ref())?;
-            let execution = queries
-                .execute_sql(&workspace_name, &inner.sql)
-                .await
-                .map_err(query_status)?;
+            let PlannedQueryExecution { plan, result } =
+                Box::pin(queries.execute_sql_plan(&workspace_name, &inner.sql)).await;
+            let execution = result.map_err(query_status)?;
             let response = ExecuteSqlResponse {
                 arrow_ipc_stream: encode_arrow_ipc_stream(
                     execution.arrow_schema(),
@@ -119,6 +118,7 @@ impl QueryServiceApi for QueryService {
                 .map_err(coral_engine::CoreError::from)
                 .map_err(core_status)?,
                 row_count: i64::try_from(execution.row_count()).unwrap_or(i64::MAX),
+                plan: Some(analytical_plan_to_proto(&plan)),
             };
             Ok(Response::new(response))
         })

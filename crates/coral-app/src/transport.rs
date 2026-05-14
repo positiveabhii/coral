@@ -5,8 +5,17 @@ use std::future::Future;
 use coral_api::{
     CORAL_ERROR_DOMAIN, grpc_response_status_code,
     v1::{
-        Column, QueryTestFailure, QueryTestResult, QueryTestSuccess, Source, Table, TableSummary,
-        ValidateSourceResponse, Workspace, query_test_result,
+        AnalyticalPlan as AnalyticalPlanProto, Column, CostEstimate as CostEstimateProto,
+        CostEstimateStatus as CostEstimateStatusProto,
+        LocalDefaultPolicyCheck as LocalDefaultPolicyCheckProto, MemoryStatus as MemoryStatusProto,
+        PlanExecution as PlanExecutionProto, PlanExecutionStatus as PlanExecutionStatusProto,
+        PlanIntent as PlanIntentProto, PlanStep as PlanStepProto, PlanWarning as PlanWarningProto,
+        PolicyCheck as PolicyCheckProto, PolicyCheckStatus as PolicyCheckStatusProto,
+        QueryTestFailure, QueryTestResult, QueryTestSuccess,
+        RelationalSqlStep as RelationalSqlStepProto, Source,
+        SourceSkippedWarning as SourceSkippedWarningProto, SqlIntent as SqlIntentProto, Table,
+        TableSummary, ValidateSourceResponse, Workspace, plan_intent, plan_step, plan_warning,
+        policy_check, query_test_result,
     },
 };
 use opentelemetry::propagation::Extractor;
@@ -18,6 +27,7 @@ use tracing::{Instrument as _, field};
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
 use crate::bootstrap::{AppError, app_status, core_status};
+use crate::plan as app_plan;
 use crate::query::manager::QueryManagerError;
 use crate::workspaces::WorkspaceName;
 
@@ -243,6 +253,111 @@ pub(crate) fn workspace_to_proto(workspace_name: &WorkspaceName) -> Workspace {
     }
 }
 
+pub(crate) fn analytical_plan_to_proto(plan: &app_plan::AnalyticalPlan) -> AnalyticalPlanProto {
+    AnalyticalPlanProto {
+        plan_id: plan.plan_id.as_str().to_string(),
+        workspace: plan.workspace.as_str().to_string(),
+        intent: Some(plan_intent_to_proto(&plan.query)),
+        workspace_sources_loaded: plan
+            .workspace_sources_loaded
+            .iter()
+            .map(|source| source.as_str().to_string())
+            .collect(),
+        referenced_tables: Vec::new(),
+        steps: vec![plan_step_to_proto(&plan.query)],
+        policy_checks: vec![local_default_policy_check_to_proto()],
+        cost_estimate: Some(unknown_cost_estimate_to_proto()),
+        execution: Some(plan_execution_to_proto(&plan.execution)),
+        memory_status: MemoryStatusProto::NotApplicable as i32,
+    }
+}
+
+fn plan_intent_to_proto(query: &app_plan::PlannedQuery) -> PlanIntentProto {
+    match query {
+        app_plan::PlannedQuery::Sql(sql) => PlanIntentProto {
+            intent: Some(plan_intent::Intent::Sql(SqlIntentProto {
+                sql: sql.clone(),
+            })),
+        },
+    }
+}
+
+fn plan_step_to_proto(query: &app_plan::PlannedQuery) -> PlanStepProto {
+    match query {
+        app_plan::PlannedQuery::Sql(sql) => PlanStepProto {
+            step: Some(plan_step::Step::RelationalSql(RelationalSqlStepProto {
+                sql: sql.clone(),
+            })),
+        },
+    }
+}
+
+fn local_default_policy_check_to_proto() -> PolicyCheckProto {
+    PolicyCheckProto {
+        check: Some(policy_check::Check::LocalDefault(
+            LocalDefaultPolicyCheckProto {
+                status: PolicyCheckStatusProto::NotEvaluated as i32,
+            },
+        )),
+    }
+}
+
+fn unknown_cost_estimate_to_proto() -> CostEstimateProto {
+    CostEstimateProto {
+        status: CostEstimateStatusProto::Unknown as i32,
+    }
+}
+
+fn plan_execution_to_proto(execution: &app_plan::PlanExecution) -> PlanExecutionProto {
+    PlanExecutionProto {
+        status: match execution.status {
+            app_plan::PlanExecutionStatus::NotStarted => PlanExecutionStatusProto::NotStarted,
+            app_plan::PlanExecutionStatus::Running => PlanExecutionStatusProto::Running,
+            app_plan::PlanExecutionStatus::Ok => PlanExecutionStatusProto::Ok,
+            app_plan::PlanExecutionStatus::Error => PlanExecutionStatusProto::Error,
+        } as i32,
+        trace_id: execution
+            .trace_id
+            .as_deref()
+            .unwrap_or_default()
+            .to_string(),
+        row_count: execution.row_count.unwrap_or_default(),
+        row_count_recorded: execution.row_count.is_some(),
+        error_type: execution
+            .error_type
+            .as_ref()
+            .map(app_plan::PlanError::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        warnings: execution
+            .warnings
+            .iter()
+            .map(plan_warning_to_proto)
+            .collect(),
+        started_at: execution
+            .started_at
+            .map(|timestamp| timestamp.to_rfc3339())
+            .unwrap_or_default(),
+        completed_at: execution
+            .completed_at
+            .map(|timestamp| timestamp.to_rfc3339())
+            .unwrap_or_default(),
+    }
+}
+
+fn plan_warning_to_proto(warning: &app_plan::PlanWarning) -> PlanWarningProto {
+    match warning {
+        app_plan::PlanWarning::SourceSkipped { source, message } => PlanWarningProto {
+            warning: Some(plan_warning::Warning::SourceSkipped(
+                SourceSkippedWarningProto {
+                    source: source.as_str().to_string(),
+                    message: message.clone(),
+                },
+            )),
+        },
+    }
+}
+
 pub(crate) fn table_to_proto(
     workspace_name: &WorkspaceName,
     table: coral_engine::TableInfo,
@@ -336,19 +451,26 @@ mod tests {
         reason = "proto shape assertions intentionally fail loudly in tests"
     )]
 
+    use chrono::TimeZone as _;
     use coral_api::{
         grpc_response_status_code,
-        v1::{QueryTestFailure, Workspace, query_test_result},
+        v1::{
+            CostEstimateStatus, MemoryStatus, PlanExecutionStatus, PolicyCheckStatus,
+            QueryTestFailure, Workspace, plan_intent, plan_step, plan_warning, policy_check,
+            query_test_result,
+        },
     };
     use tonic::{Code, Request};
 
     use super::{
-        GrpcMethodMetadata, GrpcServerMethod, grpc_method, query_status,
+        GrpcMethodMetadata, GrpcServerMethod, analytical_plan_to_proto, grpc_method, query_status,
         query_test_result_to_proto, table_summary_to_proto, table_to_proto,
         workspace_name_from_proto, workspace_to_proto,
     };
     use crate::bootstrap::AppError;
+    use crate::plan::{AnalyticalPlan, PlanWarning};
     use crate::query::manager::QueryManagerError;
+    use crate::sources::SourceName;
     use crate::workspaces::WorkspaceName;
     use coral_engine::{
         ColumnInfo, CoreError, QueryTestResult as EngineQueryTestResult, TableInfo,
@@ -431,6 +553,68 @@ mod tests {
             workspace_name_from_proto(Some(&workspace)).expect("workspace should parse");
 
         assert_eq!(workspace_name.as_str(), "default");
+    }
+
+    #[test]
+    fn analytical_plan_to_proto_preserves_execution_evidence() {
+        let workspace_name = WorkspaceName::parse("default").expect("workspace");
+        let started_at = chrono::Utc
+            .with_ymd_and_hms(2026, 5, 14, 10, 0, 0)
+            .single()
+            .expect("started at");
+        let completed_at = chrono::Utc
+            .with_ymd_and_hms(2026, 5, 14, 10, 0, 1)
+            .single()
+            .expect("completed at");
+        let mut plan = AnalyticalPlan::from_sql(&workspace_name, "SELECT 1");
+        plan.record_source_load(
+            vec![SourceName::parse("local_messages").expect("source name")],
+            vec![PlanWarning::source_skipped(
+                SourceName::parse("secured_messages").expect("source name"),
+                "missing secret 'API_TOKEN'",
+            )],
+        );
+        plan.mark_execution_started(started_at);
+        plan.record_success(0, Some("trace-123".to_string()), completed_at);
+
+        let proto = analytical_plan_to_proto(&plan);
+
+        assert_eq!(proto.plan_id, plan.plan_id.as_str());
+        assert_eq!(proto.workspace, "default");
+        assert!(proto.referenced_tables.is_empty());
+        let intent = proto.intent.expect("intent");
+        assert!(matches!(
+            intent.intent,
+            Some(plan_intent::Intent::Sql(sql)) if sql.sql == "SELECT 1"
+        ));
+        assert_eq!(proto.workspace_sources_loaded, vec!["local_messages"]);
+        assert!(matches!(
+            proto.steps.first().expect("step").step.as_ref(),
+            Some(plan_step::Step::RelationalSql(sql)) if sql.sql == "SELECT 1"
+        ));
+        assert!(matches!(
+            proto.policy_checks.first().expect("policy").check.as_ref(),
+            Some(policy_check::Check::LocalDefault(check))
+                if check.status == PolicyCheckStatus::NotEvaluated as i32
+        ));
+        assert_eq!(
+            proto.cost_estimate.expect("cost estimate").status,
+            CostEstimateStatus::Unknown as i32
+        );
+        assert_eq!(proto.memory_status, MemoryStatus::NotApplicable as i32);
+        let execution = proto.execution.expect("execution");
+        assert_eq!(execution.status, PlanExecutionStatus::Ok as i32);
+        assert_eq!(execution.trace_id, "trace-123");
+        assert_eq!(execution.row_count, 0);
+        assert!(execution.row_count_recorded);
+        assert_eq!(execution.started_at, started_at.to_rfc3339());
+        assert_eq!(execution.completed_at, completed_at.to_rfc3339());
+        let warning = execution.warnings.first().expect("warning");
+        assert!(matches!(
+            warning.warning.as_ref(),
+            Some(plan_warning::Warning::SourceSkipped(warning))
+                if warning.source == "secured_messages" && warning.message.contains("API_TOKEN")
+        ));
     }
 
     #[test]

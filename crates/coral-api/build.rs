@@ -16,6 +16,7 @@ fn main() {
                 "proto/coral/v1/resources.proto",
                 "proto/coral/v1/feedback.proto",
                 "proto/coral/v1/sources.proto",
+                "proto/coral/v1/plan.proto",
                 "proto/coral/v1/query.proto",
                 "proto/coral/v1/traces.proto",
             ],

@@ -9,8 +9,10 @@ use std::fs;
 use coral_api::v1::{
     CreateBundledSourceRequest, DeleteSourceRequest, DiscoverSourcesRequest, ExecuteSqlRequest,
     ExplainSqlRequest, GetSourceInfoRequest, GetSourceRequest, ImportSourceRequest,
-    ListTablesRequest, PaginationRequest, QueryTestFailure, QueryTestSuccess, SourceOrigin,
-    SourceSecret, SourceVariable, ValidateSourceRequest, Workspace, query_test_result,
+    ListTablesRequest, MemoryStatus, PaginationRequest, PlanExecutionStatus, PolicyCheckStatus,
+    QueryTestFailure, QueryTestSuccess, SourceOrigin, SourceSecret, SourceVariable,
+    ValidateSourceRequest, Workspace, plan_intent, plan_step, plan_warning, policy_check,
+    query_test_result,
 };
 use coral_client::default_workspace;
 use tempfile::TempDir;
@@ -218,6 +220,110 @@ async fn validate_source_returns_tables() {
         .await;
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["text"], "hello");
+}
+
+#[tokio::test]
+async fn execute_sql_response_includes_analytical_plan() {
+    let harness = GrpcHarness::new().await;
+    harness
+        .import_source(
+            fixture_manifest_yaml(harness.temp_path()),
+            Vec::new(),
+            Vec::new(),
+        )
+        .await;
+
+    let sql = "SELECT * FROM local_messages.messages WHERE text = 'missing'";
+    let response = harness
+        .query_client()
+        .execute_sql(Request::new(ExecuteSqlRequest {
+            workspace: Some(default_workspace()),
+            sql: sql.to_string(),
+        }))
+        .await
+        .expect("execute sql")
+        .into_inner();
+
+    assert_eq!(response.row_count, 0);
+    let plan = response.plan.expect("execute sql plan");
+    assert!(plan.plan_id.starts_with("plan_"));
+    assert_eq!(plan.workspace, "default");
+    assert_eq!(plan.workspace_sources_loaded, vec!["local_messages"]);
+    let intent = plan.intent.expect("intent");
+    assert!(matches!(
+        intent.intent,
+        Some(plan_intent::Intent::Sql(sql_intent)) if sql_intent.sql == sql
+    ));
+    let step = plan.steps.first().expect("plan step");
+    assert!(matches!(
+        step.step.as_ref(),
+        Some(plan_step::Step::RelationalSql(sql_step)) if sql_step.sql == sql
+    ));
+    assert!(matches!(
+        plan.policy_checks
+            .first()
+            .expect("policy check")
+            .check
+            .as_ref(),
+        Some(policy_check::Check::LocalDefault(check))
+            if check.status == PolicyCheckStatus::NotEvaluated as i32
+    ));
+    assert_eq!(plan.memory_status, MemoryStatus::NotApplicable as i32);
+    let execution = plan.execution.expect("plan execution");
+    assert_eq!(execution.status, PlanExecutionStatus::Ok as i32);
+    assert_eq!(execution.row_count, 0);
+    assert!(execution.row_count_recorded);
+    assert!(execution.error_type.is_empty());
+    assert!(execution.started_at.contains('T'));
+    assert!(execution.completed_at.contains('T'));
+}
+
+#[tokio::test]
+async fn execute_sql_response_plan_includes_source_load_warnings() {
+    let harness = GrpcHarness::new().await;
+    harness
+        .import_source(
+            fixture_manifest_yaml(harness.temp_path()),
+            Vec::new(),
+            Vec::new(),
+        )
+        .await;
+    harness
+        .import_source(
+            fixture_manifest_with_inputs_yaml(),
+            vec![SourceVariable {
+                key: "API_BASE".to_string(),
+                value: "https://example.com".to_string(),
+            }],
+            vec![SourceSecret {
+                key: "API_TOKEN".to_string(),
+                value: "secret-token".to_string(),
+            }],
+        )
+        .await;
+    fs::remove_file(source_dir(harness.config_dir(), "secured_messages").join("secrets.env"))
+        .expect("remove persisted secret");
+
+    let response = harness
+        .query_client()
+        .execute_sql(Request::new(ExecuteSqlRequest {
+            workspace: Some(default_workspace()),
+            sql: "SELECT * FROM local_messages.messages LIMIT 1".to_string(),
+        }))
+        .await
+        .expect("execute sql")
+        .into_inner();
+
+    let plan = response.plan.expect("execute sql plan");
+    assert_eq!(plan.workspace_sources_loaded, vec!["local_messages"]);
+    let execution = plan.execution.expect("plan execution");
+    let warning = execution.warnings.first().expect("source load warning");
+    assert!(matches!(
+        warning.warning.as_ref(),
+        Some(plan_warning::Warning::SourceSkipped(warning))
+            if warning.source == "secured_messages"
+                && warning.message.contains("missing secret 'API_TOKEN'")
+    ));
 }
 
 #[tokio::test]

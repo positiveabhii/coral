@@ -25,9 +25,10 @@ A query follows this path:
 1. **Entry point:** a user runs `coral sql` or an agent calls the `sql` MCP tool
 2. **Bootstrap:** the caller decides whether to start a local `coral-app` server or dial an existing endpoint
 3. **`coral-client`:** connects to that endpoint and sends the request over gRPC
-4. **`coral-app`:** loads installed sources from local state, delegates spec validation to `coral-spec`, and hands validated specs to `coral-engine`
+4. **`coral-app`:** creates an app-local analytical plan, loads installed sources from local state, delegates spec validation to `coral-spec`, and hands validated specs to `coral-engine`
 5. **`coral-engine`:** compiles specs into DataFusion table providers, registers them in a session, and executes SQL
-6. **Result:** Arrow record batches flow back through gRPC to the client, which formats them as table or JSON output (CLI) or structured MCP tool results (MCP)
+6. **Evidence:** the plan records the original SQL intent, loaded source context, execution status, row count, warnings, and trace linkage
+7. **Result:** Arrow record batches and the analytical plan flow back through gRPC; clients decode the Arrow result for table or JSON output while the transport contract preserves plan evidence for API consumers
 
 ## Crates
 
@@ -66,7 +67,8 @@ The local server and core orchestrator.
 | Source management | Install, add from file, list, validate, remove (`sources/`) |
 | Workspace state | Config, secrets, and workspace layout (`state/`, `storage/`) |
 | Feedback persistence | Workspace-scoped blocked-agent feedback reports (`feedback/`) |
-| Query orchestration | Loads sources, builds the engine, executes SQL (`query/`) |
+| Analytical planning | App-local plan objects that wrap SQL intent, source-load context, execution evidence, and trace linkage (`plan/`) |
+| Query orchestration | Creates plans, loads sources, builds the engine, executes SQL (`query/`) |
 
 This is the largest crate. It ties `coral-spec` and `coral-engine` together and manages all persistent local state.
 
@@ -113,7 +115,7 @@ The shared gRPC contract.
 
 | Owns                 | Details                                                                                |
 | -------------------- | -------------------------------------------------------------------------------------- |
-| Protobuf definitions | `proto/coral/v1/` — `query.proto`, `sources.proto`, `catalog.proto`, `resources.proto` |
+| Protobuf definitions | `proto/coral/v1/` — `query.proto`, `plan.proto`, `sources.proto`, `catalog.proto`, `resources.proto` |
 | Generated bindings   | Tonic-generated Rust types and service traits                                          |
 
 All inter-crate communication between `coral-client` and `coral-app` goes through these generated types.
@@ -135,4 +137,5 @@ graph TD
 ## Key design choices
 
 - **Local gRPC server.** The CLI and MCP server don't embed the engine directly, they go through a local gRPC server managed by `coral-app`. This keeps the engine lifecycle in one place and makes the client/server boundary explicit.
+- **App-local analytical plans.** `coral-app` creates a minimal plan object above query execution and below user-facing Ask, UI, gateway, CLI, and MCP surfaces. V0 plans are ephemeral and trace-linked, and successful `ExecuteSqlResponse` messages expose the plan alongside Arrow bytes and row count.
 - **Spec vs engine separation.** `coral-spec` is pure validation (no I/O, no runtime). `coral-engine` is pure execution (no YAML parsing, no persistence). `coral-app` bridges the two.
