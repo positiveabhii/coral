@@ -10,7 +10,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use coral_spec::types::projection::{ProjectionFilter, ProjectionScalarType, TableProjection};
+use coral_spec::types::projection::{
+    ProjectionCardinality, ProjectionFilter, ProjectionScalarType, TableProjection,
+};
 use coral_spec::types::source::{
     Binding, HeaderValue, HttpMethod, JsonPath, OperationId, Surface, SurfaceKind,
 };
@@ -32,6 +34,7 @@ const DEFAULT_SOURCE_MODEL_USER_AGENT: &str = concat!("coral/", env!("CARGO_PKG_
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectionTableShape {
     pub(crate) schema: SchemaRef,
+    pub(crate) output_cardinality: ProjectionCardinality,
     pub(crate) output_columns: Vec<String>,
     pub(crate) filter_only_columns: Vec<String>,
     pub(crate) required_filters: Vec<String>,
@@ -110,7 +113,8 @@ impl SourceModelTableProvider {
         &self,
         operation_inputs: SourceModelOperationInputs,
         request: Option<SourceModelRestRequest>,
-        items_path: Vec<String>,
+        output_path: Vec<String>,
+        output_cardinality: ProjectionCardinality,
         client: Option<reqwest::Client>,
         projection: Option<&Vec<usize>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -118,7 +122,8 @@ impl SourceModelTableProvider {
             (Some(request), Some(client)) => Arc::new(SourceModelRestFetchPlan {
                 client,
                 request,
-                items_path,
+                output_path,
+                output_cardinality,
             }),
             _ => Arc::new(EmptySourceModelFetchPlan),
         };
@@ -155,12 +160,13 @@ impl SourceModelTableProvider {
             limit,
         )?;
         let http = runtime.binding.protocol().as_http();
-        let items_path = json_path_segments(http.response().items_path())?;
+        let output_path = json_path_segments(http.response().output_path())?;
 
         self.json_exec(
             operation_inputs,
             Some(request),
-            items_path,
+            output_path,
+            self.shape.output_cardinality,
             Some(runtime.client.clone()),
             projection,
         )
@@ -171,7 +177,14 @@ impl SourceModelTableProvider {
         operation_inputs: SourceModelOperationInputs,
         projection: Option<&Vec<usize>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.json_exec(operation_inputs, None, Vec::new(), None, projection)
+        self.json_exec(
+            operation_inputs,
+            None,
+            Vec::new(),
+            self.shape.output_cardinality,
+            None,
+            projection,
+        )
     }
 
     pub(crate) fn rest_request_from_filters(
@@ -277,7 +290,8 @@ impl RowFetcher for EmptySourceModelFetchPlan {
 struct SourceModelRestFetchPlan {
     client: reqwest::Client,
     request: SourceModelRestRequest,
-    items_path: Vec<String>,
+    output_path: Vec<String>,
+    output_cardinality: ProjectionCardinality,
 }
 
 #[async_trait]
@@ -326,22 +340,36 @@ impl RowFetcher for SourceModelRestFetchPlan {
                 self.request.operation.as_str()
             ))
         })?;
-        let items = get_path_value(&payload, &self.items_path).ok_or_else(|| {
+        let output = get_path_value(&payload, &self.output_path).ok_or_else(|| {
             DataFusionError::Execution(format!(
-                "REST response for operation '{}' did not contain items at '{}'",
+                "REST response for operation '{}' did not contain output at '{}'",
                 self.request.operation.as_str(),
-                display_json_path(&self.items_path)
-            ))
-        })?;
-        let items = items.as_array().ok_or_else(|| {
-            DataFusionError::Execution(format!(
-                "REST response items at '{}' for operation '{}' were not an array",
-                display_json_path(&self.items_path),
-                self.request.operation.as_str()
+                display_json_path(&self.output_path)
             ))
         })?;
 
-        Ok(items.clone())
+        match self.output_cardinality {
+            ProjectionCardinality::Many => {
+                let items = output.as_array().ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "REST response output at '{}' for operation '{}' was not an array",
+                        display_json_path(&self.output_path),
+                        self.request.operation.as_str()
+                    ))
+                })?;
+                Ok(items.clone())
+            }
+            ProjectionCardinality::One => {
+                if !output.is_object() {
+                    return Err(DataFusionError::Execution(format!(
+                        "REST response output at '{}' for operation '{}' was not an object",
+                        display_json_path(&self.output_path),
+                        self.request.operation.as_str()
+                    )));
+                }
+                Ok(vec![output.clone()])
+            }
+        }
     }
 }
 
@@ -383,6 +411,7 @@ pub(crate) fn table_shape_from_projection(projection: &TableProjection) -> Proje
 
     ProjectionTableShape {
         schema: Arc::new(Schema::new(fields)),
+        output_cardinality: projection.cardinality(),
         output_columns,
         filter_only_columns,
         required_filters,
@@ -565,15 +594,13 @@ fn expand_path_template(
     let mut rendered = String::new();
     let mut rest = template;
 
-    while let Some(start) = rest.find('{') {
-        rendered.push_str(&rest[..start]);
-        let after_start = &rest[start + 1..];
-        let Some(end) = after_start.find('}') else {
+    while let Some((prefix, after_start)) = rest.split_once('{') {
+        rendered.push_str(prefix);
+        let Some((name, remaining)) = after_start.split_once('}') else {
             return Err(DataFusionError::Execution(format!(
                 "REST path template '{template}' has an unclosed input placeholder"
             )));
         };
-        let name = &after_start[..end];
         if name.is_empty() || name.contains('{') {
             return Err(DataFusionError::Execution(format!(
                 "REST path template '{template}' has an invalid input placeholder"
@@ -585,7 +612,7 @@ fn expand_path_template(
             ))
         })?;
         rendered.push_str(&urlencoding::encode(value));
-        rest = &after_start[end + 1..];
+        rest = remaining;
     }
 
     if rest.contains('}') {
@@ -614,8 +641,10 @@ fn build_url(base_url: &str, path: &str, query_params: &[(String, String)]) -> R
     let mut url = reqwest::Url::parse(&joined).map_err(|error| {
         DataFusionError::Execution(format!("REST request URL '{joined}' is invalid: {error}"))
     })?;
-    url.query_pairs_mut()
-        .extend_pairs(query_params.iter().map(|(name, value)| (&**name, &**value)));
+    if !query_params.is_empty() {
+        url.query_pairs_mut()
+            .extend_pairs(query_params.iter().map(|(name, value)| (&**name, &**value)));
+    }
     Ok(url.to_string())
 }
 
@@ -791,10 +820,9 @@ fn field_for_filter(filter: &ProjectionFilter) -> Field {
 
 fn data_type_for_projection_type(ty: &ProjectionScalarType) -> DataType {
     match ty {
-        ProjectionScalarType::String => DataType::Utf8,
+        ProjectionScalarType::String | ProjectionScalarType::Json => DataType::Utf8,
         ProjectionScalarType::Integer => DataType::Int64,
         ProjectionScalarType::Boolean => DataType::Boolean,
-        ProjectionScalarType::Json => DataType::Utf8,
     }
 }
 
@@ -803,9 +831,12 @@ mod tests {
     use std::collections::HashMap;
     use std::env;
 
-    use coral_spec::types::projection::{github_issue_search_projection, github_issues_projection};
+    use coral_spec::types::projection::{
+        github_issue_projection, github_issue_search_projection, github_issues_projection,
+    };
     use coral_spec::types::source::{
-        github_issue_list_rest_binding, github_issue_search_rest_binding, github_rest_surface,
+        github_issue_get_rest_binding, github_issue_list_rest_binding,
+        github_issue_search_rest_binding, github_rest_surface,
     };
     use datafusion::arrow::array::{Array, Int64Array, StringArray};
     use datafusion::arrow::util::pretty::pretty_format_batches;
@@ -853,6 +884,20 @@ mod tests {
 
     fn github_issue_search_provider() -> SourceModelTableProvider {
         SourceModelTableProvider::new("github", &github_issue_search_projection())
+    }
+
+    fn github_issue_provider() -> SourceModelTableProvider {
+        SourceModelTableProvider::new("github", &github_issue_projection())
+    }
+
+    fn github_issue_rest_provider_with_base_url(base_url: &str) -> SourceModelTableProvider {
+        SourceModelTableProvider::new_rest(
+            "github",
+            &github_issue_projection(),
+            github_rest_surface().with_base_url(base_url),
+            github_issue_get_rest_binding(),
+            BTreeMap::from([("GITHUB_TOKEN".to_string(), "ghp_test".to_string())]),
+        )
     }
 
     fn github_issue_search_rest_provider_with_token(
@@ -903,6 +948,19 @@ mod tests {
             .expect("github schema should register");
     }
 
+    fn register_github_issue(ctx: &SessionContext, provider: SourceModelTableProvider) {
+        let catalog = ctx.catalog("datafusion").expect("default catalog");
+        catalog
+            .register_schema(
+                "github",
+                Arc::new(StaticSchemaProvider::new(HashMap::from([(
+                    "issue".to_string(),
+                    Arc::new(provider) as Arc<dyn TableProvider>,
+                )]))),
+            )
+            .expect("github schema should register");
+    }
+
     #[test]
     fn builds_arrow_schema_from_github_issues_projection() {
         let projection = github_issues_projection();
@@ -936,6 +994,7 @@ mod tests {
             shape.output_columns,
             vec!["number", "title", "state", "created_at", "html_url", "user"]
         );
+        assert_eq!(shape.output_cardinality, ProjectionCardinality::Many);
         assert_eq!(shape.filter_only_columns, vec!["owner", "repo"]);
         assert_eq!(shape.required_filters, vec!["owner", "repo"]);
     }
@@ -1093,8 +1152,9 @@ mod tests {
             .expect("projected stream should collect");
 
         assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].num_columns(), 2);
-        assert_eq!(batches[0].num_rows(), 0);
+        let batch = batches.first().expect("one projected batch");
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 0);
     }
 
     #[tokio::test]
@@ -1324,6 +1384,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn builds_github_issue_get_rest_request_from_operation_inputs() {
+        let provider = github_issue_provider();
+        let surface = github_rest_surface();
+        let binding = github_issue_get_rest_binding();
+        let source_inputs = BTreeMap::from([("GITHUB_TOKEN".to_string(), "ghp_test".to_string())]);
+        let request = provider
+            .rest_request_from_filters(
+                &surface,
+                &binding,
+                &source_inputs,
+                &[
+                    col("owner").eq(lit("withcoral")),
+                    col("repo").eq(lit("coral")),
+                    col("issue_number").eq(lit(42_i64)),
+                ],
+                Some(5),
+            )
+            .expect("request should build from required get inputs");
+
+        assert_eq!(request.operation.as_str(), "github.issue.get");
+        assert_eq!(request.method, HttpMethod::Get);
+        assert_eq!(
+            request.url,
+            "https://api.github.com/repos/withcoral/coral/issues/42"
+        );
+        assert!(request.query_params.is_empty());
+    }
+
     #[tokio::test]
     async fn datafusion_query_fetches_github_issue_search_from_wrapped_response() {
         let server = MockServer::start().await;
@@ -1418,6 +1507,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn datafusion_query_fetches_single_github_issue_from_object_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/withcoral/coral/issues/42"))
+            .and(header("Accept", "application/vnd.github+json"))
+            .and(header("X-GitHub-Api-Version", "2022-11-28"))
+            .and(header("Authorization", "Bearer ghp_test"))
+            .and(header("User-Agent", DEFAULT_SOURCE_MODEL_USER_AGENT))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "number": 42,
+                "title": "Singleton issue",
+                "state": "open",
+                "created_at": "2026-05-13T09:00:00Z",
+                "html_url": "https://github.com/withcoral/coral/issues/42",
+                "user": { "login": "simonwhitaker" }
+            })))
+            .mount(&server)
+            .await;
+
+        let ctx = SessionContext::new();
+        register_github_issue(
+            &ctx,
+            github_issue_rest_provider_with_base_url(&server.uri()),
+        );
+
+        let batches = ctx
+            .sql(
+                "SELECT number, title, state \
+                 FROM github.issue \
+                 WHERE owner = 'withcoral' \
+                   AND repo = 'coral' \
+                   AND issue_number = 42",
+            )
+            .await
+            .expect("source-model singleton query should plan")
+            .collect()
+            .await
+            .expect("source-model singleton query should execute");
+
+        let batch = batches.first().expect("one batch");
+        assert_eq!(batch.num_rows(), 1);
+        assert_eq!(
+            batch
+                .column_by_name("number")
+                .expect("number column")
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("number should be int64")
+                .value(0),
+            42
+        );
+        assert_eq!(
+            batch
+                .column_by_name("title")
+                .expect("title column")
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("title should be string")
+                .value(0),
+            "Singleton issue"
+        );
+    }
+
+    #[tokio::test]
     async fn datafusion_query_without_required_github_owner_fails_clearly() {
         let ctx = SessionContext::new();
         register_github_issues(&ctx, github_issues_rest_provider());
@@ -1443,7 +1596,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires live GitHub API access and GITHUB_TOKEN"]
-    #[allow(
+    #[expect(
         clippy::disallowed_methods,
         clippy::print_stderr,
         reason = "ignored live source-model harness reads GITHUB_TOKEN and prints rerunnable CLI-visible output"
@@ -1487,7 +1640,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires live GitHub API access and GITHUB_TOKEN"]
-    #[allow(
+    #[expect(
         clippy::disallowed_methods,
         clippy::print_stderr,
         reason = "ignored live source-model harness reads GITHUB_TOKEN and prints rerunnable CLI-visible output"

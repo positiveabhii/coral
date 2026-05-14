@@ -94,11 +94,21 @@ impl ProjectionFilter {
     }
 }
 
+/// Number of rows an operation output can produce for one invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectionCardinality {
+    /// The operation returns at most one projected row.
+    One,
+    /// The operation returns zero or more projected rows.
+    Many,
+}
+
 /// SQL-facing projection over a logical source operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableProjection {
     name: String,
     operation: OperationId,
+    cardinality: ProjectionCardinality,
     columns: Vec<ProjectionColumn>,
     filters: Vec<ProjectionFilter>,
 }
@@ -107,12 +117,14 @@ impl TableProjection {
     fn new(
         name: impl Into<String>,
         operation: OperationId,
+        cardinality: ProjectionCardinality,
         columns: Vec<ProjectionColumn>,
         filters: Vec<ProjectionFilter>,
     ) -> Self {
         Self {
             name: name.into(),
             operation,
+            cardinality,
             columns,
             filters,
         }
@@ -125,7 +137,8 @@ impl TableProjection {
         operation: OperationId,
     ) -> Option<Self> {
         let operation_model = model.operation(&operation)?;
-        let entity = model.entity(operation_model.entity())?;
+        let (entity_id, cardinality) = output_entity_and_cardinality(operation_model.output())?;
+        let entity = model.entity(entity_id)?;
         let columns = entity
             .fields()
             .iter()
@@ -137,7 +150,7 @@ impl TableProjection {
             .map(projection_filter_for_operation_input)
             .collect::<Vec<_>>();
 
-        Some(Self::new(name, operation, columns, filters))
+        Some(Self::new(name, operation, cardinality, columns, filters))
     }
 
     /// Returns the fully qualified SQL table name.
@@ -148,6 +161,11 @@ impl TableProjection {
     /// Returns the logical source operation backing this projection.
     pub fn operation(&self) -> &OperationId {
         &self.operation
+    }
+
+    /// Returns how many rows this operation can emit per invocation.
+    pub fn cardinality(&self) -> ProjectionCardinality {
+        self.cardinality
     }
 
     /// Returns response fields exposed by this projection.
@@ -171,6 +189,10 @@ impl TableProjection {
 }
 
 /// Returns the spike projection for `github.issues`.
+///
+/// # Panics
+///
+/// Panics if the built-in GitHub issue list operation no longer resolves.
 pub fn github_issues_projection() -> TableProjection {
     TableProjection::from_source_operation(
         &github_source_model(),
@@ -181,6 +203,10 @@ pub fn github_issues_projection() -> TableProjection {
 }
 
 /// Returns the spike projection for `github.issue_search`.
+///
+/// # Panics
+///
+/// Panics if the built-in GitHub issue search operation no longer resolves.
 pub fn github_issue_search_projection() -> TableProjection {
     TableProjection::from_source_operation(
         &github_source_model(),
@@ -188,6 +214,33 @@ pub fn github_issue_search_projection() -> TableProjection {
         OperationId::new("github.issue.search"),
     )
     .expect("github issue search operation should resolve")
+}
+
+/// Returns the spike projection for `github.issue`.
+///
+/// # Panics
+///
+/// Panics if the built-in GitHub issue get operation no longer resolves.
+pub fn github_issue_projection() -> TableProjection {
+    TableProjection::from_source_operation(
+        &github_source_model(),
+        "github.issue",
+        OperationId::new("github.issue.get"),
+    )
+    .expect("github issue get operation should resolve")
+}
+
+fn output_entity_and_cardinality(
+    output: &TypeRef,
+) -> Option<(&super::source::EntityId, ProjectionCardinality)> {
+    match output {
+        TypeRef::Entity(entity) => Some((entity, ProjectionCardinality::One)),
+        TypeRef::List(inner) => match inner.as_ref() {
+            TypeRef::Entity(entity) => Some((entity, ProjectionCardinality::Many)),
+            _ => None,
+        },
+        TypeRef::Scalar(_) => None,
+    }
 }
 
 fn projection_column_for_entity_field(field: &EntityField) -> ProjectionColumn {
@@ -212,7 +265,7 @@ fn projection_type_for_type_ref(ty: &TypeRef) -> ProjectionScalarType {
         TypeRef::Scalar(ScalarType::String) => ProjectionScalarType::String,
         TypeRef::Scalar(ScalarType::Integer) => ProjectionScalarType::Integer,
         TypeRef::Scalar(ScalarType::Boolean) => ProjectionScalarType::Boolean,
-        TypeRef::Entity(_) | TypeRef::Collection(_) => ProjectionScalarType::Json,
+        TypeRef::Entity(_) | TypeRef::List(_) => ProjectionScalarType::Json,
     }
 }
 
@@ -226,6 +279,7 @@ mod tests {
 
         assert_eq!(projection.name(), "github.issues");
         assert_eq!(projection.operation().as_str(), "github.issue.list");
+        assert_eq!(projection.cardinality(), ProjectionCardinality::Many);
     }
 
     #[test]
@@ -276,6 +330,7 @@ mod tests {
 
         assert_eq!(projection.name(), "github.issue_search");
         assert_eq!(projection.operation().as_str(), "github.issue.search");
+        assert_eq!(projection.cardinality(), ProjectionCardinality::Many);
     }
 
     #[test]
@@ -291,5 +346,16 @@ mod tests {
 
         assert_eq!(required, vec!["q"]);
         assert_eq!(optional_filters, vec!["sort", "order"]);
+    }
+
+    #[test]
+    fn github_issue_projection_references_singleton_get_operation() {
+        let projection = github_issue_projection();
+        let required = projection.required_filter_names();
+
+        assert_eq!(projection.name(), "github.issue");
+        assert_eq!(projection.operation().as_str(), "github.issue.get");
+        assert_eq!(projection.cardinality(), ProjectionCardinality::One);
+        assert_eq!(required, vec!["owner", "repo", "issue_number"]);
     }
 }

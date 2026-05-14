@@ -22,21 +22,16 @@ pub enum ScalarType {
 pub enum TypeRef {
     Scalar(ScalarType),
     Entity(EntityId),
-    Collection(Box<TypeRef>),
+    List(Box<TypeRef>),
 }
 
 impl TypeRef {
-    pub fn collection(inner: TypeRef) -> Self {
-        Self::Collection(Box::new(inner))
+    pub fn list(inner: TypeRef) -> Self {
+        Self::List(Box::new(inner))
     }
 }
 
 // ----- Operations ---------------------------------------
-
-#[derive(Debug, PartialEq)]
-pub enum OperationKind {
-    List,
-}
 
 #[derive(Debug)]
 pub struct OperationInput {
@@ -94,8 +89,7 @@ impl OperationId {
 #[derive(Debug)]
 pub struct Operation {
     id: OperationId,
-    kind: OperationKind,
-    entity: EntityId,
+    output: TypeRef,
     inputs: Vec<OperationInput>,
 }
 
@@ -104,12 +98,8 @@ impl Operation {
         &self.id
     }
 
-    pub fn kind(&self) -> &OperationKind {
-        &self.kind
-    }
-
-    pub fn entity(&self) -> &EntityId {
-        &self.entity
+    pub fn output(&self) -> &TypeRef {
+        &self.output
     }
 
     pub fn inputs(&self) -> &[OperationInput] {
@@ -437,12 +427,12 @@ impl QueryParamBinding {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResponseBinding {
-    items_path: JsonPath,
+    output_path: JsonPath,
 }
 
 impl ResponseBinding {
-    pub fn items_path(&self) -> &JsonPath {
-        &self.items_path
+    pub fn output_path(&self) -> &JsonPath {
+        &self.output_path
     }
 }
 
@@ -527,8 +517,7 @@ pub fn github_issue_entity() -> Entity {
 pub fn github_issue_list_operation() -> Operation {
     Operation {
         id: OperationId::new("github.issue.list"),
-        kind: OperationKind::List,
-        entity: EntityId::new("github.issue"),
+        output: TypeRef::list(TypeRef::Entity(EntityId::new("github.issue"))),
         inputs: vec![
             OperationInput::required("owner", TypeRef::Scalar(ScalarType::String)),
             OperationInput::required("repo", TypeRef::Scalar(ScalarType::String)),
@@ -540,12 +529,23 @@ pub fn github_issue_list_operation() -> Operation {
 pub fn github_issue_search_operation() -> Operation {
     Operation {
         id: OperationId::new("github.issue.search"),
-        kind: OperationKind::List,
-        entity: EntityId::new("github.issue"),
+        output: TypeRef::list(TypeRef::Entity(EntityId::new("github.issue"))),
         inputs: vec![
             OperationInput::required("q", TypeRef::Scalar(ScalarType::String)),
             OperationInput::optional("sort", TypeRef::Scalar(ScalarType::String)),
             OperationInput::optional("order", TypeRef::Scalar(ScalarType::String)),
+        ],
+    }
+}
+
+pub fn github_issue_get_operation() -> Operation {
+    Operation {
+        id: OperationId::new("github.issue.get"),
+        output: TypeRef::Entity(EntityId::new("github.issue")),
+        inputs: vec![
+            OperationInput::required("owner", TypeRef::Scalar(ScalarType::String)),
+            OperationInput::required("repo", TypeRef::Scalar(ScalarType::String)),
+            OperationInput::required("issue_number", TypeRef::Scalar(ScalarType::Integer)),
         ],
     }
 }
@@ -558,10 +558,12 @@ pub fn github_source_model() -> SourceModel {
         operations: vec![
             github_issue_list_operation(),
             github_issue_search_operation(),
+            github_issue_get_operation(),
         ],
         bindings: vec![
             github_issue_list_rest_binding(),
             github_issue_search_rest_binding(),
+            github_issue_get_rest_binding(),
         ],
     }
 }
@@ -602,7 +604,7 @@ pub fn github_issue_list_rest_binding() -> Binding {
                 input: InputId::new("state"),
             }],
             response: ResponseBinding {
-                items_path: JsonPath("$".to_string()),
+                output_path: JsonPath("$".to_string()),
             },
             pagination: Some(Pagination::LinkHeader {
                 page_size: PageSize {
@@ -641,7 +643,7 @@ pub fn github_issue_search_rest_binding() -> Binding {
             // This spike projects rows only; response-level metadata needs an
             // explicit model concept before it should be exposed to SQL.
             response: ResponseBinding {
-                items_path: JsonPath("$.items".to_string()),
+                output_path: JsonPath("$.items".to_string()),
             },
             pagination: Some(Pagination::LinkHeader {
                 page_size: PageSize {
@@ -650,6 +652,23 @@ pub fn github_issue_search_rest_binding() -> Binding {
                     max: 100,
                 },
             }),
+        }),
+    }
+}
+
+pub fn github_issue_get_rest_binding() -> Binding {
+    Binding {
+        id: BindingId::new("github.issue.get.http"),
+        operation: OperationId::new("github.issue.get"),
+        surface: github_rest_surface().id,
+        protocol: BindingProtocol::Http(HttpBinding {
+            method: HttpMethod::Get,
+            path: "/repos/{owner}/{repo}/issues/{issue_number}".to_string(),
+            query: Vec::new(),
+            response: ResponseBinding {
+                output_path: JsonPath("$".to_string()),
+            },
+            pagination: None,
         }),
     }
 }
@@ -664,10 +683,16 @@ mod tests {
     fn source_model_can_be_created() {
         let gh_source_model = github_source_model();
 
-        assert_eq!(gh_source_model.operations().len(), 2);
-        assert_eq!(gh_source_model.operations()[0].kind(), &OperationKind::List);
+        assert_eq!(gh_source_model.operations().len(), 3);
         assert_eq!(gh_source_model.surfaces().len(), 1);
-        assert_eq!(gh_source_model.surfaces()[0].kind(), &SurfaceKind::Rest);
+        assert_eq!(
+            gh_source_model
+                .surfaces()
+                .first()
+                .expect("first surface")
+                .kind(),
+            &SurfaceKind::Rest
+        );
     }
 
     #[test]
@@ -684,19 +709,24 @@ mod tests {
     }
 
     #[test]
-    fn github_operations_reference_issue_entity() {
+    fn github_operations_express_issue_output_cardinality() {
         let model = github_source_model();
-        let issue = EntityId::new("github.issue");
+        let list = model
+            .operation(&OperationId::new("github.issue.list"))
+            .expect("list operation");
+        let get = model
+            .operation(&OperationId::new("github.issue.get"))
+            .expect("get operation");
 
         assert_eq!(
-            model
-                .operations()
-                .iter()
-                .map(Operation::entity)
-                .collect::<Vec<_>>(),
-            vec![&issue, &issue]
+            list.output(),
+            &TypeRef::list(TypeRef::Entity(EntityId::new("github.issue")))
         );
-        assert!(model.entity(&issue).is_some());
+        assert_eq!(
+            get.output(),
+            &TypeRef::Entity(EntityId::new("github.issue"))
+        );
+        assert!(model.entity(&EntityId::new("github.issue")).is_some());
     }
 
     #[test]
@@ -708,8 +738,9 @@ mod tests {
         assert_eq!(binding.surface().as_str(), "github.rest");
         assert_eq!(http.method(), HttpMethod::Get);
         assert_eq!(http.path(), "/repos/{owner}/{repo}/issues");
-        assert_eq!(http.query()[0].name(), "state");
-        assert_eq!(http.query()[0].input().as_str(), "state");
+        let state_query = http.query().first().expect("state query");
+        assert_eq!(state_query.name(), "state");
+        assert_eq!(state_query.input().as_str(), "state");
 
         let page_size = http
             .pagination()
@@ -736,7 +767,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("q", "q"), ("sort", "sort"), ("order", "order")]
         );
-        assert_eq!(http.response().items_path().as_str(), "$.items");
+        assert_eq!(http.response().output_path().as_str(), "$.items");
 
         let page_size = http
             .pagination()
@@ -745,5 +776,19 @@ mod tests {
         assert_eq!(page_size.query_param(), "per_page");
         assert_eq!(page_size.default(), 30);
         assert_eq!(page_size.max(), 100);
+    }
+
+    #[test]
+    fn github_issue_get_rest_binding_matches_singleton_request_shape() {
+        let binding = github_issue_get_rest_binding();
+        let http = binding.protocol().as_http();
+
+        assert_eq!(binding.operation().as_str(), "github.issue.get");
+        assert_eq!(binding.surface().as_str(), "github.rest");
+        assert_eq!(http.method(), HttpMethod::Get);
+        assert_eq!(http.path(), "/repos/{owner}/{repo}/issues/{issue_number}");
+        assert!(http.query().is_empty());
+        assert_eq!(http.response().output_path().as_str(), "$");
+        assert!(http.pagination().is_none());
     }
 }
