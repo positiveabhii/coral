@@ -69,6 +69,14 @@ fn build_table_functions_table(active_sources: &[RegisteredSource]) -> Result<Me
     rows.sort_by(|left, right| {
         (&left.schema_name, &left.function_name).cmp(&(&right.schema_name, &right.function_name))
     });
+    let arguments_json = rows
+        .iter()
+        .map(|row| table_function_arguments_json(row))
+        .collect::<Result<Vec<_>>>()?;
+    let result_columns_json = rows
+        .iter()
+        .map(|row| table_function_result_columns_json(row))
+        .collect::<Result<Vec<_>>>()?;
 
     let batch = RecordBatch::try_new(
         schema.clone(),
@@ -76,16 +84,48 @@ fn build_table_functions_table(active_sources: &[RegisteredSource]) -> Result<Me
             utf8_column(rows.iter().map(|row| Some(row.schema_name.as_str()))),
             utf8_column(rows.iter().map(|row| Some(row.function_name.as_str()))),
             utf8_column(rows.iter().map(|row| Some(row.description.as_str()))),
-            utf8_column(rows.iter().map(|row| Some(row.arguments_json.as_str()))),
-            utf8_column(
-                rows.iter()
-                    .map(|row| Some(row.result_columns_json.as_str())),
-            ),
+            utf8_column(arguments_json.iter().map(|value| Some(value.as_str()))),
+            utf8_column(result_columns_json.iter().map(|value| Some(value.as_str()))),
         ],
     )
     .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
 
     MemTable::try_new(schema, vec![vec![batch]])
+}
+
+fn table_function_arguments_json(row: &crate::backends::RegisteredTableFunction) -> Result<String> {
+    serde_json::to_string(
+        &row.arguments
+            .iter()
+            .map(|argument| {
+                serde_json::json!({
+                    "name": argument.name,
+                    "required": argument.required,
+                    "values": argument.values,
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|error| DataFusionError::External(Box::new(error)))
+}
+
+fn table_function_result_columns_json(
+    row: &crate::backends::RegisteredTableFunction,
+) -> Result<String> {
+    serde_json::to_string(
+        &row.result_columns
+            .iter()
+            .map(|column| {
+                serde_json::json!({
+                    "name": column.name,
+                    "type": column.data_type,
+                    "nullable": column.nullable,
+                    "description": column.description,
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|error| DataFusionError::External(Box::new(error)))
 }
 
 fn utf8_column<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRef {

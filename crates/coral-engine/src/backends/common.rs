@@ -46,8 +46,6 @@ pub(crate) struct RegisteredTableFunction {
     pub(crate) description: String,
     pub(crate) arguments: Vec<RegisteredTableFunctionArgument>,
     pub(crate) result_columns: Vec<RegisteredTableFunctionResultColumn>,
-    pub(crate) arguments_json: String,
-    pub(crate) result_columns_json: String,
     pub(crate) arg_names: Vec<String>,
 }
 
@@ -268,33 +266,6 @@ pub(crate) fn build_registered_table_function(
         function_name: function.name.clone(),
         internal_name,
         description: function.description.clone(),
-        arguments_json: serde_json::to_string(
-            &arguments
-                .iter()
-                .map(|arg| {
-                    serde_json::json!({
-                        "name": arg.name,
-                        "required": arg.required,
-                        "values": arg.values,
-                    })
-                })
-                .collect::<Vec<_>>(),
-        )
-        .expect("arguments json"),
-        result_columns_json: serde_json::to_string(
-            &result_columns
-                .iter()
-                .map(|column| {
-                    serde_json::json!({
-                        "name": column.name,
-                        "type": column.data_type,
-                        "nullable": column.nullable,
-                        "description": column.description,
-                    })
-                })
-                .collect::<Vec<_>>(),
-        )
-        .expect("result columns json"),
         arguments,
         result_columns,
         arg_names: function.args.iter().map(|arg| arg.name.clone()).collect(),
