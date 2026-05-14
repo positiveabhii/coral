@@ -3,8 +3,8 @@
 ## Repo Map
 
 - `crates/coral-api`: protobuf contract and generated Rust bindings.
-- `crates/coral-app`: local server composition, state, workspaces, and source
-  lifecycle.
+- `crates/coral-app`: local server composition, state, workspaces, source
+  lifecycle, and workspace-scoped catalog discovery behavior.
 - `crates/coral-cli`: terminal adapter.
 - `crates/coral-client`: intentionally thin local transport bootstrap plus
   Arrow IPC decode/render helpers.
