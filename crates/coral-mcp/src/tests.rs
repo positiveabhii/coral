@@ -92,6 +92,59 @@ tables:
     manifest_path
 }
 
+fn function_fixture_manifest() -> String {
+    r#"
+name: searchy
+version: 0.1.0
+dsl_version: 3
+backend: http
+base_url: https://example.com
+tables:
+  - name: placeholder
+    description: Placeholder table
+    request:
+      method: GET
+      path: /placeholder
+    columns:
+      - name: id
+        type: Utf8
+functions:
+  - name: search_issues
+    description: Search provider issues
+    args:
+      - name: q
+        required: true
+        bind:
+          arg: q
+      - name: mode
+        values:
+          - lexical
+          - semantic
+          - hybrid
+        bind:
+          arg: search_type
+    request:
+      method: GET
+      path: /search/issues
+      query:
+        - name: q
+          from: arg
+          key: q
+        - name: search_type
+          from: arg
+          key: search_type
+    response:
+      rows_path:
+        - items
+    columns:
+      - name: title
+        type: Utf8
+      - name: score
+        type: Float64
+"#
+    .to_string()
+}
+
 fn json_object(value: &Value) -> Map<String, Value> {
     value.as_object().cloned().expect("json object")
 }
@@ -106,6 +159,10 @@ async fn add_demo_source(source_client: &mut SourceClient, manifest_yaml: String
         }))
         .await
         .expect("add source");
+}
+
+async fn add_function_source(source_client: &mut SourceClient) {
+    add_demo_source(source_client, function_fixture_manifest()).await;
 }
 
 struct TestSession {
@@ -222,6 +279,8 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             "sql",
             "list_tables",
             "search_tables",
+            "list_table_functions",
+            "search_table_functions",
             "describe_table",
             "list_columns"
         ]
@@ -274,31 +333,48 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     assert!(initial_guide_text.contains("schema_name = '<schema>'"));
 
     add_demo_source(&mut session.source_client, manifest_yaml).await;
+    add_function_source(&mut session.source_client).await;
 
     let updated_tools = client.list_all_tools().await.expect("updated tools");
     let list_tables_tool = tool_by_name(&updated_tools, "list_tables");
     let search_tables_tool = tool_by_name(&updated_tools, "search_tables");
+    let list_table_functions_tool = tool_by_name(&updated_tools, "list_table_functions");
+    let search_table_functions_tool = tool_by_name(&updated_tools, "search_table_functions");
     let list_columns_tool = tool_by_name(&updated_tools, "list_columns");
     assert!(
         updated_tools[0]
             .description
             .as_deref()
             .expect("sql description")
-            .contains("3 table(s) are currently visible")
+            .contains("4 table(s) are currently visible")
     );
     assert!(
         updated_tools[1]
             .description
             .as_deref()
             .expect("tables description")
-            .contains("3 table(s) are currently visible")
+            .contains("4 table(s) are currently visible")
     );
     assert!(
         updated_tools[2]
             .description
             .as_deref()
             .expect("table search description")
-            .contains("3 table(s) are currently visible")
+            .contains("4 table(s) are currently visible")
+    );
+    assert!(
+        updated_tools[3]
+            .description
+            .as_deref()
+            .expect("table function description")
+            .contains("1 table function(s) are currently visible")
+    );
+    assert!(
+        updated_tools[4]
+            .description
+            .as_deref()
+            .expect("table function search description")
+            .contains("1 table function(s) are currently visible")
     );
 
     let updated_resources = client
@@ -310,7 +386,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .description
             .as_deref()
             .expect("guide description")
-            .contains("1 configured source")
+            .contains("2 configured source")
     );
 
     let tables_resource = client
@@ -334,6 +410,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     assert!(updated_guide_text.contains("## Available Schemas"));
     assert!(updated_guide_text.contains("- coral: System metadata schema."));
     assert!(updated_guide_text.contains("- local_messages"));
+    assert!(updated_guide_text.contains("- searchy"));
     assert!(!updated_guide_text.contains("## Visible SQL Schemas"));
     assert!(updated_guide_text.contains(
         "FROM coral.columns WHERE schema_name = 'local_messages' AND table_name = 'events'"
@@ -344,7 +421,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         .await
         .expect("list tables");
     let structured_tables = tables.structured_content.expect("structured content");
-    assert_eq!(structured_tables["total"], 3);
+    assert_eq!(structured_tables["total"], 4);
     assert_eq!(structured_tables["limit"], 50);
     assert_eq!(structured_tables["offset"], 0);
     assert_eq!(structured_tables["has_more"], false);
@@ -464,6 +541,68 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         )
         .await
         .expect_err("invalid regex should fail");
+
+    let functions = client
+        .call_tool(
+            CallToolRequestParams::new("list_table_functions").with_arguments(json_object(
+                &json!({
+                    "schema": "searchy"
+                }),
+            )),
+        )
+        .await
+        .expect("list table functions");
+    let functions = functions.structured_content.expect("structured content");
+    assert_eq!(functions["total"], 1);
+    assert_eq!(
+        functions["table_functions"][0]["name"],
+        "searchy.search_issues"
+    );
+    assert_eq!(
+        functions["table_functions"][0]["sql_reference"],
+        "searchy.search_issues"
+    );
+    assert_eq!(functions["table_functions"][0]["arguments"][0]["name"], "q");
+    assert_eq!(
+        functions["table_functions"][0]["arguments"][0]["required"],
+        true
+    );
+    assert_eq!(
+        functions["table_functions"][0]["result_columns"][0]["name"],
+        "title"
+    );
+    assert_matches_output_schema(list_table_functions_tool, &functions);
+
+    let function_search = client
+        .call_tool(
+            CallToolRequestParams::new("search_table_functions").with_arguments(json_object(
+                &json!({
+                    "pattern": "hybrid|score",
+                    "schema": "searchy"
+                }),
+            )),
+        )
+        .await
+        .expect("search table functions");
+    let function_search = function_search
+        .structured_content
+        .expect("structured content");
+    assert_eq!(function_search["total"], 1);
+    assert!(
+        function_search["table_functions"][0]["matched_fields"]
+            .as_array()
+            .expect("matched fields")
+            .iter()
+            .any(|field| field == "arguments")
+    );
+    assert!(
+        function_search["table_functions"][0]["matched_fields"]
+            .as_array()
+            .expect("matched fields")
+            .iter()
+            .any(|field| field == "result_columns")
+    );
+    assert_matches_output_schema(search_table_functions_tool, &function_search);
 
     let described = client
         .call_tool(
@@ -694,12 +833,14 @@ async fn mcp_feedback_tool_persists_blocked_agent_report() {
             "sql",
             "list_tables",
             "search_tables",
+            "list_table_functions",
+            "search_table_functions",
             "describe_table",
             "list_columns",
             "feedback"
         ]
     );
-    let feedback_annotations = tools[5].annotations.as_ref().expect("feedback annotations");
+    let feedback_annotations = tools[7].annotations.as_ref().expect("feedback annotations");
     assert_eq!(feedback_annotations.read_only_hint, Some(false));
     assert_eq!(feedback_annotations.destructive_hint, Some(false));
     assert_eq!(feedback_annotations.idempotent_hint, Some(false));

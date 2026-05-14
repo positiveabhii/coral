@@ -77,6 +77,8 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             "sql",
             "list_tables",
             "search_tables",
+            "list_table_functions",
+            "search_table_functions",
             "describe_table",
             "list_columns"
         ]
@@ -101,6 +103,20 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             .as_deref()
             .expect("search_tables description")
             .contains("3 table(s) are currently visible")
+    );
+    assert!(
+        tools[3]
+            .description
+            .as_deref()
+            .expect("list_table_functions description")
+            .contains("1 table function(s) are currently visible")
+    );
+    assert!(
+        tools[4]
+            .description
+            .as_deref()
+            .expect("search_table_functions description")
+            .contains("1 table function(s) are currently visible")
     );
 
     let resources = client.list_all_resources().await?;
@@ -148,6 +164,8 @@ async fn mcp_stdio_enable_feedback_lists_feedback_tool() -> Result<(), Box<dyn s
             "sql",
             "list_tables",
             "search_tables",
+            "list_table_functions",
+            "search_table_functions",
             "describe_table",
             "list_columns",
             "feedback"
@@ -167,6 +185,8 @@ async fn mcp_stdio_sql_and_list_tables_return_structured_content()
 
     assert_list_tables_tool(&client, &server).await?;
     assert_search_tables_tool(&client, &server).await?;
+    assert_list_table_functions_tool(&client, &server).await?;
+    assert_search_table_functions_tool(&client, &server).await?;
     assert_describe_table_tool(&client, &server).await?;
     assert_list_columns_tool(&client).await?;
     assert_sql_tool(&client).await?;
@@ -267,6 +287,75 @@ async fn assert_search_tables_tool(
             .iter()
             .any(|field| field == "guide")
     );
+    Ok(())
+}
+
+async fn assert_list_table_functions_tool(
+    client: &RunningService<RoleClient, ()>,
+    server: &MockServer,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let structured_functions = structured_tool_content(
+        client,
+        CallToolRequestParams::new("list_table_functions").with_arguments(json_object(&json!({
+            "schema": "searchy"
+        }))),
+    )
+    .await?;
+    assert_eq!(structured_functions["total"], 1);
+    assert_eq!(
+        structured_functions["table_functions"][0]["name"],
+        "searchy.search_issues"
+    );
+    assert_eq!(
+        structured_functions["table_functions"][0]["sql_reference"],
+        "searchy.search_issues"
+    );
+    assert_eq!(
+        structured_functions["table_functions"][0]["arguments"][0]["name"],
+        "q"
+    );
+    let requests = server.list_table_functions_requests();
+    let request = requests.last().expect("list table functions request");
+    assert_eq!(request.schema_name, "searchy");
+    let pagination = request.pagination.as_ref().expect("request pagination");
+    assert_eq!(pagination.limit, 50);
+    assert_eq!(pagination.offset, 0);
+    Ok(())
+}
+
+async fn assert_search_table_functions_tool(
+    client: &RunningService<RoleClient, ()>,
+    server: &MockServer,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let structured_functions = structured_tool_content(
+        client,
+        CallToolRequestParams::new("search_table_functions").with_arguments(json_object(&json!({
+            "pattern": "hybrid|score",
+            "schema": "searchy"
+        }))),
+    )
+    .await?;
+    assert_eq!(structured_functions["total"], 1);
+    assert!(
+        structured_functions["table_functions"][0]["matched_fields"]
+            .as_array()
+            .expect("matched fields")
+            .iter()
+            .any(|field| field == "arguments")
+    );
+    assert!(
+        structured_functions["table_functions"][0]["matched_fields"]
+            .as_array()
+            .expect("matched fields")
+            .iter()
+            .any(|field| field == "result_columns")
+    );
+    let requests = server.list_table_functions_requests();
+    let request = requests.last().expect("search table functions request");
+    assert_eq!(request.schema_name, "searchy");
+    let pagination = request.pagination.as_ref().expect("request pagination");
+    assert_eq!(pagination.limit, 0);
+    assert_eq!(pagination.offset, 0);
     Ok(())
 }
 

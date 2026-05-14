@@ -18,9 +18,10 @@ use coral_api::v1::{
     DeleteSourceResponse, DiscoverSourcesRequest, DiscoverSourcesResponse, ExecuteSqlRequest,
     ExecuteSqlResponse, GetSourceInfoRequest, GetSourceInfoResponse, GetSourceRequest,
     GetSourceResponse, ImportSourceRequest, ImportSourceResponse, ListSourcesRequest,
-    ListSourcesResponse, ListTablesRequest, ListTablesResponse, PaginationResponse, Source,
-    SourceInfo, SourceInputKind, SourceInputSpec, SourceOrigin, Table, TableSummary,
-    ValidateSourceRequest, ValidateSourceResponse, Workspace,
+    ListSourcesResponse, ListTableFunctionsRequest, ListTableFunctionsResponse, ListTablesRequest,
+    ListTablesResponse, PaginationResponse, Source, SourceInfo, SourceInputKind, SourceInputSpec,
+    SourceOrigin, Table, TableFunction, TableFunctionArgument, TableFunctionResultColumn,
+    TableSummary, ValidateSourceRequest, ValidateSourceResponse, Workspace,
 };
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -120,6 +121,45 @@ fn table_summary(table: &Table) -> TableSummary {
         required_filters: table.required_filters.clone(),
         guide: table.guide.clone(),
     }
+}
+
+fn mock_visible_table_functions() -> Vec<TableFunction> {
+    vec![TableFunction {
+        workspace: Some(workspace()),
+        schema_name: "searchy".to_string(),
+        name: "search_issues".to_string(),
+        description: "Search provider issues".to_string(),
+        arguments: vec![
+            TableFunctionArgument {
+                name: "q".to_string(),
+                required: true,
+                values: Vec::new(),
+            },
+            TableFunctionArgument {
+                name: "mode".to_string(),
+                required: false,
+                values: vec![
+                    "lexical".to_string(),
+                    "semantic".to_string(),
+                    "hybrid".to_string(),
+                ],
+            },
+        ],
+        result_columns: vec![
+            TableFunctionResultColumn {
+                name: "title".to_string(),
+                data_type: "Utf8".to_string(),
+                nullable: true,
+                description: String::new(),
+            },
+            TableFunctionResultColumn {
+                name: "score".to_string(),
+                data_type: "Float64".to_string(),
+                nullable: true,
+                description: String::new(),
+            },
+        ],
+    }]
 }
 
 fn mock_sql_response(sql: &str) -> ExecuteSqlResponse {
@@ -390,6 +430,7 @@ impl MockServerConfig {
 struct Captured {
     execute_sql: Mutex<Vec<ExecuteSqlRequest>>,
     list_tables: Mutex<Vec<ListTablesRequest>>,
+    list_table_functions: Mutex<Vec<ListTableFunctionsRequest>>,
     discover_sources: Mutex<Vec<DiscoverSourcesRequest>>,
     list_sources: Mutex<Vec<ListSourcesRequest>>,
     get_source: Mutex<Vec<GetSourceRequest>>,
@@ -472,6 +513,58 @@ impl QueryService for MockQueryService {
         Ok(Response::new(ListTablesResponse {
             tables,
             table_summaries,
+            pagination: Some(PaginationResponse {
+                total_count: total,
+                limit: pagination.limit,
+                offset: pagination.offset,
+                has_more,
+                next_offset,
+            }),
+        }))
+    }
+
+    async fn list_table_functions(
+        &self,
+        request: Request<ListTableFunctionsRequest>,
+    ) -> Result<Response<ListTableFunctionsResponse>, Status> {
+        let request = request.into_inner();
+        self.captured
+            .list_table_functions
+            .lock()
+            .expect("list_table_functions capture")
+            .push(request.clone());
+        let mut table_functions = mock_visible_table_functions()
+            .into_iter()
+            .filter(|function| {
+                request.schema_name.is_empty() || function.schema_name == request.schema_name
+            })
+            .filter(|function| {
+                request.function_name.is_empty() || function.name == request.function_name
+            })
+            .collect::<Vec<_>>();
+        let total = u32::try_from(table_functions.len()).unwrap_or(u32::MAX);
+        let pagination = request.pagination.unwrap_or_default();
+        let offset = usize::try_from(pagination.offset).expect("offset");
+        let limit = usize::try_from(pagination.limit).expect("limit");
+        table_functions = if limit == 0 {
+            table_functions.into_iter().skip(offset).collect()
+        } else {
+            table_functions
+                .into_iter()
+                .skip(offset)
+                .take(limit)
+                .collect()
+        };
+        let returned_count = u32::try_from(table_functions.len()).unwrap_or(u32::MAX);
+        let has_more =
+            pagination.limit != 0 && pagination.offset.saturating_add(returned_count) < total;
+        let next_offset = if has_more {
+            pagination.offset.saturating_add(returned_count)
+        } else {
+            0
+        };
+        Ok(Response::new(ListTableFunctionsResponse {
+            table_functions,
             pagination: Some(PaginationResponse {
                 total_count: total,
                 limit: pagination.limit,
@@ -721,6 +814,14 @@ impl MockServer {
             .list_tables
             .lock()
             .expect("list_tables capture")
+            .clone()
+    }
+
+    pub(crate) fn list_table_functions_requests(&self) -> Vec<ListTableFunctionsRequest> {
+        self.captured
+            .list_table_functions
+            .lock()
+            .expect("list_table_functions capture")
             .clone()
     }
 

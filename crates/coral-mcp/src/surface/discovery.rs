@@ -1,5 +1,7 @@
 use coral_api::v1::{
-    Column as ProtoColumn, Table as ProtoTable, TableSummary as ProtoTableSummary,
+    Column as ProtoColumn, Table as ProtoTable, TableFunction as ProtoTableFunction,
+    TableFunctionArgument as ProtoTableFunctionArgument,
+    TableFunctionResultColumn as ProtoTableFunctionResultColumn, TableSummary as ProtoTableSummary,
 };
 use regex::{Regex, RegexBuilder};
 use rmcp::ErrorData;
@@ -35,6 +37,30 @@ pub(crate) struct TableSummary {
     pub(crate) description: String,
     pub(crate) guide: String,
     pub(crate) required_filters: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TableFunctionSummary {
+    pub(crate) schema_name: String,
+    pub(crate) function_name: String,
+    pub(crate) description: String,
+    pub(crate) arguments: Vec<TableFunctionArgumentSummary>,
+    pub(crate) result_columns: Vec<TableFunctionResultColumnSummary>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TableFunctionArgumentSummary {
+    pub(crate) name: String,
+    pub(crate) required: bool,
+    pub(crate) values: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TableFunctionResultColumnSummary {
+    pub(crate) name: String,
+    pub(crate) data_type: String,
+    pub(crate) nullable: bool,
+    pub(crate) description: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -151,6 +177,152 @@ impl TableSummary {
             "name": format!("{}.{}", self.schema_name, self.table_name),
             "description": self.description,
             "required_filters": self.required_filters,
+        })
+    }
+}
+
+impl TableFunctionSummary {
+    pub(crate) fn from_proto(function: &ProtoTableFunction) -> Self {
+        Self {
+            schema_name: function.schema_name.clone(),
+            function_name: function.name.clone(),
+            description: function.description.clone(),
+            arguments: function
+                .arguments
+                .iter()
+                .map(TableFunctionArgumentSummary::from_proto)
+                .collect(),
+            result_columns: function
+                .result_columns
+                .iter()
+                .map(TableFunctionResultColumnSummary::from_proto)
+                .collect(),
+        }
+    }
+
+    pub(crate) fn matched_fields(&self, regex: &Regex) -> Vec<&'static str> {
+        let name = format!("{}.{}", self.schema_name, self.function_name);
+        let candidates = [
+            ("schema_name", self.schema_name.as_str()),
+            ("function_name", self.function_name.as_str()),
+            ("name", name.as_str()),
+            ("description", self.description.as_str()),
+        ];
+        let mut matches = candidates
+            .into_iter()
+            .filter_map(|(field, value)| regex.is_match(value).then_some(field))
+            .collect::<Vec<_>>();
+        if self
+            .arguments
+            .iter()
+            .any(|argument| argument.matches(regex))
+        {
+            matches.push("arguments");
+        }
+        if self
+            .result_columns
+            .iter()
+            .any(|column| column.matches(regex))
+        {
+            matches.push("result_columns");
+        }
+        matches
+    }
+
+    pub(crate) fn value(&self) -> Value {
+        self.value_with_matched_fields(None)
+    }
+
+    pub(crate) fn search_result_value(&self, matched_fields: &[&'static str]) -> Value {
+        self.value_with_matched_fields(Some(matched_fields))
+    }
+
+    fn value_with_matched_fields(&self, matched_fields: Option<&[&'static str]>) -> Value {
+        let mut value = serde_json::Map::from_iter([
+            ("schema_name".to_string(), json!(self.schema_name)),
+            ("function_name".to_string(), json!(self.function_name)),
+            (
+                "name".to_string(),
+                json!(format!("{}.{}", self.schema_name, self.function_name)),
+            ),
+            (
+                "sql_reference".to_string(),
+                json!(format_schema_table_equivalent(
+                    &self.schema_name,
+                    &self.function_name
+                )),
+            ),
+            ("description".to_string(), json!(self.description)),
+            (
+                "arguments".to_string(),
+                json!(
+                    self.arguments
+                        .iter()
+                        .map(TableFunctionArgumentSummary::value)
+                        .collect::<Vec<_>>()
+                ),
+            ),
+            (
+                "result_columns".to_string(),
+                json!(
+                    self.result_columns
+                        .iter()
+                        .map(TableFunctionResultColumnSummary::value)
+                        .collect::<Vec<_>>()
+                ),
+            ),
+        ]);
+        if let Some(matched_fields) = matched_fields {
+            value.insert("matched_fields".to_string(), json!(matched_fields));
+        }
+        Value::Object(value)
+    }
+}
+
+impl TableFunctionArgumentSummary {
+    fn from_proto(argument: &ProtoTableFunctionArgument) -> Self {
+        Self {
+            name: argument.name.clone(),
+            required: argument.required,
+            values: argument.values.clone(),
+        }
+    }
+
+    fn matches(&self, regex: &Regex) -> bool {
+        regex.is_match(&self.name) || self.values.iter().any(|value| regex.is_match(value))
+    }
+
+    fn value(&self) -> Value {
+        json!({
+            "name": self.name,
+            "required": self.required,
+            "values": self.values,
+        })
+    }
+}
+
+impl TableFunctionResultColumnSummary {
+    fn from_proto(column: &ProtoTableFunctionResultColumn) -> Self {
+        Self {
+            name: column.name.clone(),
+            data_type: column.data_type.clone(),
+            nullable: column.nullable,
+            description: column.description.clone(),
+        }
+    }
+
+    fn matches(&self, regex: &Regex) -> bool {
+        regex.is_match(&self.name)
+            || regex.is_match(&self.data_type)
+            || regex.is_match(&self.description)
+    }
+
+    fn value(&self) -> Value {
+        json!({
+            "name": self.name,
+            "data_type": self.data_type,
+            "nullable": self.nullable,
+            "description": self.description,
         })
     }
 }

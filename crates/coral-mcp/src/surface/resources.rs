@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use coral_api::v1::{ListTablesResponse, Source, Table, TableSummary};
+use coral_api::v1::{ListTableFunctionsResponse, ListTablesResponse, Source, Table, TableSummary};
 use rmcp::model::{AnnotateAble, RawResource, Resource};
 use serde_json::{Value, json};
 
-static INITIAL_INSTRUCTIONS: &str = "You are connected to Coral. Read `coral://guide` for query patterns, use `list_tables`, `search_tables`, `describe_table`, and `list_columns` to inspect queryable tables, and use `sql` for final queries.";
+static INITIAL_INSTRUCTIONS: &str = "You are connected to Coral. Read `coral://guide` for query patterns, use `list_tables`, `search_tables`, `list_table_functions`, `search_table_functions`, `describe_table`, and `list_columns` to inspect queryable tables and source-scoped table functions, and use `sql` for final queries.";
 static GUIDE_TEMPLATE: &str = include_str!("../guide_template.md");
 
 pub(crate) fn initial_instructions() -> &'static str {
@@ -88,6 +88,30 @@ pub(crate) fn list_tables_value(response: &ListTablesResponse) -> Value {
         value
             .as_object_mut()
             .expect("list tables value is initialized as a JSON object")
+            .insert("next_offset".to_string(), json!(pagination.next_offset));
+    }
+    value
+}
+
+pub(crate) fn list_table_functions_value(response: &ListTableFunctionsResponse) -> Value {
+    let pagination = response.pagination.unwrap_or_default();
+    let functions = response
+        .table_functions
+        .iter()
+        .map(crate::surface::TableFunctionSummary::from_proto)
+        .map(|function| function.value())
+        .collect::<Vec<_>>();
+    let mut value = json!({
+        "table_functions": functions,
+        "total": pagination.total_count,
+        "limit": pagination.limit,
+        "offset": pagination.offset,
+        "has_more": pagination.has_more,
+    });
+    if pagination.has_more {
+        value
+            .as_object_mut()
+            .expect("list table functions value is initialized as a JSON object")
             .insert("next_offset".to_string(), json!(pagination.next_offset));
     }
     value

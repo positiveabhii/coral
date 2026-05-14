@@ -12,7 +12,10 @@ use datafusion::prelude::SessionContext;
 
 use crate::backends::RegisteredSource;
 use crate::runtime::schema_provider::StaticSchemaProvider;
-use crate::{ColumnInfo, TableInfo};
+use crate::{
+    ColumnInfo, TableFunctionArgumentInfo, TableFunctionInfo, TableFunctionResultColumnInfo,
+    TableInfo,
+};
 
 /// Schema name for source metadata tables such as `coral.tables`.
 pub(crate) const SYSTEM_SCHEMA: &str = "coral";
@@ -122,6 +125,49 @@ pub(crate) fn collect_tables(active_sources: &[RegisteredSource]) -> Vec<TableIn
         (&left.schema_name, &left.table_name).cmp(&(&right.schema_name, &right.table_name))
     });
     tables
+}
+
+/// Collect typed source-scoped table function metadata for the active source set.
+#[must_use]
+pub(crate) fn collect_table_functions(
+    active_sources: &[RegisteredSource],
+) -> Vec<TableFunctionInfo> {
+    let mut functions = active_sources
+        .iter()
+        .flat_map(|source| {
+            source
+                .table_functions
+                .iter()
+                .map(move |function| TableFunctionInfo {
+                    schema_name: source.schema_name.clone(),
+                    function_name: function.function_name.clone(),
+                    description: function.description.clone(),
+                    arguments: function
+                        .arguments
+                        .iter()
+                        .map(|argument| TableFunctionArgumentInfo {
+                            name: argument.name.clone(),
+                            required: argument.required,
+                            values: argument.values.clone(),
+                        })
+                        .collect(),
+                    result_columns: function
+                        .result_columns
+                        .iter()
+                        .map(|column| TableFunctionResultColumnInfo {
+                            name: column.name.clone(),
+                            data_type: column.data_type.clone(),
+                            nullable: column.nullable,
+                            description: column.description.clone(),
+                        })
+                        .collect(),
+                })
+        })
+        .collect::<Vec<_>>();
+    functions.sort_by(|left, right| {
+        (&left.schema_name, &left.function_name).cmp(&(&right.schema_name, &right.function_name))
+    });
+    functions
 }
 
 fn build_tables_table(active_sources: &[RegisteredSource]) -> Result<MemTable> {
