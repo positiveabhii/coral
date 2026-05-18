@@ -30,3 +30,6 @@ tasks/
 
 # Playwright CLI validation artifacts
 .playwright-cli/
+
+# macOS metadata
+.DS_Store
