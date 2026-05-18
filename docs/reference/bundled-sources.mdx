@@ -35,7 +35,7 @@ If the source you need is not available, you can extend Coral by [writing a cust
 | [pagerduty](#pagerduty) | `http` | Query incidents, services, teams, users, schedules, oncalls, escalation policies, log entries, change events, status pages, and workflows from PagerDuty. |
 | [posthog](#posthog) | `http` | Query events, persons, sessions, feature flags, experiments, insights, dashboards, cohorts, projects, organizations, and related PostHog resources. |
 | [sentry](#sentry) | `http` | Query issues, events, projects, releases, deployments, teams, and members from Sentry. |
-| [slack](#slack) | `http` | Query channels, messages, thread replies, and users from your Slack workspace. |
+| [slack](#slack) | `http` | Query channels, messages, thread replies, users, and rich message payloads from your Slack workspace. |
 | [statusgator](#statusgator) | `http` | Query status boards, monitors, incidents, history, service components, subscribers, users, and monitoring regions from StatusGator. |
 | [stripe](#stripe) | `http` | Query customers, charges, subscriptions, invoices, payments, products, prices, refunds, disputes, payouts, balance transactions, and events from Stripe. |
 | [wandb](#wandb) | `http` | Query the authenticated viewer, projects, runs, and sampled run metrics from Weights & Biases (W&B Cloud or self-hosted). |
@@ -338,7 +338,9 @@ Instead, you need a Slack app with a Bot User OAuth Token.
 If you already have a Slack app with the required scopes, you can
 find your Bot User OAuth Token on its OAuth & Permissions page. The
 required scopes are: channels:read, channels:history, groups:read,
-groups:history, users:read, users:read.email.
+groups:history, users:read, users:read.email. Add `files:read` if you
+plan to inspect or download the private file URLs exposed in message
+payloads.
 
 If you don't have a Slack app, you can
 [create one with the required scopes pre-filled](https://api.slack.com/apps?new_app=1&manifest_json=%7B%22display_information%22%3A%7B%22name%22%3A%22Coral%22%2C%22description%22%3A%22Coral+data+access%22%7D%2C%22oauth_config%22%3A%7B%22scopes%22%3A%7B%22bot%22%3A%5B%22channels%3Aread%22%2C%22groups%3Aread%22%2C%22channels%3Ahistory%22%2C%22groups%3Ahistory%22%2C%22users%3Aread%22%2C%22users%3Aread.email%22%5D%7D%7D%2C%22features%22%3A%7B%22bot_user%22%3A%7B%22display_name%22%3A%22Coral%22%2C%22always_online%22%3Afalse%7D%7D%7D).
