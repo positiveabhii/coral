@@ -12,7 +12,7 @@ use coral_engine::{
     RequestAuthenticator, RequestAuthenticatorError, StatusCode,
 };
 use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use wiremock::matchers::{
     body_json, body_string, header, method, path, query_param, query_param_is_missing,
 };
@@ -1173,65 +1173,194 @@ fn slack_join_array_column(
 }
 
 fn slack_thread_reply_permalink_column() -> Value {
-    let mut ts_id_expr = Map::new();
-    ts_id_expr.insert("kind".to_string(), Value::String("path".to_string()));
-    ts_id_expr.insert(
-        "path".to_string(),
-        Value::Array(vec![Value::String("ts".to_string())]),
-    );
+    json!({
+        "name": "permalink",
+        "type": "Utf8",
+        "nullable": false,
+        "expr": {
+            "kind": "template",
+            "template": "https://slack.com/archives/{{filter.channel}}/p{{expr.ts_id}}?thread_ts={{expr.thread_ts}}&cid={{filter.channel}}",
+            "values": {
+                "ts_id": {
+                    "kind": "replace",
+                    "expr": {
+                        "kind": "path",
+                        "path": ["ts"]
+                    },
+                    "from": ".",
+                    "to": ""
+                },
+                "thread_ts": {
+                    "kind": "coalesce",
+                    "exprs": [
+                        {
+                            "kind": "path",
+                            "path": ["thread_ts"]
+                        },
+                        {
+                            "kind": "path",
+                            "path": ["ts"]
+                        }
+                    ]
+                }
+            }
+        }
+    })
+}
 
-    let mut ts_id = Map::new();
-    ts_id.insert("kind".to_string(), Value::String("replace".to_string()));
-    ts_id.insert("expr".to_string(), Value::Object(ts_id_expr));
-    ts_id.insert("from".to_string(), Value::String(".".to_string()));
-    ts_id.insert("to".to_string(), Value::String(String::new()));
-
-    let mut thread_ts_path = Map::new();
-    thread_ts_path.insert("kind".to_string(), Value::String("path".to_string()));
-    thread_ts_path.insert(
-        "path".to_string(),
-        Value::Array(vec![Value::String("thread_ts".to_string())]),
-    );
-
-    let mut ts_path = Map::new();
-    ts_path.insert("kind".to_string(), Value::String("path".to_string()));
-    ts_path.insert(
-        "path".to_string(),
-        Value::Array(vec![Value::String("ts".to_string())]),
-    );
-
-    let mut thread_ts = Map::new();
-    thread_ts.insert("kind".to_string(), Value::String("coalesce".to_string()));
-    thread_ts.insert(
-        "exprs".to_string(),
-        Value::Array(vec![Value::Object(thread_ts_path), Value::Object(ts_path)]),
-    );
-
-    let mut values = Map::new();
-    values.insert("ts_id".to_string(), Value::Object(ts_id));
-    values.insert("thread_ts".to_string(), Value::Object(thread_ts));
-
-    let mut expr = Map::new();
-    expr.insert("kind".to_string(), Value::String("template".to_string()));
-    expr.insert(
-        "template".to_string(),
-        Value::String(
-            "https://slack.com/archives/{{filter.channel}}/p{{expr.ts_id}}?thread_ts={{expr.thread_ts}}&cid={{filter.channel}}"
-                .to_string(),
+fn slack_file_payload_columns() -> Vec<Value> {
+    vec![
+        slack_first_array_item_column("file_id", "Utf8", true, &["files"], &["id"]),
+        slack_first_array_item_column("file_name", "Utf8", true, &["files"], &["name"]),
+        slack_first_array_item_column("file_title", "Utf8", true, &["files"], &["title"]),
+        slack_first_array_item_column("file_mimetype", "Utf8", true, &["files"], &["mimetype"]),
+        slack_first_array_item_column("file_filetype", "Utf8", true, &["files"], &["filetype"]),
+        slack_first_array_item_column(
+            "file_url_private",
+            "Utf8",
+            true,
+            &["files"],
+            &["url_private"],
         ),
-    );
-    expr.insert("values".to_string(), Value::Object(values));
+        slack_first_array_item_column(
+            "file_url_private_download",
+            "Utf8",
+            true,
+            &["files"],
+            &["url_private_download"],
+        ),
+        slack_first_array_item_column("file_thumb_360", "Utf8", true, &["files"], &["thumb_360"]),
+        slack_first_array_item_column("file_thumb_720", "Utf8", true, &["files"], &["thumb_720"]),
+        slack_join_array_column("file_ids", "Utf8", true, &["files"], &["id"], " | "),
+        slack_join_array_column("file_names", "Utf8", true, &["files"], &["name"], " | "),
+        slack_join_array_column("file_titles", "Utf8", true, &["files"], &["title"], " | "),
+        slack_join_array_column(
+            "file_mimetypes",
+            "Utf8",
+            true,
+            &["files"],
+            &["mimetype"],
+            " | ",
+        ),
+        slack_join_array_column(
+            "file_filetypes",
+            "Utf8",
+            true,
+            &["files"],
+            &["filetype"],
+            " | ",
+        ),
+        slack_join_array_column(
+            "file_url_privates",
+            "Utf8",
+            true,
+            &["files"],
+            &["url_private"],
+            " | ",
+        ),
+        slack_join_array_column(
+            "file_url_private_downloads",
+            "Utf8",
+            true,
+            &["files"],
+            &["url_private_download"],
+            " | ",
+        ),
+        slack_join_array_column(
+            "file_thumb_360s",
+            "Utf8",
+            true,
+            &["files"],
+            &["thumb_360"],
+            " | ",
+        ),
+        slack_join_array_column(
+            "file_thumb_720s",
+            "Utf8",
+            true,
+            &["files"],
+            &["thumb_720"],
+            " | ",
+        ),
+    ]
+}
 
-    let mut column = Map::new();
-    column.insert("name".to_string(), Value::String("permalink".to_string()));
-    column.insert("type".to_string(), Value::String("Utf8".to_string()));
-    column.insert("nullable".to_string(), Value::Bool(false));
-    column.insert("expr".to_string(), Value::Object(expr));
+fn slack_attachment_payload_columns() -> Vec<Value> {
+    vec![
+        slack_join_array_column(
+            "attachment_titles",
+            "Utf8",
+            true,
+            &["attachments"],
+            &["title"],
+            " | ",
+        ),
+        slack_join_array_column(
+            "attachment_title_links",
+            "Utf8",
+            true,
+            &["attachments"],
+            &["title_link"],
+            " | ",
+        ),
+        slack_join_array_column(
+            "attachment_image_urls",
+            "Utf8",
+            true,
+            &["attachments"],
+            &["image_url"],
+            " | ",
+        ),
+    ]
+}
 
-    Value::Object(column)
+fn slack_block_payload_columns() -> Vec<Value> {
+    vec![
+        slack_join_array_column("block_types", "Utf8", true, &["blocks"], &["type"], " | "),
+        slack_join_array_column(
+            "block_image_urls",
+            "Utf8",
+            true,
+            &["blocks"],
+            &["image_url"],
+            " | ",
+        ),
+    ]
+}
+
+fn slack_rich_payload_columns() -> Vec<Value> {
+    let mut columns = vec![
+        slack_path_column("text", "Utf8", true, &["text"]),
+        slack_path_column("files", "Json", true, &["files"]),
+        slack_path_column("attachments", "Json", true, &["attachments"]),
+        slack_path_column("blocks", "Json", true, &["blocks"]),
+    ];
+    columns.extend(slack_file_payload_columns());
+    columns.extend(slack_attachment_payload_columns());
+    columns.extend(slack_block_payload_columns());
+    columns.push(json!({
+        "name": "ts",
+        "type": "Timestamp",
+        "nullable": false,
+        "expr": {
+            "kind": "format_timestamp",
+            "input": "seconds",
+            "expr": { "kind": "path", "path": ["ts"] }
+        }
+    }));
+    columns.push(slack_thread_reply_permalink_column());
+    columns
 }
 
 fn slack_messages_rich_payload_manifest(base_url: &str) -> Value {
+    let mut columns = vec![json!({
+        "name": "channel",
+        "type": "Utf8",
+        "nullable": false,
+        "expr": { "kind": "from_filter", "key": "channel" }
+    })];
+    columns.extend(slack_rich_payload_columns());
+
     json!({
         "name": "slack_rich",
         "version": "2.0.0",
@@ -1253,79 +1382,7 @@ fn slack_messages_rich_payload_manifest(base_url: &str) -> Value {
                 "error_path": ["error"],
                 "rows_path": ["messages"]
             },
-            "columns": [
-                json!({
-                    "name": "channel",
-                    "type": "Utf8",
-                    "nullable": false,
-                    "expr": { "kind": "from_filter", "key": "channel" }
-                }),
-                slack_path_column("text", "Utf8", true, &["text"]),
-                slack_path_column("files", "Json", true, &["files"]),
-                slack_path_column("attachments", "Json", true, &["attachments"]),
-                slack_path_column("blocks", "Json", true, &["blocks"]),
-                slack_first_array_item_column("file_id", "Utf8", true, &["files"], &["id"]),
-                slack_first_array_item_column("file_name", "Utf8", true, &["files"], &["name"]),
-                slack_first_array_item_column("file_title", "Utf8", true, &["files"], &["title"]),
-                slack_first_array_item_column("file_mimetype", "Utf8", true, &["files"], &["mimetype"]),
-                slack_first_array_item_column("file_filetype", "Utf8", true, &["files"], &["filetype"]),
-                slack_first_array_item_column("file_url_private", "Utf8", true, &["files"], &["url_private"]),
-                slack_first_array_item_column(
-                    "file_url_private_download",
-                    "Utf8",
-                    true,
-                    &["files"],
-                    &["url_private_download"]
-                ),
-                slack_first_array_item_column("file_thumb_360", "Utf8", true, &["files"], &["thumb_360"]),
-                slack_first_array_item_column("file_thumb_720", "Utf8", true, &["files"], &["thumb_720"]),
-                slack_join_array_column("file_ids", "Utf8", true, &["files"], &["id"], " | "),
-                slack_join_array_column("file_names", "Utf8", true, &["files"], &["name"], " | "),
-                slack_join_array_column("file_titles", "Utf8", true, &["files"], &["title"], " | "),
-                slack_join_array_column("file_mimetypes", "Utf8", true, &["files"], &["mimetype"], " | "),
-                slack_join_array_column("file_filetypes", "Utf8", true, &["files"], &["filetype"], " | "),
-                slack_join_array_column("file_url_privates", "Utf8", true, &["files"], &["url_private"], " | "),
-                slack_join_array_column(
-                    "file_url_private_downloads",
-                    "Utf8",
-                    true,
-                    &["files"],
-                    &["url_private_download"],
-                    " | "
-                ),
-                slack_join_array_column("file_thumb_360s", "Utf8", true, &["files"], &["thumb_360"], " | "),
-                slack_join_array_column("file_thumb_720s", "Utf8", true, &["files"], &["thumb_720"], " | "),
-                slack_join_array_column("attachment_titles", "Utf8", true, &["attachments"], &["title"], " | "),
-                slack_join_array_column(
-                    "attachment_title_links",
-                    "Utf8",
-                    true,
-                    &["attachments"],
-                    &["title_link"],
-                    " | "
-                ),
-                slack_join_array_column(
-                    "attachment_image_urls",
-                    "Utf8",
-                    true,
-                    &["attachments"],
-                    &["image_url"],
-                    " | "
-                ),
-                slack_join_array_column("block_types", "Utf8", true, &["blocks"], &["type"], " | "),
-                slack_join_array_column("block_image_urls", "Utf8", true, &["blocks"], &["image_url"], " | "),
-                json!({
-                    "name": "ts",
-                    "type": "Timestamp",
-                    "nullable": false,
-                    "expr": {
-                        "kind": "format_timestamp",
-                        "input": "seconds",
-                        "expr": { "kind": "path", "path": ["ts"] }
-                    }
-                }),
-                slack_thread_reply_permalink_column()
-            ],
+            "columns": columns,
             "filters": [
                 { "name": "channel", "required": true }
             ]
@@ -1333,11 +1390,23 @@ fn slack_messages_rich_payload_manifest(base_url: &str) -> Value {
     })
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "test fixture intentionally mirrors the Slack thread-replies schema"
-)]
 fn slack_thread_replies_rich_payload_manifest(base_url: &str) -> Value {
+    let mut columns = vec![
+        json!({
+            "name": "channel",
+            "type": "Utf8",
+            "nullable": false,
+            "expr": { "kind": "from_filter", "key": "channel" }
+        }),
+        json!({
+            "name": "thread_ts",
+            "type": "Utf8",
+            "nullable": false,
+            "expr": { "kind": "from_filter", "key": "thread_ts" }
+        }),
+    ];
+    columns.extend(slack_rich_payload_columns());
+
     json!({
         "name": "slack_rich_replies",
         "version": "2.0.0",
@@ -1360,85 +1429,7 @@ fn slack_thread_replies_rich_payload_manifest(base_url: &str) -> Value {
                 "error_path": ["error"],
                 "rows_path": ["messages"]
             },
-            "columns": [
-                json!({
-                    "name": "channel",
-                    "type": "Utf8",
-                    "nullable": false,
-                    "expr": { "kind": "from_filter", "key": "channel" }
-                }),
-                json!({
-                    "name": "thread_ts",
-                    "type": "Utf8",
-                    "nullable": false,
-                    "expr": { "kind": "from_filter", "key": "thread_ts" }
-                }),
-                slack_path_column("text", "Utf8", true, &["text"]),
-                slack_path_column("files", "Json", true, &["files"]),
-                slack_path_column("attachments", "Json", true, &["attachments"]),
-                slack_path_column("blocks", "Json", true, &["blocks"]),
-                slack_first_array_item_column("file_id", "Utf8", true, &["files"], &["id"]),
-                slack_first_array_item_column("file_name", "Utf8", true, &["files"], &["name"]),
-                slack_first_array_item_column("file_title", "Utf8", true, &["files"], &["title"]),
-                slack_first_array_item_column("file_mimetype", "Utf8", true, &["files"], &["mimetype"]),
-                slack_first_array_item_column("file_filetype", "Utf8", true, &["files"], &["filetype"]),
-                slack_first_array_item_column("file_url_private", "Utf8", true, &["files"], &["url_private"]),
-                slack_first_array_item_column(
-                    "file_url_private_download",
-                    "Utf8",
-                    true,
-                    &["files"],
-                    &["url_private_download"]
-                ),
-                slack_first_array_item_column("file_thumb_360", "Utf8", true, &["files"], &["thumb_360"]),
-                slack_first_array_item_column("file_thumb_720", "Utf8", true, &["files"], &["thumb_720"]),
-                slack_join_array_column("file_ids", "Utf8", true, &["files"], &["id"], " | "),
-                slack_join_array_column("file_names", "Utf8", true, &["files"], &["name"], " | "),
-                slack_join_array_column("file_titles", "Utf8", true, &["files"], &["title"], " | "),
-                slack_join_array_column("file_mimetypes", "Utf8", true, &["files"], &["mimetype"], " | "),
-                slack_join_array_column("file_filetypes", "Utf8", true, &["files"], &["filetype"], " | "),
-                slack_join_array_column("file_url_privates", "Utf8", true, &["files"], &["url_private"], " | "),
-                slack_join_array_column(
-                    "file_url_private_downloads",
-                    "Utf8",
-                    true,
-                    &["files"],
-                    &["url_private_download"],
-                    " | "
-                ),
-                slack_join_array_column("file_thumb_360s", "Utf8", true, &["files"], &["thumb_360"], " | "),
-                slack_join_array_column("file_thumb_720s", "Utf8", true, &["files"], &["thumb_720"], " | "),
-                slack_join_array_column("attachment_titles", "Utf8", true, &["attachments"], &["title"], " | "),
-                slack_join_array_column(
-                    "attachment_title_links",
-                    "Utf8",
-                    true,
-                    &["attachments"],
-                    &["title_link"],
-                    " | "
-                ),
-                slack_join_array_column(
-                    "attachment_image_urls",
-                    "Utf8",
-                    true,
-                    &["attachments"],
-                    &["image_url"],
-                    " | "
-                ),
-                slack_join_array_column("block_types", "Utf8", true, &["blocks"], &["type"], " | "),
-                slack_join_array_column("block_image_urls", "Utf8", true, &["blocks"], &["image_url"], " | "),
-                json!({
-                    "name": "ts",
-                    "type": "Timestamp",
-                    "nullable": false,
-                    "expr": {
-                        "kind": "format_timestamp",
-                        "input": "seconds",
-                        "expr": { "kind": "path", "path": ["ts"] }
-                    }
-                }),
-                slack_thread_reply_permalink_column()
-            ],
+            "columns": columns,
             "filters": [
                 { "name": "channel", "required": true },
                 { "name": "thread_ts", "required": true }
