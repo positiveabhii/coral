@@ -1123,10 +1123,55 @@ fn slack_messages_manifest(base_url: &str) -> Value {
     })
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Slack manifest fixture intentionally enumerates the rich payload schema"
-)]
+fn slack_path_column(name: &str, type_: &str, nullable: bool, path: &[&str]) -> Value {
+    json!({
+        "name": name,
+        "type": type_,
+        "nullable": nullable,
+        "expr": { "kind": "path", "path": path }
+    })
+}
+
+fn slack_first_array_item_column(
+    name: &str,
+    type_: &str,
+    nullable: bool,
+    path: &[&str],
+    item_path: &[&str],
+) -> Value {
+    json!({
+        "name": name,
+        "type": type_,
+        "nullable": nullable,
+        "expr": {
+            "kind": "first_array_item_path",
+            "path": path,
+            "item_path": item_path
+        }
+    })
+}
+
+fn slack_join_array_column(
+    name: &str,
+    type_: &str,
+    nullable: bool,
+    path: &[&str],
+    item_path: &[&str],
+    separator: &str,
+) -> Value {
+    json!({
+        "name": name,
+        "type": type_,
+        "nullable": nullable,
+        "expr": {
+            "kind": "join_array_path",
+            "path": path,
+            "item_path": item_path,
+            "separator": separator
+        }
+    })
+}
+
 fn slack_messages_rich_payload_manifest(base_url: &str) -> Value {
     json!({
         "name": "slack_rich",
@@ -1150,280 +1195,66 @@ fn slack_messages_rich_payload_manifest(base_url: &str) -> Value {
                 "rows_path": ["messages"]
             },
             "columns": [
-                {
+                json!({
                     "name": "channel",
                     "type": "Utf8",
                     "nullable": false,
                     "expr": { "kind": "from_filter", "key": "channel" }
-                },
-                {
-                    "name": "text",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": { "kind": "path", "path": ["text"] }
-                },
-                {
-                    "name": "files",
-                    "type": "Json",
-                    "nullable": true,
-                    "expr": { "kind": "path", "path": ["files"] }
-                },
-                {
-                    "name": "attachments",
-                    "type": "Json",
-                    "nullable": true,
-                    "expr": { "kind": "path", "path": ["attachments"] }
-                },
-                {
-                    "name": "blocks",
-                    "type": "Json",
-                    "nullable": true,
-                    "expr": { "kind": "path", "path": ["blocks"] }
-                },
-                {
-                    "name": "file_id",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "first_array_item_path",
-                        "path": ["files"],
-                        "item_path": ["id"]
-                    }
-                },
-                {
-                    "name": "file_name",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "first_array_item_path",
-                        "path": ["files"],
-                        "item_path": ["name"]
-                    }
-                },
-                {
-                    "name": "file_title",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "first_array_item_path",
-                        "path": ["files"],
-                        "item_path": ["title"]
-                    }
-                },
-                {
-                    "name": "file_mimetype",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "first_array_item_path",
-                        "path": ["files"],
-                        "item_path": ["mimetype"]
-                    }
-                },
-                {
-                    "name": "file_filetype",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "first_array_item_path",
-                        "path": ["files"],
-                        "item_path": ["filetype"]
-                    }
-                },
-                {
-                    "name": "file_url_private",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "first_array_item_path",
-                        "path": ["files"],
-                        "item_path": ["url_private"]
-                    }
-                },
-                {
-                    "name": "file_url_private_download",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "first_array_item_path",
-                        "path": ["files"],
-                        "item_path": ["url_private_download"]
-                    }
-                },
-                {
-                    "name": "file_thumb_360",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "first_array_item_path",
-                        "path": ["files"],
-                        "item_path": ["thumb_360"]
-                    }
-                },
-                {
-                    "name": "file_thumb_720",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "first_array_item_path",
-                        "path": ["files"],
-                        "item_path": ["thumb_720"]
-                    }
-                },
-                {
-                    "name": "file_ids",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["files"],
-                        "item_path": ["id"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "file_names",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["files"],
-                        "item_path": ["name"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "file_titles",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["files"],
-                        "item_path": ["title"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "file_mimetypes",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["files"],
-                        "item_path": ["mimetype"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "file_filetypes",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["files"],
-                        "item_path": ["filetype"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "file_url_privates",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["files"],
-                        "item_path": ["url_private"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "file_url_private_downloads",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["files"],
-                        "item_path": ["url_private_download"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "file_thumb_360s",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["files"],
-                        "item_path": ["thumb_360"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "file_thumb_720s",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["files"],
-                        "item_path": ["thumb_720"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "attachment_titles",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["attachments"],
-                        "item_path": ["title"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "attachment_title_links",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["attachments"],
-                        "item_path": ["title_link"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "attachment_image_urls",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["attachments"],
-                        "item_path": ["image_url"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "block_types",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["blocks"],
-                        "item_path": ["type"],
-                        "separator": " | "
-                    }
-                },
-                {
-                    "name": "block_image_urls",
-                    "type": "Utf8",
-                    "nullable": true,
-                    "expr": {
-                        "kind": "join_array_path",
-                        "path": ["blocks"],
-                        "item_path": ["image_url"],
-                        "separator": " | "
-                    }
-                }
+                }),
+                slack_path_column("text", "Utf8", true, &["text"]),
+                slack_path_column("files", "Json", true, &["files"]),
+                slack_path_column("attachments", "Json", true, &["attachments"]),
+                slack_path_column("blocks", "Json", true, &["blocks"]),
+                slack_first_array_item_column("file_id", "Utf8", true, &["files"], &["id"]),
+                slack_first_array_item_column("file_name", "Utf8", true, &["files"], &["name"]),
+                slack_first_array_item_column("file_title", "Utf8", true, &["files"], &["title"]),
+                slack_first_array_item_column("file_mimetype", "Utf8", true, &["files"], &["mimetype"]),
+                slack_first_array_item_column("file_filetype", "Utf8", true, &["files"], &["filetype"]),
+                slack_first_array_item_column("file_url_private", "Utf8", true, &["files"], &["url_private"]),
+                slack_first_array_item_column(
+                    "file_url_private_download",
+                    "Utf8",
+                    true,
+                    &["files"],
+                    &["url_private_download"]
+                ),
+                slack_first_array_item_column("file_thumb_360", "Utf8", true, &["files"], &["thumb_360"]),
+                slack_first_array_item_column("file_thumb_720", "Utf8", true, &["files"], &["thumb_720"]),
+                slack_join_array_column("file_ids", "Utf8", true, &["files"], &["id"], " | "),
+                slack_join_array_column("file_names", "Utf8", true, &["files"], &["name"], " | "),
+                slack_join_array_column("file_titles", "Utf8", true, &["files"], &["title"], " | "),
+                slack_join_array_column("file_mimetypes", "Utf8", true, &["files"], &["mimetype"], " | "),
+                slack_join_array_column("file_filetypes", "Utf8", true, &["files"], &["filetype"], " | "),
+                slack_join_array_column("file_url_privates", "Utf8", true, &["files"], &["url_private"], " | "),
+                slack_join_array_column(
+                    "file_url_private_downloads",
+                    "Utf8",
+                    true,
+                    &["files"],
+                    &["url_private_download"],
+                    " | "
+                ),
+                slack_join_array_column("file_thumb_360s", "Utf8", true, &["files"], &["thumb_360"], " | "),
+                slack_join_array_column("file_thumb_720s", "Utf8", true, &["files"], &["thumb_720"], " | "),
+                slack_join_array_column("attachment_titles", "Utf8", true, &["attachments"], &["title"], " | "),
+                slack_join_array_column(
+                    "attachment_title_links",
+                    "Utf8",
+                    true,
+                    &["attachments"],
+                    &["title_link"],
+                    " | "
+                ),
+                slack_join_array_column(
+                    "attachment_image_urls",
+                    "Utf8",
+                    true,
+                    &["attachments"],
+                    &["image_url"],
+                    " | "
+                ),
+                slack_join_array_column("block_types", "Utf8", true, &["blocks"], &["type"], " | "),
+                slack_join_array_column("block_image_urls", "Utf8", true, &["blocks"], &["image_url"], " | ")
             ],
             "filters": [
                 { "name": "channel", "required": true }
@@ -1475,6 +1306,12 @@ async fn slack_messages_have_formatted_ts_and_permalink() {
         rows[1]["permalink"],
         "https://slack.com/archives/C123456/p1609459300000200"
     );
+}
+
+fn assert_row_fields(row: &Value, fields: &[(&str, &str)]) {
+    for (name, expected) in fields {
+        assert_eq!(row[*name], *expected, "unexpected value for column {name}");
+    }
 }
 
 #[tokio::test]
@@ -1550,7 +1387,59 @@ async fn slack_messages_expose_rich_payload_columns() {
 
     assert_eq!(rows.len(), 1);
     let row = &rows[0];
-    assert_eq!(row["text"], "See the attachment");
+    assert_row_fields(
+        row,
+        &[
+            ("text", "See the attachment"),
+            ("file_id", "F123"),
+            ("file_name", "report.png"),
+            ("file_title", "Report"),
+            ("file_mimetype", "image/png"),
+            ("file_filetype", "png"),
+            (
+                "file_url_private",
+                "https://files.slack.com/files-pri/T1-F123/report.png",
+            ),
+            (
+                "file_url_private_download",
+                "https://files.slack.com/files-pri/T1-F123/download/report.png",
+            ),
+            (
+                "file_thumb_360",
+                "https://files.slack.com/files-pri/T1-F123/thumb_360.png",
+            ),
+            (
+                "file_thumb_720",
+                "https://files.slack.com/files-pri/T1-F123/thumb_720.png",
+            ),
+            ("file_ids", "F123"),
+            ("file_names", "report.png"),
+            ("file_titles", "Report"),
+            ("file_mimetypes", "image/png"),
+            ("file_filetypes", "png"),
+            (
+                "file_url_privates",
+                "https://files.slack.com/files-pri/T1-F123/report.png",
+            ),
+            (
+                "file_url_private_downloads",
+                "https://files.slack.com/files-pri/T1-F123/download/report.png",
+            ),
+            (
+                "file_thumb_360s",
+                "https://files.slack.com/files-pri/T1-F123/thumb_360.png",
+            ),
+            (
+                "file_thumb_720s",
+                "https://files.slack.com/files-pri/T1-F123/thumb_720.png",
+            ),
+            ("attachment_titles", "Legacy attachment"),
+            ("attachment_title_links", "https://example.com/legacy"),
+            ("attachment_image_urls", "https://example.com/legacy.png"),
+            ("block_types", "image"),
+            ("block_image_urls", "https://example.com/block.png"),
+        ],
+    );
     assert_eq!(
         row["files"],
         "[{\"id\":\"F123\",\"name\":\"report.png\",\"title\":\"Report\",\"mimetype\":\"image/png\",\"filetype\":\"png\",\"url_private\":\"https://files.slack.com/files-pri/T1-F123/report.png\",\"url_private_download\":\"https://files.slack.com/files-pri/T1-F123/download/report.png\",\"thumb_360\":\"https://files.slack.com/files-pri/T1-F123/thumb_360.png\",\"thumb_720\":\"https://files.slack.com/files-pri/T1-F123/thumb_720.png\"}]"
@@ -1563,56 +1452,6 @@ async fn slack_messages_expose_rich_payload_columns() {
         row["blocks"],
         "[{\"type\":\"image\",\"image_url\":\"https://example.com/block.png\"}]"
     );
-    assert_eq!(row["file_id"], "F123");
-    assert_eq!(row["file_name"], "report.png");
-    assert_eq!(row["file_title"], "Report");
-    assert_eq!(row["file_mimetype"], "image/png");
-    assert_eq!(row["file_filetype"], "png");
-    assert_eq!(
-        row["file_url_private"],
-        "https://files.slack.com/files-pri/T1-F123/report.png"
-    );
-    assert_eq!(
-        row["file_url_private_download"],
-        "https://files.slack.com/files-pri/T1-F123/download/report.png"
-    );
-    assert_eq!(
-        row["file_thumb_360"],
-        "https://files.slack.com/files-pri/T1-F123/thumb_360.png"
-    );
-    assert_eq!(
-        row["file_thumb_720"],
-        "https://files.slack.com/files-pri/T1-F123/thumb_720.png"
-    );
-    assert_eq!(row["file_ids"], "F123");
-    assert_eq!(row["file_names"], "report.png");
-    assert_eq!(row["file_titles"], "Report");
-    assert_eq!(row["file_mimetypes"], "image/png");
-    assert_eq!(row["file_filetypes"], "png");
-    assert_eq!(
-        row["file_url_privates"],
-        "https://files.slack.com/files-pri/T1-F123/report.png"
-    );
-    assert_eq!(
-        row["file_url_private_downloads"],
-        "https://files.slack.com/files-pri/T1-F123/download/report.png"
-    );
-    assert_eq!(
-        row["file_thumb_360s"],
-        "https://files.slack.com/files-pri/T1-F123/thumb_360.png"
-    );
-    assert_eq!(
-        row["file_thumb_720s"],
-        "https://files.slack.com/files-pri/T1-F123/thumb_720.png"
-    );
-    assert_eq!(row["attachment_titles"], "Legacy attachment");
-    assert_eq!(row["attachment_title_links"], "https://example.com/legacy");
-    assert_eq!(
-        row["attachment_image_urls"],
-        "https://example.com/legacy.png"
-    );
-    assert_eq!(row["block_types"], "image");
-    assert_eq!(row["block_image_urls"], "https://example.com/block.png");
 }
 
 #[tokio::test]
