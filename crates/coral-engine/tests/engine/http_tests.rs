@@ -12,7 +12,7 @@ use coral_engine::{
     RequestAuthenticator, RequestAuthenticatorError, StatusCode,
 };
 use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use wiremock::matchers::{
     body_json, body_string, header, method, path, query_param, query_param_is_missing,
 };
@@ -1172,6 +1172,65 @@ fn slack_join_array_column(
     })
 }
 
+fn slack_thread_reply_permalink_column() -> Value {
+    let mut ts_id_expr = Map::new();
+    ts_id_expr.insert("kind".to_string(), Value::String("path".to_string()));
+    ts_id_expr.insert(
+        "path".to_string(),
+        Value::Array(vec![Value::String("ts".to_string())]),
+    );
+
+    let mut ts_id = Map::new();
+    ts_id.insert("kind".to_string(), Value::String("replace".to_string()));
+    ts_id.insert("expr".to_string(), Value::Object(ts_id_expr));
+    ts_id.insert("from".to_string(), Value::String(".".to_string()));
+    ts_id.insert("to".to_string(), Value::String(String::new()));
+
+    let mut thread_ts_path = Map::new();
+    thread_ts_path.insert("kind".to_string(), Value::String("path".to_string()));
+    thread_ts_path.insert(
+        "path".to_string(),
+        Value::Array(vec![Value::String("thread_ts".to_string())]),
+    );
+
+    let mut ts_path = Map::new();
+    ts_path.insert("kind".to_string(), Value::String("path".to_string()));
+    ts_path.insert(
+        "path".to_string(),
+        Value::Array(vec![Value::String("ts".to_string())]),
+    );
+
+    let mut thread_ts = Map::new();
+    thread_ts.insert("kind".to_string(), Value::String("coalesce".to_string()));
+    thread_ts.insert(
+        "exprs".to_string(),
+        Value::Array(vec![Value::Object(thread_ts_path), Value::Object(ts_path)]),
+    );
+
+    let mut values = Map::new();
+    values.insert("ts_id".to_string(), Value::Object(ts_id));
+    values.insert("thread_ts".to_string(), Value::Object(thread_ts));
+
+    let mut expr = Map::new();
+    expr.insert("kind".to_string(), Value::String("template".to_string()));
+    expr.insert(
+        "template".to_string(),
+        Value::String(
+            "https://slack.com/archives/{{filter.channel}}/p{{expr.ts_id}}?thread_ts={{expr.thread_ts}}&cid={{filter.channel}}"
+                .to_string(),
+        ),
+    );
+    expr.insert("values".to_string(), Value::Object(values));
+
+    let mut column = Map::new();
+    column.insert("name".to_string(), Value::String("permalink".to_string()));
+    column.insert("type".to_string(), Value::String("Utf8".to_string()));
+    column.insert("nullable".to_string(), Value::Bool(false));
+    column.insert("expr".to_string(), Value::Object(expr));
+
+    Value::Object(column)
+}
+
 fn slack_messages_rich_payload_manifest(base_url: &str) -> Value {
     json!({
         "name": "slack_rich",
@@ -1254,10 +1313,135 @@ fn slack_messages_rich_payload_manifest(base_url: &str) -> Value {
                     " | "
                 ),
                 slack_join_array_column("block_types", "Utf8", true, &["blocks"], &["type"], " | "),
-                slack_join_array_column("block_image_urls", "Utf8", true, &["blocks"], &["image_url"], " | ")
+                slack_join_array_column("block_image_urls", "Utf8", true, &["blocks"], &["image_url"], " | "),
+                json!({
+                    "name": "ts",
+                    "type": "Timestamp",
+                    "nullable": false,
+                    "expr": {
+                        "kind": "format_timestamp",
+                        "input": "seconds",
+                        "expr": { "kind": "path", "path": ["ts"] }
+                    }
+                }),
+                slack_thread_reply_permalink_column()
             ],
             "filters": [
                 { "name": "channel", "required": true }
+            ]
+        }]
+    })
+}
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "test fixture intentionally mirrors the Slack thread-replies schema"
+)]
+fn slack_thread_replies_rich_payload_manifest(base_url: &str) -> Value {
+    json!({
+        "name": "slack_rich_replies",
+        "version": "2.0.0",
+        "dsl_version": 3,
+        "backend": "http",
+        "base_url": base_url,
+        "tables": [{
+            "name": "thread_replies",
+            "description": "Slack thread replies",
+            "request": {
+                "method": "GET",
+                "path": "/api/conversations.replies",
+                "query": [
+                    { "name": "channel", "from": "filter", "key": "channel" },
+                    { "name": "ts", "from": "filter", "key": "thread_ts" }
+                ]
+            },
+            "response": {
+                "ok_path": ["ok"],
+                "error_path": ["error"],
+                "rows_path": ["messages"]
+            },
+            "columns": [
+                json!({
+                    "name": "channel",
+                    "type": "Utf8",
+                    "nullable": false,
+                    "expr": { "kind": "from_filter", "key": "channel" }
+                }),
+                json!({
+                    "name": "thread_ts",
+                    "type": "Utf8",
+                    "nullable": false,
+                    "expr": { "kind": "from_filter", "key": "thread_ts" }
+                }),
+                slack_path_column("text", "Utf8", true, &["text"]),
+                slack_path_column("files", "Json", true, &["files"]),
+                slack_path_column("attachments", "Json", true, &["attachments"]),
+                slack_path_column("blocks", "Json", true, &["blocks"]),
+                slack_first_array_item_column("file_id", "Utf8", true, &["files"], &["id"]),
+                slack_first_array_item_column("file_name", "Utf8", true, &["files"], &["name"]),
+                slack_first_array_item_column("file_title", "Utf8", true, &["files"], &["title"]),
+                slack_first_array_item_column("file_mimetype", "Utf8", true, &["files"], &["mimetype"]),
+                slack_first_array_item_column("file_filetype", "Utf8", true, &["files"], &["filetype"]),
+                slack_first_array_item_column("file_url_private", "Utf8", true, &["files"], &["url_private"]),
+                slack_first_array_item_column(
+                    "file_url_private_download",
+                    "Utf8",
+                    true,
+                    &["files"],
+                    &["url_private_download"]
+                ),
+                slack_first_array_item_column("file_thumb_360", "Utf8", true, &["files"], &["thumb_360"]),
+                slack_first_array_item_column("file_thumb_720", "Utf8", true, &["files"], &["thumb_720"]),
+                slack_join_array_column("file_ids", "Utf8", true, &["files"], &["id"], " | "),
+                slack_join_array_column("file_names", "Utf8", true, &["files"], &["name"], " | "),
+                slack_join_array_column("file_titles", "Utf8", true, &["files"], &["title"], " | "),
+                slack_join_array_column("file_mimetypes", "Utf8", true, &["files"], &["mimetype"], " | "),
+                slack_join_array_column("file_filetypes", "Utf8", true, &["files"], &["filetype"], " | "),
+                slack_join_array_column("file_url_privates", "Utf8", true, &["files"], &["url_private"], " | "),
+                slack_join_array_column(
+                    "file_url_private_downloads",
+                    "Utf8",
+                    true,
+                    &["files"],
+                    &["url_private_download"],
+                    " | "
+                ),
+                slack_join_array_column("file_thumb_360s", "Utf8", true, &["files"], &["thumb_360"], " | "),
+                slack_join_array_column("file_thumb_720s", "Utf8", true, &["files"], &["thumb_720"], " | "),
+                slack_join_array_column("attachment_titles", "Utf8", true, &["attachments"], &["title"], " | "),
+                slack_join_array_column(
+                    "attachment_title_links",
+                    "Utf8",
+                    true,
+                    &["attachments"],
+                    &["title_link"],
+                    " | "
+                ),
+                slack_join_array_column(
+                    "attachment_image_urls",
+                    "Utf8",
+                    true,
+                    &["attachments"],
+                    &["image_url"],
+                    " | "
+                ),
+                slack_join_array_column("block_types", "Utf8", true, &["blocks"], &["type"], " | "),
+                slack_join_array_column("block_image_urls", "Utf8", true, &["blocks"], &["image_url"], " | "),
+                json!({
+                    "name": "ts",
+                    "type": "Timestamp",
+                    "nullable": false,
+                    "expr": {
+                        "kind": "format_timestamp",
+                        "input": "seconds",
+                        "expr": { "kind": "path", "path": ["ts"] }
+                    }
+                }),
+                slack_thread_reply_permalink_column()
+            ],
+            "filters": [
+                { "name": "channel", "required": true },
+                { "name": "thread_ts", "required": true }
             ]
         }]
     })
@@ -1451,6 +1635,187 @@ async fn slack_messages_expose_rich_payload_columns() {
     assert_eq!(
         row["blocks"],
         "[{\"type\":\"image\",\"image_url\":\"https://example.com/block.png\"}]"
+    );
+}
+
+#[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Slack payload assertion intentionally checks every exposed column"
+)]
+async fn slack_thread_replies_expose_rich_payload_columns() {
+    let server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/conversations.replies"))
+        .and(query_param("channel", "C061S50CQN6"))
+        .and(query_param("ts", "1778134793.636129"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "ok": true,
+            "messages": [
+                {
+                    "user": "U001",
+                    "text": "",
+                    "ts": "1778145220.100149",
+                    "thread_ts": "1778134793.636129",
+                    "files": [
+                        {
+                            "id": "F001",
+                            "name": "screenshot.png",
+                            "title": "Screenshot",
+                            "mimetype": "image/png",
+                            "filetype": "png",
+                            "url_private": "https://files.slack.com/files-pri/T1-F001/screenshot.png",
+                            "url_private_download": "https://files.slack.com/files-pri/T1-F001/download/screenshot.png",
+                            "thumb_360": "https://files.slack.com/files-pri/T1-F001/thumb_360.png",
+                            "thumb_720": "https://files.slack.com/files-pri/T1-F001/thumb_720.png"
+                        }
+                    ]
+                },
+                {
+                    "user": "U002",
+                    "text": "",
+                    "ts": "1778145623.517609",
+                    "thread_ts": "1778134793.636129",
+                    "attachments": [
+                        {
+                            "title": "Preview attachment",
+                            "title_link": "https://example.com/preview",
+                            "image_url": "https://example.com/preview.png"
+                        }
+                    ]
+                },
+                {
+                    "user": "U003",
+                    "text": "",
+                    "ts": "1778153211.125419",
+                    "thread_ts": "1778134793.636129",
+                    "blocks": [
+                        {
+                            "type": "image",
+                            "image_url": "https://example.com/thread-block.png"
+                        }
+                    ]
+                }
+            ]
+        })))
+        .mount(&server)
+        .await;
+
+    let source = build_source(slack_thread_replies_rich_payload_manifest(&server.uri()));
+
+    let rows = execution_to_rows(
+        &CoralQuery::execute_sql(
+            &[source],
+            test_runtime(),
+            "SELECT \
+                ts, permalink, text, files, attachments, blocks, \
+                file_id, file_name, file_title, file_mimetype, file_filetype, \
+                file_url_private, file_url_private_download, file_thumb_360, file_thumb_720, \
+                file_ids, file_names, file_titles, file_mimetypes, file_filetypes, \
+                file_url_privates, file_url_private_downloads, file_thumb_360s, file_thumb_720s, \
+                attachment_titles, attachment_title_links, attachment_image_urls, \
+                block_types, block_image_urls \
+             FROM slack_rich_replies.thread_replies \
+             WHERE channel = 'C061S50CQN6' AND thread_ts = '1778134793.636129' \
+             ORDER BY ts",
+        )
+        .await
+        .expect("query should succeed"),
+    );
+
+    assert_eq!(rows.len(), 3);
+
+    assert_eq!(rows[0]["ts"], "2026-05-07T09:13:40.100149Z");
+    assert_eq!(
+        rows[0]["permalink"],
+        "https://slack.com/archives/C061S50CQN6/p1778145220100149?thread_ts=1778134793.636129&cid=C061S50CQN6"
+    );
+    assert_eq!(rows[0]["text"], "");
+    assert_eq!(rows[0]["file_id"], "F001");
+    assert_eq!(rows[0]["file_name"], "screenshot.png");
+    assert_eq!(rows[0]["file_title"], "Screenshot");
+    assert_eq!(rows[0]["file_mimetype"], "image/png");
+    assert_eq!(rows[0]["file_filetype"], "png");
+    assert_eq!(
+        rows[0]["file_url_private"],
+        "https://files.slack.com/files-pri/T1-F001/screenshot.png"
+    );
+    assert_eq!(
+        rows[0]["file_url_private_download"],
+        "https://files.slack.com/files-pri/T1-F001/download/screenshot.png"
+    );
+    assert_eq!(
+        rows[0]["file_thumb_360"],
+        "https://files.slack.com/files-pri/T1-F001/thumb_360.png"
+    );
+    assert_eq!(
+        rows[0]["file_thumb_720"],
+        "https://files.slack.com/files-pri/T1-F001/thumb_720.png"
+    );
+    assert_eq!(rows[0]["file_ids"], "F001");
+    assert_eq!(rows[0]["file_names"], "screenshot.png");
+    assert_eq!(rows[0]["file_titles"], "Screenshot");
+    assert_eq!(rows[0]["file_mimetypes"], "image/png");
+    assert_eq!(rows[0]["file_filetypes"], "png");
+    assert_eq!(
+        rows[0]["file_url_privates"],
+        "https://files.slack.com/files-pri/T1-F001/screenshot.png"
+    );
+    assert_eq!(
+        rows[0]["file_url_private_downloads"],
+        "https://files.slack.com/files-pri/T1-F001/download/screenshot.png"
+    );
+    assert_eq!(
+        rows[0]["file_thumb_360s"],
+        "https://files.slack.com/files-pri/T1-F001/thumb_360.png"
+    );
+    assert_eq!(
+        rows[0]["file_thumb_720s"],
+        "https://files.slack.com/files-pri/T1-F001/thumb_720.png"
+    );
+
+    assert_eq!(rows[1]["ts"], "2026-05-07T09:20:23.517609Z");
+    assert_eq!(
+        rows[1]["permalink"],
+        "https://slack.com/archives/C061S50CQN6/p1778145623517609?thread_ts=1778134793.636129&cid=C061S50CQN6"
+    );
+    assert_eq!(rows[1]["text"], "");
+    assert_eq!(rows[1]["attachment_titles"], "Preview attachment");
+    assert_eq!(
+        rows[1]["attachment_title_links"],
+        "https://example.com/preview"
+    );
+    assert_eq!(
+        rows[1]["attachment_image_urls"],
+        "https://example.com/preview.png"
+    );
+
+    assert_eq!(rows[2]["ts"], "2026-05-07T11:26:51.125419Z");
+    assert_eq!(
+        rows[2]["permalink"],
+        "https://slack.com/archives/C061S50CQN6/p1778153211125419?thread_ts=1778134793.636129&cid=C061S50CQN6"
+    );
+    assert_eq!(rows[2]["text"], "");
+    assert_eq!(rows[2]["block_types"], "image");
+    assert_eq!(
+        rows[2]["block_image_urls"],
+        "https://example.com/thread-block.png"
+    );
+
+    assert_eq!(
+        rows[0]["files"],
+        "[{\"id\":\"F001\",\"name\":\"screenshot.png\",\"title\":\"Screenshot\",\"mimetype\":\"image/png\",\"filetype\":\"png\",\"url_private\":\"https://files.slack.com/files-pri/T1-F001/screenshot.png\",\"url_private_download\":\"https://files.slack.com/files-pri/T1-F001/download/screenshot.png\",\"thumb_360\":\"https://files.slack.com/files-pri/T1-F001/thumb_360.png\",\"thumb_720\":\"https://files.slack.com/files-pri/T1-F001/thumb_720.png\"}]"
+    );
+    assert_eq!(rows[1]["files"], Value::Null);
+    assert_eq!(
+        rows[1]["attachments"],
+        "[{\"title\":\"Preview attachment\",\"title_link\":\"https://example.com/preview\",\"image_url\":\"https://example.com/preview.png\"}]"
+    );
+    assert_eq!(rows[2]["attachments"], Value::Null);
+    assert_eq!(
+        rows[2]["blocks"],
+        "[{\"type\":\"image\",\"image_url\":\"https://example.com/thread-block.png\"}]"
     );
 }
 
