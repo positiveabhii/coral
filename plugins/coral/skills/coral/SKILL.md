@@ -32,7 +32,7 @@ Use this as the Coral entrypoint for external context. Query Coral before answer
 
 ## Query Rules
 
-- Use each table's `sql_reference`; write `github.pulls` or `"github"."pulls"`, not `"github.pulls"`.
+- Use each table's `sql_reference` when available. If building a reference from `schema_name` and `table_name`, write `github.pulls` or `"github"."pulls"`, not `"github.pulls"`.
 - Virtual columns are filter-only and return `NULL`; check `is_virtual`.
 - Required filters must appear in `WHERE`; inspect `required_filters` and `is_required_filter`.
 - Secret inputs always return `value = NULL`; use `is_set`.
