@@ -152,16 +152,19 @@ mod tests {
 
     #[test]
     fn slack_manifest_documents_required_files_scope() {
+        const FILES_SCOPE: &str = "files:read";
+        const ENCODED_FILES_SCOPE: &str = "files%3Aread";
+
         let slack = SourceName::parse("slack").expect("source");
         let manifest = load_bundled_source(&slack).expect("slack bundled source");
 
         assert!(
-            manifest.manifest_yaml.contains("files:read"),
-            "Slack manifest hint should mention files:read"
+            manifest.manifest_yaml.contains(FILES_SCOPE),
+            "Slack manifest hint should mention {FILES_SCOPE}"
         );
         assert!(
-            manifest.manifest_yaml.contains("files%3Aread"),
-            "prefilled Slack app link should request files:read"
+            manifest.manifest_yaml.contains(ENCODED_FILES_SCOPE),
+            "prefilled Slack app link should request {FILES_SCOPE}"
         );
     }
 
