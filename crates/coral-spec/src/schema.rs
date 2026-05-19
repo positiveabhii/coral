@@ -56,6 +56,29 @@ tables:
 "
     }
 
+    fn valid_source_model_manifest() -> &'static str {
+        r"
+name: github
+version: 1.0.0
+dsl_version: 4
+backend: source_model
+surfaces:
+  - id: github-rest
+    type: open-api
+    url: https://example.com/github-openapi.yaml
+    sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    base_url: https://api.github.com
+projections:
+  - name: issues
+    kind: table
+    surface: github-rest
+    operation: issues/list-for-repo
+    columns:
+      - name: title
+        type: Utf8
+"
+    }
+
     fn manifest_json(raw: &str) -> JsonValue {
         serde_yaml::from_str(raw).expect("test manifest should parse as yaml")
     }
@@ -64,6 +87,13 @@ tables:
     fn validate_manifest_schema_accepts_valid_http_manifest() {
         let manifest = manifest_json(valid_http_manifest());
         validate_manifest_schema(&manifest).expect("valid manifest should pass schema validation");
+    }
+
+    #[test]
+    fn validate_manifest_schema_accepts_valid_source_model_manifest() {
+        let manifest = manifest_json(valid_source_model_manifest());
+        validate_manifest_schema(&manifest)
+            .expect("valid source-model manifest should pass schema validation");
     }
 
     #[test]
@@ -305,6 +335,61 @@ tables:
         assert_eq!(
             error.to_string(),
             "source manifest failed schema validation:\n  /tables/0/request/path: \"\" is shorter than 1 character"
+        );
+    }
+
+    #[test]
+    fn validate_manifest_schema_surfaces_malformed_source_model_surface() {
+        let manifest = manifest_json(
+            r"
+name: github
+version: 1.0.0
+dsl_version: 4
+backend: source_model
+surfaces:
+  - id: github-rest
+    type: open-api
+    url: https://example.com/github-openapi.yaml
+    base_url: https://api.github.com
+projections:
+  - name: issues
+    kind: table
+    surface: github-rest
+    operation: issues/list-for-repo
+",
+        );
+        let error = validate_manifest_schema(&manifest).expect_err("schema should fail");
+        assert_eq!(
+            error.to_string(),
+            "source manifest failed schema validation:\n  /surfaces/0: \"sha256\" is a required property"
+        );
+    }
+
+    #[test]
+    fn validate_manifest_schema_surfaces_malformed_source_model_projection() {
+        let manifest = manifest_json(
+            r"
+name: github
+version: 1.0.0
+dsl_version: 4
+backend: source_model
+surfaces:
+  - id: github-rest
+    type: open-api
+    url: https://example.com/github-openapi.yaml
+    sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    base_url: https://api.github.com
+projections:
+  - name: issues
+    kind: view
+    surface: github-rest
+    operation: issues/list-for-repo
+",
+        );
+        let error = validate_manifest_schema(&manifest).expect_err("schema should fail");
+        assert_eq!(
+            error.to_string(),
+            "source manifest failed schema validation:\n  /projections/0/kind: \"view\" is not one of [\"table\",\"function\"]"
         );
     }
 }

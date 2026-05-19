@@ -87,6 +87,10 @@ mod template;
 mod validate;
 
 pub use backends::http::{AuthSpec, BasicAuthSpec, CustomAuthSpec, HeaderAuthSpec};
+pub use backends::source_model::{
+    SourceModelManifestProjection, SourceModelManifestSurface, SourceModelSourceManifest,
+    SurfaceDescriptionType,
+};
 pub(crate) use common::validate_test_queries;
 pub use common::{
     BodyFieldSpec, BodySpec, ColumnSpec, DetailHintSpec, ExprSpec, FilterMode, FilterSpec,

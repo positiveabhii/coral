@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::backends::file::{JsonlSourceManifest, ParquetSourceManifest};
 use crate::backends::http::HttpSourceManifest;
+use crate::backends::source_model::SourceModelSourceManifest;
 use crate::schema::validate_manifest_schema;
 use crate::{ManifestError, ManifestInputSpec, Result, SourceBackend};
 
@@ -28,6 +29,7 @@ enum ValidatedManifestKind {
     Http(Box<HttpSourceManifest>),
     Parquet(ParquetSourceManifest),
     Jsonl(JsonlSourceManifest),
+    SourceModel(SourceModelSourceManifest),
 }
 
 impl ValidatedSourceManifest {
@@ -42,6 +44,7 @@ impl ValidatedSourceManifest {
             ValidatedManifestKind::Http(_) => SourceBackend::Http,
             ValidatedManifestKind::Parquet(_) => SourceBackend::Parquet,
             ValidatedManifestKind::Jsonl(_) => SourceBackend::Jsonl,
+            ValidatedManifestKind::SourceModel(_) => SourceBackend::SourceModel,
         }
     }
 
@@ -52,6 +55,7 @@ impl ValidatedSourceManifest {
             ValidatedManifestKind::Http(manifest) => &manifest.common.name,
             ValidatedManifestKind::Parquet(manifest) => &manifest.common.name,
             ValidatedManifestKind::Jsonl(manifest) => &manifest.common.name,
+            ValidatedManifestKind::SourceModel(manifest) => &manifest.common.name,
         }
     }
 
@@ -62,6 +66,7 @@ impl ValidatedSourceManifest {
             ValidatedManifestKind::Http(manifest) => &manifest.common.version,
             ValidatedManifestKind::Parquet(manifest) => &manifest.common.version,
             ValidatedManifestKind::Jsonl(manifest) => &manifest.common.version,
+            ValidatedManifestKind::SourceModel(manifest) => &manifest.common.version,
         }
     }
 
@@ -72,6 +77,7 @@ impl ValidatedSourceManifest {
             ValidatedManifestKind::Http(manifest) => &manifest.common.description,
             ValidatedManifestKind::Parquet(manifest) => &manifest.common.description,
             ValidatedManifestKind::Jsonl(manifest) => &manifest.common.description,
+            ValidatedManifestKind::SourceModel(manifest) => &manifest.common.description,
         }
     }
 
@@ -82,6 +88,7 @@ impl ValidatedSourceManifest {
             ValidatedManifestKind::Http(manifest) => &manifest.common.test_queries,
             ValidatedManifestKind::Parquet(manifest) => &manifest.common.test_queries,
             ValidatedManifestKind::Jsonl(manifest) => &manifest.common.test_queries,
+            ValidatedManifestKind::SourceModel(manifest) => &manifest.common.test_queries,
         }
     }
 
@@ -93,6 +100,7 @@ impl ValidatedSourceManifest {
             ValidatedManifestKind::Http(manifest) => manifest.required_secret_names(),
             ValidatedManifestKind::Parquet(manifest) => manifest.required_secret_names(),
             ValidatedManifestKind::Jsonl(manifest) => manifest.required_secret_names(),
+            ValidatedManifestKind::SourceModel(manifest) => manifest.required_secret_names(),
         }
     }
 
@@ -103,6 +111,7 @@ impl ValidatedSourceManifest {
             ValidatedManifestKind::Http(manifest) => &manifest.declared_inputs,
             ValidatedManifestKind::Parquet(manifest) => &manifest.declared_inputs,
             ValidatedManifestKind::Jsonl(manifest) => &manifest.declared_inputs,
+            ValidatedManifestKind::SourceModel(manifest) => &manifest.declared_inputs,
         }
     }
 
@@ -129,6 +138,16 @@ impl ValidatedSourceManifest {
     pub fn as_jsonl(&self) -> Option<&JsonlSourceManifest> {
         match &self.inner {
             ValidatedManifestKind::Jsonl(manifest) => Some(manifest),
+            _ => None,
+        }
+    }
+
+    /// Returns the validated DSL v4 source-model source spec when
+    /// `backend: source_model`.
+    #[must_use]
+    pub fn as_source_model(&self) -> Option<&SourceModelSourceManifest> {
+        match &self.inner {
+            ValidatedManifestKind::SourceModel(manifest) => Some(manifest),
             _ => None,
         }
     }
@@ -171,6 +190,11 @@ pub fn parse_source_manifest_value(value: Value) -> Result<ValidatedSourceManife
         }),
         SourceBackend::Jsonl => Ok(ValidatedSourceManifest {
             inner: ValidatedManifestKind::Jsonl(JsonlSourceManifest::parse_manifest_value(value)?),
+        }),
+        SourceBackend::SourceModel => Ok(ValidatedSourceManifest {
+            inner: ValidatedManifestKind::SourceModel(
+                SourceModelSourceManifest::parse_manifest_value(value)?,
+            ),
         }),
     }
 }
@@ -282,6 +306,95 @@ functions:
         assert_eq!(http.functions.len(), 1);
         let function = http.functions.first().expect("HTTP function");
         assert_eq!(function.name, "search_issues");
+    }
+
+    #[test]
+    fn parse_source_manifest_accepts_source_model_manifest() {
+        let manifest = parse_source_manifest_yaml(
+            r"
+name: github
+version: 1.0.0
+dsl_version: 4
+backend: source_model
+description: GitHub via imported OpenAPI
+inputs:
+  GITHUB_TOKEN:
+    kind: secret
+test_queries:
+  - SELECT * FROM github.issues
+surfaces:
+  - id: github-rest
+    type: open-api
+    url: https://example.com/github-openapi.yaml
+    sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    base_url: https://api.github.com
+    auth:
+      type: HeaderAuth
+      headers:
+        - name: Authorization
+          from: template
+          template: Bearer {{input.GITHUB_TOKEN}}
+projections:
+  - name: issues
+    kind: table
+    surface: github-rest
+    operation: issues/list-for-repo
+    columns:
+      - name: title
+        type: Utf8
+",
+        )
+        .expect("source-model manifest should parse");
+
+        let source_model = manifest
+            .as_source_model()
+            .expect("source-model manifest variant");
+        assert_eq!(manifest.backend(), crate::SourceBackend::SourceModel);
+        let surface = source_model
+            .surfaces
+            .first()
+            .expect("source-model manifest should have a surface");
+        assert_eq!(surface.id, "github-rest");
+        let projection = source_model
+            .projections
+            .first()
+            .expect("source-model manifest should have a projection");
+        assert_eq!(projection.name, "issues");
+        let projection_refs = source_model.projection_refs();
+        let projection_ref = projection_refs
+            .first()
+            .expect("source-model manifest should have a projection ref");
+        assert_eq!(projection_ref.operation, "issues/list-for-repo");
+    }
+
+    #[test]
+    fn parse_source_manifest_rejects_source_model_entities_block() {
+        let error = parse_source_manifest_yaml(
+            r"
+name: github
+version: 1.0.0
+dsl_version: 4
+backend: source_model
+surfaces:
+  - id: github-rest
+    type: open-api
+    url: https://example.com/github-openapi.yaml
+    sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    base_url: https://api.github.com
+projections:
+  - name: issues
+    kind: table
+    surface: github-rest
+    operation: issues/list-for-repo
+entities: []
+",
+        )
+        .expect_err("manifest-authored entities should fail");
+
+        assert!(
+            error.to_string().contains("entities"),
+            "error should identify entities block: {error}"
+        );
     }
 
     #[test]
