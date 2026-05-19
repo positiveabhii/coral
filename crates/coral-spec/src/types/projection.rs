@@ -239,7 +239,7 @@ fn output_entity_and_cardinality(
             TypeRef::Entity(entity) => Some((entity, ProjectionCardinality::Many)),
             _ => None,
         },
-        TypeRef::Scalar(_) => None,
+        TypeRef::Scalar(_) | TypeRef::Enum(_) | TypeRef::Map(_) | TypeRef::Union(_) => None,
     }
 }
 
@@ -262,10 +262,19 @@ fn projection_filter_for_operation_input(input: &OperationInput) -> ProjectionFi
 
 fn projection_type_for_type_ref(ty: &TypeRef) -> ProjectionScalarType {
     match ty {
-        TypeRef::Scalar(ScalarType::String) => ProjectionScalarType::String,
+        TypeRef::Scalar(ScalarType::String)
+        | TypeRef::Scalar(ScalarType::Date)
+        | TypeRef::Scalar(ScalarType::DateTime)
+        | TypeRef::Enum(_) => ProjectionScalarType::String,
         TypeRef::Scalar(ScalarType::Integer) => ProjectionScalarType::Integer,
         TypeRef::Scalar(ScalarType::Boolean) => ProjectionScalarType::Boolean,
-        TypeRef::Entity(_) | TypeRef::List(_) => ProjectionScalarType::Json,
+        TypeRef::Scalar(ScalarType::Number)
+        | TypeRef::Scalar(ScalarType::Json)
+        | TypeRef::Scalar(ScalarType::Null)
+        | TypeRef::Entity(_)
+        | TypeRef::List(_)
+        | TypeRef::Map(_)
+        | TypeRef::Union(_) => ProjectionScalarType::Json,
     }
 }
 

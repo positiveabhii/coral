@@ -299,6 +299,11 @@ impl RowFetcher for SourceModelRestFetchPlan {
     async fn fetch(&self) -> Result<Vec<Value>> {
         let method = match self.request.method {
             HttpMethod::Get => reqwest::Method::GET,
+            HttpMethod::Post => reqwest::Method::POST,
+            HttpMethod::Put => reqwest::Method::PUT,
+            HttpMethod::Patch => reqwest::Method::PATCH,
+            HttpMethod::Delete => reqwest::Method::DELETE,
+            HttpMethod::Head => reqwest::Method::HEAD,
         };
         let mut request = self.client.request(method, &self.request.url);
         if !self
