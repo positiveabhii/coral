@@ -6,13 +6,14 @@ mod query;
 mod query_error;
 
 pub use catalog::{
-    CatalogInfo, ColumnInfo, TableFunctionArgumentInfo, TableFunctionInfo,
+    CatalogInfo, ColumnInfo, SYSTEM_SCHEMA_NAME, TableFunctionArgumentInfo, TableFunctionInfo,
     TableFunctionResultColumnInfo, TableInfo,
 };
 pub use error::{CoreError, StatusCode, StructuredQueryError};
 pub use query::{
     QueryExecution, QueryPlan, QueryRuntimeConfig, QueryRuntimeContext, QuerySource,
-    QueryTestFailure, QueryTestResult, QueryTestSuccess, SourceValidationReport,
+    QueryTestFailure, QueryTestResult, QueryTestSuccess, SourceValidationReport, SqlParameterValue,
+    SqlParameters,
 };
 pub(crate) use query_error::{ColumnParts, TableRefParts};
 

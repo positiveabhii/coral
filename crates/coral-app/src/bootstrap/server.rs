@@ -1029,6 +1029,7 @@ tables:
             .execute_sql(Request::new(ExecuteSqlRequest {
                 workspace: Some(default_workspace()),
                 sql: "SELECT text FROM tilde_demo.messages ORDER BY text".to_string(),
+                parameters: None,
             }))
             .await
             .expect("execute sql")
@@ -1087,6 +1088,7 @@ tables:
             .execute_sql(Request::new(ExecuteSqlRequest {
                 workspace: Some(default_workspace()),
                 sql: sql.to_string(),
+                parameters: None,
             }))
             .await
             .expect("execute_sql >4MB response")
@@ -1190,6 +1192,7 @@ tables:
             .execute_sql(Request::new(ExecuteSqlRequest {
                 workspace: Some(default_workspace()),
                 sql: "SELECT bogus_column FROM wide_demo.wide LIMIT 0".to_string(),
+                parameters: None,
             }))
             .await
             .expect_err("expected gRPC Status, not a transport-level PROTOCOL_ERROR");

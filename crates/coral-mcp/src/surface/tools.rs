@@ -9,6 +9,38 @@ use serde_json::{Map, Value, json};
 
 use super::{Pagination, parse_pagination, parse_pagination_with_limits};
 
+pub(crate) struct SqlArguments {
+    pub(crate) sql: String,
+    pub(crate) params: Option<SqlParametersArgument>,
+}
+
+#[cfg(feature = "code-mode")]
+pub(crate) struct ExecArguments {
+    pub(crate) source: String,
+    pub(crate) yield_time_ms: Option<u64>,
+    pub(crate) max_output_tokens: Option<usize>,
+}
+
+#[cfg(feature = "code-mode")]
+pub(crate) struct WaitArguments {
+    pub(crate) cell_id: String,
+    pub(crate) yield_time_ms: Option<u64>,
+    pub(crate) terminate: bool,
+}
+
+pub(crate) enum SqlParametersArgument {
+    Positional(Vec<SqlParameterArgument>),
+    Named(std::collections::BTreeMap<String, SqlParameterArgument>),
+}
+
+pub(crate) enum SqlParameterArgument {
+    Null,
+    Boolean(bool),
+    Int64(i64),
+    Float64(f64),
+    String(String),
+}
+
 pub(crate) struct ListCatalogArguments {
     pub(crate) schema: Option<String>,
     pub(crate) kind: Option<CatalogToolKind>,
@@ -54,10 +86,24 @@ pub(crate) fn sql_tool(sources: &[Source], visible_table_count: usize) -> Tool {
                 "sql": {
                     "type": "string",
                     "description": "A single SQL statement to execute."
+                },
+                "params": {
+                    "description": "Optional bound SQL parameters. Arrays bind positional placeholders such as $1 and $2. Objects bind named placeholders such as $name.",
+                    "anyOf": [
+                        {
+                            "type": "array",
+                            "items": sql_parameter_value_schema()
+                        },
+                        {
+                            "type": "object",
+                            "additionalProperties": sql_parameter_value_schema()
+                        }
+                    ]
                 }
             }
         })),
     )
+    .with_raw_output_schema(sql_output_schema())
     .with_annotations(
         ToolAnnotations::with_title("Run SQL")
             .read_only(true)
@@ -200,6 +246,7 @@ pub(crate) fn describe_table_tool() -> Tool {
             }
         })),
     )
+    .with_raw_output_schema(describe_table_output_schema())
     .with_annotations(
         ToolAnnotations::with_title("Describe Table")
             .read_only(true)
@@ -296,6 +343,80 @@ pub(crate) fn feedback_tool() -> Tool {
     )
 }
 
+#[cfg(feature = "code-mode")]
+pub(crate) fn exec_tool(description: String, open_world_hint: bool) -> Tool {
+    Tool::new(
+        "exec",
+        description,
+        json_object_schema(&json!({
+            "type": "object",
+            "required": ["source"],
+            "additionalProperties": false,
+            "properties": {
+                "source": {
+                    "type": "string",
+                    "description": "JavaScript source to run in Code Mode. Return the JSON-serializable value you want exec to return."
+                },
+                "yield_time_ms": {
+                    "type": "integer",
+                    "description": "Optional milliseconds to run before yielding a still-running cell.",
+                    "minimum": 0
+                },
+                "max_output_tokens": {
+                    "type": "integer",
+                    "description": "Optional output token budget for this exec result.",
+                    "minimum": 0
+                }
+            }
+        })),
+    )
+    .with_raw_output_schema(code_mode_output_schema())
+    .with_annotations(
+        ToolAnnotations::with_title("Run Code Mode")
+            .read_only(false)
+            .destructive(false)
+            .idempotent(false)
+            .open_world(open_world_hint),
+    )
+}
+
+#[cfg(feature = "code-mode")]
+pub(crate) fn wait_tool(description: &'static str, open_world_hint: bool) -> Tool {
+    Tool::new(
+        "wait",
+        description,
+        json_object_schema(&json!({
+            "type": "object",
+            "required": ["cell_id"],
+            "additionalProperties": false,
+            "properties": {
+                "cell_id": {
+                    "type": "string",
+                    "description": "Code Mode cell id returned by exec."
+                },
+                "yield_time_ms": {
+                    "type": "integer",
+                    "description": "Optional milliseconds to wait before yielding again.",
+                    "minimum": 0
+                },
+                "terminate": {
+                    "type": "boolean",
+                    "description": "Terminate the cell instead of waiting for more output.",
+                    "default": false
+                }
+            }
+        })),
+    )
+    .with_raw_output_schema(code_mode_output_schema())
+    .with_annotations(
+        ToolAnnotations::with_title("Wait For Code Mode")
+            .read_only(false)
+            .destructive(false)
+            .idempotent(false)
+            .open_world(open_world_hint),
+    )
+}
+
 pub(crate) fn required_string_argument(
     arguments: Option<&Map<String, Value>>,
     key: &str,
@@ -309,6 +430,101 @@ pub(crate) fn required_string_argument(
             ErrorData::invalid_params(format!("missing string argument '{key}'"), None)
         })?;
     Ok(value.to_string())
+}
+
+pub(crate) fn sql_arguments(
+    arguments: Option<&Map<String, Value>>,
+) -> Result<SqlArguments, ErrorData> {
+    Ok(SqlArguments {
+        sql: required_string_argument(arguments, "sql")?,
+        params: optional_sql_parameters_argument(arguments)?,
+    })
+}
+
+#[cfg(feature = "code-mode")]
+pub(crate) fn exec_arguments(
+    arguments: Option<&Map<String, Value>>,
+) -> Result<ExecArguments, ErrorData> {
+    Ok(ExecArguments {
+        source: required_string_argument(arguments, "source")?,
+        yield_time_ms: optional_u64_argument(arguments, "yield_time_ms")?,
+        max_output_tokens: optional_usize_argument(arguments, "max_output_tokens")?,
+    })
+}
+
+#[cfg(feature = "code-mode")]
+pub(crate) fn wait_arguments(
+    arguments: Option<&Map<String, Value>>,
+) -> Result<WaitArguments, ErrorData> {
+    Ok(WaitArguments {
+        cell_id: required_string_argument(arguments, "cell_id")?,
+        yield_time_ms: optional_u64_argument(arguments, "yield_time_ms")?,
+        terminate: optional_bool_argument(arguments, "terminate", false)?,
+    })
+}
+
+fn optional_sql_parameters_argument(
+    arguments: Option<&Map<String, Value>>,
+) -> Result<Option<SqlParametersArgument>, ErrorData> {
+    let Some(params) = arguments.and_then(|arguments| arguments.get("params")) else {
+        return Ok(None);
+    };
+    match params {
+        Value::Array(values) => values
+            .iter()
+            .map(sql_parameter_argument)
+            .collect::<Result<Vec<_>, _>>()
+            .map(SqlParametersArgument::Positional)
+            .map(Some),
+        Value::Object(values) => values
+            .iter()
+            .map(|(key, value)| {
+                if key.is_empty() {
+                    return Err(ErrorData::invalid_params(
+                        "SQL parameter names must not be empty",
+                        None,
+                    ));
+                }
+                if key.starts_with('$') {
+                    return Err(ErrorData::invalid_params(
+                        "SQL parameter names must not include the leading '$'",
+                        None,
+                    ));
+                }
+                sql_parameter_argument(value).map(|value| (key.clone(), value))
+            })
+            .collect::<Result<std::collections::BTreeMap<_, _>, _>>()
+            .map(SqlParametersArgument::Named)
+            .map(Some),
+        _ => Err(ErrorData::invalid_params(
+            "argument 'params' must be an array or object",
+            None,
+        )),
+    }
+}
+
+fn sql_parameter_argument(value: &Value) -> Result<SqlParameterArgument, ErrorData> {
+    match value {
+        Value::Null => Ok(SqlParameterArgument::Null),
+        Value::Bool(value) => Ok(SqlParameterArgument::Boolean(*value)),
+        Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                Ok(SqlParameterArgument::Int64(value))
+            } else if let Some(value) = value.as_u64().and_then(|value| i64::try_from(value).ok()) {
+                Ok(SqlParameterArgument::Int64(value))
+            } else {
+                let value = value.as_f64().ok_or_else(|| {
+                    ErrorData::invalid_params("SQL numeric parameters must be finite", None)
+                })?;
+                Ok(SqlParameterArgument::Float64(value))
+            }
+        }
+        Value::String(value) => Ok(SqlParameterArgument::String(value.clone())),
+        Value::Array(_) | Value::Object(_) => Err(ErrorData::invalid_params(
+            "SQL parameter values must be null, boolean, number, or string",
+            None,
+        )),
+    }
 }
 
 pub(crate) fn list_catalog_arguments(
@@ -396,6 +612,89 @@ fn search_catalog_description(visible_table_count: usize, visible_function_count
     format!(
         "Search queryable catalog metadata with a Rust regex. {visible_table_count} table(s) and {visible_function_count} table function(s) are currently visible."
     )
+}
+
+fn sql_output_schema() -> Arc<Map<String, Value>> {
+    json_object_schema(&json!({
+        "type": "object",
+        "required": ["columns", "rows", "row_count"],
+        "additionalProperties": false,
+        "properties": {
+            "columns": {
+                "type": "array",
+                "items": sql_column_schema()
+            },
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            },
+            "row_count": {
+                "type": "integer",
+                "minimum": 0
+            }
+        }
+    }))
+}
+
+#[cfg(feature = "code-mode")]
+fn code_mode_output_schema() -> Arc<Map<String, Value>> {
+    json_object_schema(&json!({
+        "type": "object",
+        "required": ["status"],
+        "additionalProperties": false,
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": ["completed", "running", "terminated", "failed"]
+            },
+            "cell_id": {
+                "type": "string"
+            },
+            "result": true,
+            "error": {
+                "type": "object",
+                "required": ["message"],
+                "additionalProperties": true,
+                "properties": {
+                    "message": { "type": "string" }
+                }
+            }
+        }
+    }))
+}
+
+fn sql_column_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["name", "data_type", "nullable"],
+        "additionalProperties": false,
+        "properties": {
+            "name": { "type": "string" },
+            "data_type": {
+                "type": "object",
+                "required": ["kind"],
+                "additionalProperties": true,
+                "properties": {
+                    "kind": { "type": "string" }
+                }
+            },
+            "nullable": { "type": "boolean" }
+        }
+    })
+}
+
+fn sql_parameter_value_schema() -> Value {
+    json!({
+        "anyOf": [
+            { "type": "null" },
+            { "type": "boolean" },
+            { "type": "number" },
+            { "type": "string" }
+        ]
+    })
 }
 
 fn list_catalog_output_schema() -> Arc<Map<String, Value>> {
@@ -606,6 +905,47 @@ fn list_columns_output_schema() -> Arc<Map<String, Value>> {
     }))
 }
 
+fn describe_table_output_schema() -> Arc<Map<String, Value>> {
+    json_object_schema(&json!({
+        "type": "object",
+        "oneOf": [
+            {
+                "type": "object",
+                "required": [
+                    "found",
+                    "schema_name",
+                    "table_name",
+                    "name",
+                    "description",
+                    "guide",
+                    "required_filters",
+                    "column_count",
+                    "columns_hint"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                    "found": { "enum": [true] },
+                    "schema_name": { "type": "string" },
+                    "table_name": { "type": "string" },
+                    "name": { "type": "string" },
+                    "description": { "type": "string" },
+                    "guide": { "type": "string" },
+                    "required_filters": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "column_count": {
+                        "type": "integer",
+                        "minimum": 0
+                    },
+                    "columns_hint": { "type": "string" }
+                }
+            },
+            missing_table_output_schema()
+        ]
+    }))
+}
+
 fn list_columns_page_output_schema() -> Value {
     json!({
         "type": "object",
@@ -788,6 +1128,34 @@ fn optional_bool_argument(
     };
     value.as_bool().ok_or_else(|| {
         ErrorData::invalid_params(format!("argument '{key}' must be a boolean"), None)
+    })
+}
+
+#[cfg(feature = "code-mode")]
+fn optional_u64_argument(
+    arguments: Option<&Map<String, Value>>,
+    key: &str,
+) -> Result<Option<u64>, ErrorData> {
+    let Some(value) = arguments.and_then(|arguments| arguments.get(key)) else {
+        return Ok(None);
+    };
+    value.as_u64().map(Some).ok_or_else(|| {
+        ErrorData::invalid_params(
+            format!("argument '{key}' must be a non-negative integer"),
+            None,
+        )
+    })
+}
+
+#[cfg(feature = "code-mode")]
+fn optional_usize_argument(
+    arguments: Option<&Map<String, Value>>,
+    key: &str,
+) -> Result<Option<usize>, ErrorData> {
+    optional_u64_argument(arguments, key).and_then(|value| {
+        value.map(usize::try_from).transpose().map_err(|_error| {
+            ErrorData::invalid_params(format!("argument '{key}' is too large"), None)
+        })
     })
 }
 

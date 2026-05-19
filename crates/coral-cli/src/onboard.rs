@@ -326,6 +326,7 @@ async fn run_first_query(app: &AppClient, sql: &str) -> Result<String, anyhow::E
         .execute_sql(Request::new(ExecuteSqlRequest {
             workspace: Some(default_workspace()),
             sql: sql.to_string(),
+            parameters: None,
         }))
         .await?
         .into_inner();

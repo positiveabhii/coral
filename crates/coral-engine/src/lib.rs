@@ -68,8 +68,9 @@ pub use composition::{
 pub use contracts::{
     CatalogInfo, ColumnInfo, CoreError, QueryExecution, QueryPlan, QueryRuntimeConfig,
     QueryRuntimeContext, QuerySource, QueryTestFailure, QueryTestResult, QueryTestSuccess,
-    SourceValidationReport, StatusCode, StructuredQueryError, TableFunctionArgumentInfo,
-    TableFunctionInfo, TableFunctionResultColumnInfo, TableInfo,
+    SYSTEM_SCHEMA_NAME, SourceValidationReport, SqlParameterValue, SqlParameters, StatusCode,
+    StructuredQueryError, TableFunctionArgumentInfo, TableFunctionInfo,
+    TableFunctionResultColumnInfo, TableInfo,
 };
 
 /// High-level query operations for the local query engine.
@@ -130,13 +131,29 @@ impl CoralQuery {
         runtime: QueryRuntimeConfig,
         sql: &str,
     ) -> Result<QueryExecution, CoreError> {
+        Self::execute_sql_with_params(sources, runtime, sql, None).await
+    }
+
+    /// Executes one parameterized `SQL` statement over the provided source set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError`] if the SQL is empty, if source compilation fails,
+    /// if parameter binding fails, or if the runtime cannot execute the
+    /// statement.
+    pub async fn execute_sql_with_params(
+        sources: &[QuerySource],
+        runtime: QueryRuntimeConfig,
+        sql: &str,
+        params: Option<&SqlParameters>,
+    ) -> Result<QueryExecution, CoreError> {
         if sql.trim().is_empty() {
             return Err(CoreError::InvalidInput("SQL must not be empty".to_string()));
         }
 
         runtime::query::build_runtime(sources, runtime)
             .await?
-            .execute_sql(sql)
+            .execute_sql(sql, params)
             .await
     }
 
@@ -204,7 +221,7 @@ impl CoralQuery {
 
         let mut query_tests = Vec::with_capacity(test_queries.len());
         for sql in test_queries {
-            match query_runtime.execute_sql(sql).await {
+            match query_runtime.execute_sql(sql, None).await {
                 Ok(execution) => query_tests.push(QueryTestResult::success(
                     sql.clone(),
                     execution.row_count() as u64,

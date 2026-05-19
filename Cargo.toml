@@ -47,6 +47,7 @@ print_stdout = "warn"
 assert_cmd = "2"
 anyhow = "1"
 arrow = "58.1.0"
+async-channel = "2.3.1"
 async-trait = "0.1"
 axum = { version = "0.8", default-features = false }
 base64 = "0.22"
@@ -57,6 +58,7 @@ clap_complete = "4.5"
 datafusion = "53"
 datafusion-functions-json = "0.53"
 datafusion-tracing = "53.0.1"
+deno_core_icudata = "0.77.0"
 dialoguer = "0.12"
 etcetera = "0.11"
 fs2 = "0.4"
@@ -83,6 +85,7 @@ sqlparser = "0.59.0"
 strsim = "0.11"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
 tokio-stream = "0.1"
 toml = "0.9"
 toml_edit = "0.25.10"
@@ -99,6 +102,7 @@ tempfile = "3"
 url = "2"
 urlencoding = "2"
 uuid = { version = "1", features = ["serde", "v4"] }
+v8 = "=147.4.0"
 walkdir = "2"
 wiremock = "0.6"
 
@@ -106,6 +110,7 @@ coral-api = { path = "crates/coral-api" }
 coral-app = { path = "crates/coral-app" }
 coral-cli = { path = "crates/coral-cli" }
 coral-client = { path = "crates/coral-client" }
+coral-code-mode = { path = "crates/coral-code-mode" }
 coral-engine = { path = "crates/coral-engine" }
 coral-mcp = { path = "crates/coral-mcp" }
 coral-spec = { path = "crates/coral-spec" }

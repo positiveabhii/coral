@@ -113,6 +113,14 @@ struct McpStdioArgs {
     /// Expose the feedback submission tool.
     #[arg(long)]
     enable_feedback: bool,
+    /// Expose the Code Mode exec/wait tools.
+    #[cfg(feature = "code-mode")]
+    #[arg(long)]
+    enable_code_mode: bool,
+    /// Advertise only Code Mode exec/wait while keeping Coral functions available inside Code Mode.
+    #[cfg(feature = "code-mode")]
+    #[arg(long, requires = "enable_code_mode")]
+    code_mode_only: bool,
 }
 
 #[derive(Debug, Args)]
@@ -421,6 +429,7 @@ async fn run_app_command(
                 .execute_sql(Request::new(ExecuteSqlRequest {
                     workspace: Some(default_workspace()),
                     sql: args.sql,
+                    parameters: None,
                 }))
                 .await
             {
@@ -445,6 +454,8 @@ async fn run_app_command(
                 app,
                 coral_mcp::McpOptions {
                     feedback_enabled: args.enable_feedback,
+                    code_mode_enabled: mcp_code_mode_enabled(&args),
+                    code_mode_only: mcp_code_mode_only(&args),
                     trace_parent: ctx.and_then(|ctx| ctx.trace_parent.clone()),
                 },
             ))
@@ -461,6 +472,26 @@ async fn run_app_command(
     }
 
     Ok(())
+}
+
+#[cfg(feature = "code-mode")]
+fn mcp_code_mode_enabled(args: &McpStdioArgs) -> bool {
+    args.enable_code_mode
+}
+
+#[cfg(not(feature = "code-mode"))]
+fn mcp_code_mode_enabled(_args: &McpStdioArgs) -> bool {
+    false
+}
+
+#[cfg(feature = "code-mode")]
+fn mcp_code_mode_only(args: &McpStdioArgs) -> bool {
+    args.code_mode_only
+}
+
+#[cfg(not(feature = "code-mode"))]
+fn mcp_code_mode_only(_args: &McpStdioArgs) -> bool {
+    false
 }
 
 async fn run_source(app: &AppClient, args: SourceArgs) -> Result<(), CliError> {

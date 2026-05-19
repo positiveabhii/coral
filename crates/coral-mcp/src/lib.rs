@@ -22,6 +22,9 @@
     reason = "Library test targets inherit package dependencies that are consumed by sibling targets."
 )]
 
+mod bridge;
+#[cfg(feature = "code-mode")]
+mod code_mode;
 mod error;
 mod server;
 mod surface;
@@ -41,6 +44,10 @@ pub(crate) use server::CoralMcpServer;
 pub struct McpOptions {
     /// Expose the feedback submission tool.
     pub feedback_enabled: bool,
+    /// Expose the Code Mode `exec` and `wait` tools.
+    pub code_mode_enabled: bool,
+    /// Advertise only `exec` and `wait`, while keeping finite Coral functions callable from Code Mode.
+    pub code_mode_only: bool,
     /// Optional W3C traceparent used to parent each MCP request span.
     pub trace_parent: Option<String>,
 }

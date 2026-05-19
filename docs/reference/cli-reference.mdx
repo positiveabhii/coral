@@ -141,7 +141,7 @@ coral ui --no-open
 Expose the local Coral runtime as an MCP stdio server.
 
 ```shellscript
-coral mcp-stdio
+coral mcp-stdio [--enable-feedback] [--enable-code-mode] [--code-mode-only]
 ```
 
 This command is intended to be launched by an MCP-capable client rather than used directly in an interactive shell.
@@ -155,8 +155,13 @@ This server exposes:
 | Tool     | `search_catalog` | Search catalog metadata by regex |
 | Tool     | `describe_table` | Show compact table metadata      |
 | Tool     | `list_columns`   | List columns for one table       |
+| Tool     | `feedback`       | Store blocked-agent feedback when `--enable-feedback` is set |
+| Tool     | `exec`           | Run Code Mode JavaScript when the binary is built with Code Mode and `--enable-code-mode` is set |
+| Tool     | `wait`           | Resume or terminate Code Mode cells when the binary is built with Code Mode and `--enable-code-mode` is set |
 | Resource | `coral://guide`  | Usage guide for agents           |
 | Resource | `coral://tables` | Table summaries for all sources  |
+
+`sql` returns structured `{ columns, rows, row_count }` results and accepts optional bound `params` as either an array for `$1` placeholders or an object for named placeholders. `--code-mode-only` requires `--enable-code-mode` and advertises only `exec` and `wait`; the finite Coral functions remain callable inside Code Mode. Code Mode `exec` returns `{ status, result }`; `result` is the script's returned JSON-serializable value. Bare final expressions and bare awaited tool calls are ignored unless returned. Returned object properties with `undefined` values are omitted, `undefined` array items become `null`, and top-level `undefined` means no returned value.
 
 ## `coral completion <SHELL>`
 

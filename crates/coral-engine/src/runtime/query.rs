@@ -1,7 +1,9 @@
 //! Concrete `DataFusion` runtime assembly for the data plane.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use datafusion::common::{ParamValues, ScalarValue};
 use datafusion::dataframe::DataFrame;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
@@ -22,7 +24,8 @@ use crate::runtime::registry::{
 use crate::runtime::source_functions::SourceFunctionRegistry;
 use crate::{
     CatalogInfo, CoreError, QueryExecution, QueryPlan, QueryResultObserver,
-    QueryResultObserverError, QueryRuntimeConfig, QuerySource, TableFunctionInfo, TableInfo,
+    QueryResultObserverError, QueryRuntimeConfig, QuerySource, SqlParameterValue, SqlParameters,
+    TableFunctionInfo, TableInfo,
 };
 
 pub(crate) struct QueryRuntimeAdapter {
@@ -168,8 +171,18 @@ impl QueryRuntimeAdapter {
             .find(|failure| failure.schema_name == source_name)
     }
 
-    pub(crate) async fn execute_sql(&self, sql: &str) -> Result<QueryExecution, CoreError> {
+    pub(crate) async fn execute_sql(
+        &self,
+        sql: &str,
+        params: Option<&SqlParameters>,
+    ) -> Result<QueryExecution, CoreError> {
         let df = self.sql_dataframe(sql).await?;
+        let df = match params {
+            Some(params) => df
+                .with_param_values(datafusion_params(params))
+                .map_err(|err| datafusion_to_core_with_sql(&err, &self.tables, Some(sql)))?,
+            None => df,
+        };
         let arrow_schema = Arc::new(df.schema().as_arrow().clone());
         let batches = df
             .collect()
@@ -224,6 +237,33 @@ impl QueryRuntimeAdapter {
             .sql_with_options(sql, read_only_sql_options())
             .await
             .map_err(|err| datafusion_to_core_with_sql(&err, &self.tables, Some(sql)))
+    }
+}
+
+fn datafusion_params(params: &SqlParameters) -> ParamValues {
+    match params {
+        SqlParameters::Positional(values) => ParamValues::from(
+            values
+                .iter()
+                .map(datafusion_scalar)
+                .collect::<Vec<ScalarValue>>(),
+        ),
+        SqlParameters::Named(values) => ParamValues::from(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), datafusion_scalar(value)))
+                .collect::<HashMap<String, ScalarValue>>(),
+        ),
+    }
+}
+
+fn datafusion_scalar(value: &SqlParameterValue) -> ScalarValue {
+    match value {
+        SqlParameterValue::Null => ScalarValue::Null,
+        SqlParameterValue::Boolean(value) => ScalarValue::Boolean(Some(*value)),
+        SqlParameterValue::Int64(value) => ScalarValue::Int64(Some(*value)),
+        SqlParameterValue::Float64(value) => ScalarValue::Float64(Some(*value)),
+        SqlParameterValue::Utf8(value) => ScalarValue::Utf8(Some(value.clone())),
     }
 }
 

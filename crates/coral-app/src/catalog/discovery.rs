@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use coral_engine::{ColumnInfo, TableFunctionInfo, TableInfo};
+use coral_engine::{ColumnInfo, SYSTEM_SCHEMA_NAME, TableFunctionInfo, TableInfo};
 use regex::{Regex, RegexBuilder};
 
 use crate::bootstrap::AppError;
@@ -159,7 +159,12 @@ impl CatalogDiscovery {
         pagination: Pagination,
     ) -> Result<Page<CatalogItem>, QueryManagerError> {
         let items = self
-            .catalog_items(workspace_name, schema_name, kind)
+            .catalog_items(
+                workspace_name,
+                schema_name,
+                kind,
+                schema_name == Some(SYSTEM_SCHEMA_NAME),
+            )
             .await?;
         Ok(page_items(items, pagination))
     }
@@ -169,6 +174,7 @@ impl CatalogDiscovery {
         workspace_name: &WorkspaceName,
         schema_name: Option<&str>,
         kind: Option<CatalogItemKind>,
+        include_system_tables: bool,
     ) -> Result<Vec<CatalogItem>, QueryManagerError> {
         let catalog = self
             .queries
@@ -176,10 +182,18 @@ impl CatalogDiscovery {
             .await?;
         let mut items = Vec::with_capacity(catalog.tables.len() + catalog.table_functions.len());
         if kind.is_none_or(|kind| kind == CatalogItemKind::Table) {
-            items.extend(catalog.tables.into_iter().map(|mut table| {
-                table.columns.clear();
-                CatalogItem::Table(table)
-            }));
+            items.extend(
+                catalog
+                    .tables
+                    .into_iter()
+                    .filter(|table| {
+                        include_system_tables || table.schema_name != SYSTEM_SCHEMA_NAME
+                    })
+                    .map(|mut table| {
+                        table.columns.clear();
+                        CatalogItem::Table(table)
+                    }),
+            );
         }
         if kind.is_none_or(|kind| kind == CatalogItemKind::TableFunction) {
             items.extend(
@@ -204,7 +218,7 @@ impl CatalogDiscovery {
     ) -> Result<Page<CatalogSearchResult>, QueryManagerError> {
         let regex = compile_metadata_regex(pattern, ignore_case).map_err(QueryManagerError::App)?;
         let matches = self
-            .catalog_items(workspace_name, schema_name, kind)
+            .catalog_items(workspace_name, schema_name, kind, true)
             .await?
             .into_iter()
             .filter_map(|item| {
@@ -241,6 +255,9 @@ impl CatalogDiscovery {
         }
 
         let mut all_tables = self.queries.list_tables(workspace_name, None, None).await?;
+        all_tables.retain(|table| {
+            table_ref.schema_name == SYSTEM_SCHEMA_NAME || table.schema_name != SYSTEM_SCHEMA_NAME
+        });
         for table in &mut all_tables {
             table.columns.clear();
         }

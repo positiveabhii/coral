@@ -320,6 +320,62 @@ async fn mcp_stdio_enable_feedback_lists_feedback_tool() -> Result<(), Box<dyn s
     Ok(())
 }
 
+#[cfg(feature = "code-mode")]
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_stdio_code_mode_exec_matches_direct_sql_and_waits()
+-> Result<(), Box<dyn std::error::Error>> {
+    let server = MockServer::start().await;
+    let client = start_mcp_client_with_args(&server, &["--enable-code-mode"]).await?;
+
+    let tools = client.list_all_tools().await?;
+    let tool_names = tools
+        .iter()
+        .map(|tool| tool.name.as_ref())
+        .collect::<Vec<_>>();
+    assert!(tool_names.contains(&"exec"));
+    assert!(tool_names.contains(&"wait"));
+
+    let direct = structured_tool_content(
+        &client,
+        CallToolRequestParams::new("sql").with_arguments(json_object(&json!({
+            "sql": "SELECT text FROM local_messages.messages ORDER BY text"
+        }))),
+    )
+    .await?;
+    let code_mode = structured_tool_content(
+        &client,
+        CallToolRequestParams::new("exec").with_arguments(json_object(&json!({
+            "source": "return await tools.sql(\"SELECT text FROM local_messages.messages ORDER BY text\");"
+        }))),
+    )
+    .await?;
+    assert_eq!(code_mode["status"], "completed");
+    assert_eq!(code_mode["result"], direct);
+
+    let pending = structured_tool_content(
+        &client,
+        CallToolRequestParams::new("exec").with_arguments(json_object(&json!({
+            "source": "await new Promise(() => {});",
+            "yield_time_ms": 1
+        }))),
+    )
+    .await?;
+    assert_eq!(pending["status"], "running");
+    let terminated = structured_tool_content(
+        &client,
+        CallToolRequestParams::new("wait").with_arguments(json_object(&json!({
+            "cell_id": pending["cell_id"],
+            "terminate": true
+        }))),
+    )
+    .await?;
+    assert_eq!(terminated["status"], "terminated");
+
+    client.cancel().await?;
+    server.shutdown().await;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn mcp_stdio_sql_and_catalog_tools_return_structured_content()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -330,7 +386,7 @@ async fn mcp_stdio_sql_and_catalog_tools_return_structured_content()
     assert_search_catalog_tool(&client, &server).await?;
     assert_describe_table_tool(&client, &server).await?;
     assert_list_columns_tool(&client).await?;
-    assert_sql_tool(&client).await?;
+    assert_sql_tool(&client, &server).await?;
 
     client.cancel().await?;
     server.shutdown().await;
@@ -525,6 +581,7 @@ async fn assert_list_columns_tool(
 
 async fn assert_sql_tool(
     client: &RunningService<RoleClient, ()>,
+    server: &MockServer,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let sql = structured_tool_content(
         client,
@@ -533,7 +590,39 @@ async fn assert_sql_tool(
         }))),
     )
     .await?;
+    assert_eq!(sql["columns"][0]["name"], "text");
+    assert_eq!(sql["columns"][0]["data_type"]["kind"], "string");
+    assert_eq!(sql["columns"][0]["nullable"], false);
+    assert_eq!(sql["row_count"], 2);
     assert_eq!(sql["rows"][0]["text"], "hello");
+
+    let parameterized = structured_tool_content(
+        client,
+        CallToolRequestParams::new("sql").with_arguments(json_object(&json!({
+            "sql": "SELECT $1 AS value",
+            "params": [1, "x", true, null]
+        }))),
+    )
+    .await?;
+    assert_eq!(parameterized["columns"][0]["data_type"]["kind"], "integer");
+    let requests = server.execute_sql_requests();
+    let request = requests.last().expect("execute sql request");
+    let Some(coral_api::v1::execute_sql_request::Parameters::PositionalParams(params)) =
+        &request.parameters
+    else {
+        panic!("expected positional params");
+    };
+    assert_eq!(params.values.len(), 4);
+
+    client
+        .call_tool(
+            CallToolRequestParams::new("sql").with_arguments(json_object(&json!({
+                "sql": "SELECT $bad AS value",
+                "params": { "$bad": 1 }
+            }))),
+        )
+        .await
+        .expect_err("parameter names with leading dollar should fail");
     Ok(())
 }
 

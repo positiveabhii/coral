@@ -12,6 +12,7 @@ use datafusion::prelude::SessionContext;
 use serde::Serialize;
 
 use crate::backends::RegisteredSource;
+use crate::contracts::SYSTEM_SCHEMA_NAME;
 use crate::runtime::schema_provider::StaticSchemaProvider;
 use crate::{
     ColumnInfo, TableFunctionArgumentInfo, TableFunctionInfo, TableFunctionResultColumnInfo,
@@ -19,7 +20,214 @@ use crate::{
 };
 
 /// Schema name for source metadata tables such as `coral.tables`.
-pub(crate) const SYSTEM_SCHEMA: &str = "coral";
+pub(crate) const SYSTEM_SCHEMA: &str = SYSTEM_SCHEMA_NAME;
+
+struct SystemColumn {
+    name: &'static str,
+    data_type: &'static str,
+    nullable: bool,
+    description: &'static str,
+}
+
+struct SystemTable {
+    name: &'static str,
+    description: &'static str,
+    guide: &'static str,
+    columns: &'static [SystemColumn],
+}
+
+const SYSTEM_TABLES: &[SystemTable] = &[
+    SystemTable {
+        name: "columns",
+        description: "Column metadata for queryable Coral tables.",
+        guide: "Filter by schema_name and table_name, then order by ordinal_position to inspect a table.",
+        columns: &[
+            SystemColumn {
+                name: "schema_name",
+                data_type: "Utf8",
+                nullable: false,
+                description: "SQL schema name.",
+            },
+            SystemColumn {
+                name: "table_name",
+                data_type: "Utf8",
+                nullable: false,
+                description: "Table name within the SQL schema.",
+            },
+            SystemColumn {
+                name: "ordinal_position",
+                data_type: "Int32",
+                nullable: false,
+                description: "Zero-based column position within the table.",
+            },
+            SystemColumn {
+                name: "column_name",
+                data_type: "Utf8",
+                nullable: false,
+                description: "Column name.",
+            },
+            SystemColumn {
+                name: "data_type",
+                data_type: "Utf8",
+                nullable: false,
+                description: "Arrow/DataFusion data type string.",
+            },
+            SystemColumn {
+                name: "is_nullable",
+                data_type: "Boolean",
+                nullable: false,
+                description: "Whether the column can contain NULL values.",
+            },
+            SystemColumn {
+                name: "is_virtual",
+                data_type: "Boolean",
+                nullable: false,
+                description: "Whether the column is provider-derived metadata.",
+            },
+            SystemColumn {
+                name: "is_required_filter",
+                data_type: "Boolean",
+                nullable: false,
+                description: "Whether the table requires a constraint on this column before querying.",
+            },
+            SystemColumn {
+                name: "description",
+                data_type: "Utf8",
+                nullable: false,
+                description: "User-facing column description.",
+            },
+        ],
+    },
+    SystemTable {
+        name: "inputs",
+        description: "Installed source input metadata.",
+        guide: "Use coral.inputs to inspect source variables and secret presence; secret values are always NULL.",
+        columns: &[
+            SystemColumn {
+                name: "schema_name",
+                data_type: "Utf8",
+                nullable: false,
+                description: "SQL schema name for the installed source.",
+            },
+            SystemColumn {
+                name: "key",
+                data_type: "Utf8",
+                nullable: false,
+                description: "Input key.",
+            },
+            SystemColumn {
+                name: "kind",
+                data_type: "Utf8",
+                nullable: false,
+                description: "Input kind: variable or secret.",
+            },
+            SystemColumn {
+                name: "value",
+                data_type: "Utf8",
+                nullable: true,
+                description: "Resolved value for variables; always NULL for secrets.",
+            },
+            SystemColumn {
+                name: "default_value",
+                data_type: "Utf8",
+                nullable: true,
+                description: "Default value declared by the source, when present.",
+            },
+            SystemColumn {
+                name: "hint",
+                data_type: "Utf8",
+                nullable: true,
+                description: "User-facing input hint.",
+            },
+            SystemColumn {
+                name: "required",
+                data_type: "Boolean",
+                nullable: false,
+                description: "Whether the input is required.",
+            },
+            SystemColumn {
+                name: "is_set",
+                data_type: "Boolean",
+                nullable: false,
+                description: "Whether the input has a configured or default value.",
+            },
+        ],
+    },
+    SystemTable {
+        name: "table_functions",
+        description: "Table-function metadata for queryable Coral sources.",
+        guide: "Use coral.table_functions to inspect source-scoped table function arguments and result columns.",
+        columns: &[
+            SystemColumn {
+                name: "schema_name",
+                data_type: "Utf8",
+                nullable: false,
+                description: "SQL schema name.",
+            },
+            SystemColumn {
+                name: "function_name",
+                data_type: "Utf8",
+                nullable: false,
+                description: "Table function name within the SQL schema.",
+            },
+            SystemColumn {
+                name: "description",
+                data_type: "Utf8",
+                nullable: false,
+                description: "User-facing table function description.",
+            },
+            SystemColumn {
+                name: "arguments_json",
+                data_type: "Utf8",
+                nullable: false,
+                description: "JSON array describing accepted function arguments.",
+            },
+            SystemColumn {
+                name: "result_columns_json",
+                data_type: "Utf8",
+                nullable: false,
+                description: "JSON array describing result columns.",
+            },
+        ],
+    },
+    SystemTable {
+        name: "tables",
+        description: "Table metadata for queryable Coral sources and system tables.",
+        guide: "Use coral.tables to discover schema-qualified table names before querying.",
+        columns: &[
+            SystemColumn {
+                name: "schema_name",
+                data_type: "Utf8",
+                nullable: false,
+                description: "SQL schema name.",
+            },
+            SystemColumn {
+                name: "table_name",
+                data_type: "Utf8",
+                nullable: false,
+                description: "Table name within the SQL schema.",
+            },
+            SystemColumn {
+                name: "description",
+                data_type: "Utf8",
+                nullable: false,
+                description: "User-facing table description.",
+            },
+            SystemColumn {
+                name: "guide",
+                data_type: "Utf8",
+                nullable: false,
+                description: "User-facing query guidance.",
+            },
+            SystemColumn {
+                name: "required_filters",
+                data_type: "Utf8",
+                nullable: false,
+                description: "Comma-separated required filter column names.",
+            },
+        ],
+    },
+];
 
 /// Register `coral.tables` and `coral.columns` for the active source set.
 ///
@@ -176,10 +384,38 @@ pub(crate) fn collect_tables(active_sources: &[RegisteredSource]) -> Vec<TableIn
             })
         })
         .collect::<Vec<_>>();
+    tables.extend(system_tables());
     tables.sort_by(|left, right| {
         (&left.schema_name, &left.table_name).cmp(&(&right.schema_name, &right.table_name))
     });
     tables
+}
+
+fn system_tables() -> Vec<TableInfo> {
+    SYSTEM_TABLES
+        .iter()
+        .map(|table| TableInfo {
+            schema_name: SYSTEM_SCHEMA.to_string(),
+            table_name: table.name.to_string(),
+            description: table.description.to_string(),
+            guide: table.guide.to_string(),
+            columns: table
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(position, column)| ColumnInfo {
+                    name: column.name.to_string(),
+                    data_type: column.data_type.to_string(),
+                    nullable: column.nullable,
+                    is_virtual: false,
+                    is_required_filter: false,
+                    description: column.description.to_string(),
+                    ordinal_position: u32::try_from(position).unwrap_or(u32::MAX),
+                })
+                .collect(),
+            required_filters: Vec::new(),
+        })
+        .collect()
 }
 
 /// Collect typed source-scoped table function metadata for the active source set.
@@ -234,30 +470,42 @@ fn build_tables_table(active_sources: &[RegisteredSource]) -> Result<MemTable> {
         Field::new("required_filters", DataType::Utf8, false),
     ]));
 
-    let mut rows = active_sources
-        .iter()
-        .flat_map(|source| {
-            source.tables.iter().map(move |table| {
-                (
-                    source.schema_name.as_str(),
-                    table.table_name.as_str(),
-                    table.description.as_str(),
-                    table.guide.as_str(),
-                    table.required_filters.join(","),
-                )
-            })
+    let rows = collect_tables(active_sources)
+        .into_iter()
+        .map(|table| {
+            (
+                table.schema_name,
+                table.table_name,
+                table.description,
+                table.guide,
+                table.required_filters.join(","),
+            )
         })
         .collect::<Vec<_>>();
-
-    rows.sort_by(|left, right| (left.0, left.1).cmp(&(right.0, right.1)));
 
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(rows.iter().map(|row| Some(row.0)).collect::<StringArray>()),
-            Arc::new(rows.iter().map(|row| Some(row.1)).collect::<StringArray>()),
-            Arc::new(rows.iter().map(|row| Some(row.2)).collect::<StringArray>()),
-            Arc::new(rows.iter().map(|row| Some(row.3)).collect::<StringArray>()),
+            Arc::new(
+                rows.iter()
+                    .map(|row| Some(row.0.as_str()))
+                    .collect::<StringArray>(),
+            ),
+            Arc::new(
+                rows.iter()
+                    .map(|row| Some(row.1.as_str()))
+                    .collect::<StringArray>(),
+            ),
+            Arc::new(
+                rows.iter()
+                    .map(|row| Some(row.2.as_str()))
+                    .collect::<StringArray>(),
+            ),
+            Arc::new(
+                rows.iter()
+                    .map(|row| Some(row.3.as_str()))
+                    .collect::<StringArray>(),
+            ),
             Arc::new(
                 rows.iter()
                     .map(|row| Some(row.4.as_str()))
@@ -398,36 +646,22 @@ fn build_columns_table(active_sources: &[RegisteredSource]) -> Result<MemTable> 
         Field::new("description", DataType::Utf8, false),
     ]));
 
-    let mut rows = active_sources
-        .iter()
-        .flat_map(|source| {
-            source.tables.iter().flat_map(move |table| {
-                table
-                    .columns
-                    .iter()
-                    .enumerate()
-                    .map(move |(position, column)| CatalogColumn {
-                        schema_name: source.schema_name.clone(),
-                        table_name: table.table_name.clone(),
-                        column_name: column.name.clone(),
-                        data_type: column.data_type.clone(),
-                        is_nullable: column.nullable,
-                        is_virtual: column.is_virtual,
-                        is_required_filter: column.is_required_filter,
-                        description: column.description.clone(),
-                        ordinal_position: position,
-                    })
+    let rows = collect_tables(active_sources)
+        .into_iter()
+        .flat_map(|table| {
+            table.columns.into_iter().map(move |column| CatalogColumn {
+                schema_name: table.schema_name.clone(),
+                table_name: table.table_name.clone(),
+                column_name: column.name,
+                data_type: column.data_type,
+                is_nullable: column.nullable,
+                is_virtual: column.is_virtual,
+                is_required_filter: column.is_required_filter,
+                description: column.description,
+                ordinal_position: column.ordinal_position as usize,
             })
         })
         .collect::<Vec<_>>();
-
-    rows.sort_by(|left, right| {
-        (&left.schema_name, &left.table_name, left.ordinal_position).cmp(&(
-            &right.schema_name,
-            &right.table_name,
-            right.ordinal_position,
-        ))
-    });
 
     let batch = RecordBatch::try_new(
         schema.clone(),
