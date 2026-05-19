@@ -11,6 +11,9 @@ use crate::workspaces::WorkspaceName;
 
 pub(crate) const INSTALLED_MANIFEST_FILE_NAME: &str = "manifest.yaml";
 pub(crate) const INSTALLED_SECRETS_FILE_NAME: &str = "secrets.env";
+pub(crate) const SOURCE_MODEL_MATERIALIZATIONS_DIR_NAME: &str = "source-model-ir";
+pub(crate) const SOURCE_MODEL_IR_FILE_NAME: &str = "ir.json";
+pub(crate) const SOURCE_MODEL_METADATA_FILE_NAME: &str = "metadata.json";
 
 #[derive(Debug, Clone)]
 pub(crate) struct AppStateLayout {
@@ -107,6 +110,45 @@ impl AppStateLayout {
         self.source_dir(workspace_name, source_name)
             .join(INSTALLED_SECRETS_FILE_NAME)
     }
+
+    pub(crate) fn source_model_materializations_dir(
+        &self,
+        workspace_name: &WorkspaceName,
+        source_name: &SourceName,
+    ) -> PathBuf {
+        self.source_dir(workspace_name, source_name)
+            .join(SOURCE_MODEL_MATERIALIZATIONS_DIR_NAME)
+    }
+
+    pub(crate) fn source_model_materialization_dir(
+        &self,
+        workspace_name: &WorkspaceName,
+        source_name: &SourceName,
+        materialization_key: &str,
+    ) -> PathBuf {
+        self.source_model_materializations_dir(workspace_name, source_name)
+            .join(materialization_key)
+    }
+
+    pub(crate) fn source_model_ir_file(
+        &self,
+        workspace_name: &WorkspaceName,
+        source_name: &SourceName,
+        materialization_key: &str,
+    ) -> PathBuf {
+        self.source_model_materialization_dir(workspace_name, source_name, materialization_key)
+            .join(SOURCE_MODEL_IR_FILE_NAME)
+    }
+
+    pub(crate) fn source_model_metadata_file(
+        &self,
+        workspace_name: &WorkspaceName,
+        source_name: &SourceName,
+        materialization_key: &str,
+    ) -> PathBuf {
+        self.source_model_materialization_dir(workspace_name, source_name, materialization_key)
+            .join(SOURCE_MODEL_METADATA_FILE_NAME)
+    }
 }
 
 #[cfg(test)]
@@ -134,6 +176,12 @@ mod tests {
         assert_eq!(
             layout.secret_file(&workspace_name, &source_name),
             std::path::Path::new("/tmp/coral-config/workspaces/default/sources/github/secrets.env")
+        );
+        assert_eq!(
+            layout.source_model_ir_file(&workspace_name, &source_name, "abc123"),
+            std::path::Path::new(
+                "/tmp/coral-config/workspaces/default/sources/github/source-model-ir/abc123/ir.json"
+            )
         );
         assert_eq!(
             layout.feedback_reports_file(&workspace_name),

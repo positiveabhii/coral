@@ -5,9 +5,10 @@ use coral_api::v1::{
     CreateBundledSourceRequest, CreateBundledSourceResponse, DeleteSourceRequest,
     DeleteSourceResponse, DiscoverSourcesRequest, DiscoverSourcesResponse, GetSourceInfoRequest,
     GetSourceInfoResponse, GetSourceRequest, GetSourceResponse, ImportSourceRequest,
-    ImportSourceResponse, ListSourcesRequest, ListSourcesResponse, Source, SourceInfo,
-    SourceInputKind, SourceInputSpec, SourceOrigin as ProtoSourceOrigin, SourceSecret,
-    SourceVariable, ValidateSourceRequest, ValidateSourceResponse,
+    ImportSourceResponse, ListSourcesRequest, ListSourcesResponse, RefreshSourceRequest,
+    RefreshSourceResponse, Source, SourceInfo, SourceInputKind, SourceInputSpec,
+    SourceOrigin as ProtoSourceOrigin, SourceSecret, SourceVariable, ValidateSourceRequest,
+    ValidateSourceResponse,
 };
 use coral_spec::{ManifestInputKind, ManifestInputSpec};
 use tonic::{Request, Response, Status};
@@ -138,6 +139,7 @@ impl SourceServiceApi for SourceService {
             };
             let installed = sources
                 .create_bundled_source(&workspace_name, &command)
+                .await
                 .map_err(app_status)?;
             Ok(Response::new(CreateBundledSourceResponse {
                 source: Some(installed_source_to_proto(&workspace_name, installed)),
@@ -161,9 +163,31 @@ impl SourceServiceApi for SourceService {
             };
             let installed = sources
                 .import_source(&workspace_name, &command)
+                .await
                 .map_err(app_status)?;
             Ok(Response::new(ImportSourceResponse {
                 source: Some(installed_source_to_proto(&workspace_name, installed)),
+            }))
+        })
+        .await
+    }
+
+    async fn refresh_source(
+        &self,
+        request: Request<RefreshSourceRequest>,
+    ) -> Result<Response<RefreshSourceResponse>, Status> {
+        let span = grpc_span(&request);
+        let sources = self.sources.clone();
+        instrument_grpc(span, async move {
+            let request = request.into_inner();
+            let workspace_name = workspace_name_from_proto(request.workspace.as_ref())?;
+            let source_name = SourceName::parse(&request.name).map_err(app_status)?;
+            let refreshed = sources
+                .refresh_source(&workspace_name, &source_name)
+                .await
+                .map_err(app_status)?;
+            Ok(Response::new(RefreshSourceResponse {
+                source: Some(installed_source_to_proto(&workspace_name, refreshed)),
             }))
         })
         .await

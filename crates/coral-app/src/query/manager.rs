@@ -18,6 +18,7 @@ use crate::bootstrap::AppError;
 use crate::query::extensions::{EngineExtensionsProvider, engine_extensions_for_providers};
 use crate::sources::SourceName;
 use crate::sources::catalog::resolve_installed_manifest;
+use crate::sources::materialization::load_materialized_source_model_manifest;
 use crate::sources::model::InstalledSource;
 use crate::state::{AppStateLayout, ConfigStore, SecretStore};
 use crate::workspaces::WorkspaceName;
@@ -188,6 +189,14 @@ impl QueryManager {
     ) -> Result<(QuerySource, String), AppError> {
         let installed = resolve_installed_manifest(workspace_name, source, &self.layout)?;
         let source_spec = installed.source_spec;
+        if let Some(source_model) = source_spec.as_source_model() {
+            load_materialized_source_model_manifest(
+                &self.layout,
+                workspace_name,
+                &source.name,
+                source_model,
+            )?;
+        }
         validate_required_variables(source, source_spec.declared_inputs())?;
         let stored_secrets = self
             .secret_store

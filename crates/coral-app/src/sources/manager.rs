@@ -7,11 +7,14 @@ use crate::sources::SourceName;
 use crate::sources::catalog::{
     describe_manifest, list_bundled_sources, load_bundled_source, resolve_installed_manifest,
 };
+use crate::sources::materialization::{
+    materialize_source_model_manifest, refresh_source_model_manifest,
+};
 use crate::sources::model::{CandidateSource, InstalledSource, SourceOrigin};
 use crate::state::{AppStateLayout, ConfigStore, SecretStore};
 use crate::storage::fs;
 use crate::workspaces::WorkspaceName;
-use coral_spec::ManifestInputKind;
+use coral_spec::{ManifestInputKind, ValidatedSourceManifest, parse_source_manifest_yaml};
 use tracing::warn;
 
 #[derive(Clone)]
@@ -49,6 +52,7 @@ struct ValidatedBindings {
 
 struct PersistSourceRequest<'a> {
     candidate: &'a CandidateSource,
+    source_spec: &'a ValidatedSourceManifest,
     manifest_yaml: Option<&'a str>,
     bindings: ValidatedBindings,
     origin: SourceOrigin,
@@ -133,30 +137,36 @@ impl SourceManager {
         list_bundled_sources(&installed)
     }
 
-    pub(crate) fn create_bundled_source(
+    pub(crate) async fn create_bundled_source(
         &self,
         workspace_name: &WorkspaceName,
         command: &CreateBundledSourceCommand,
     ) -> Result<InstalledSource, AppError> {
         let bundled = load_bundled_source(&command.name)?;
+        let source_spec = parse_source_manifest_yaml(&bundled.manifest_yaml)
+            .map_err(|error| AppError::InvalidInput(error.to_string()))?;
         let candidate = self.describe_bundled_source(workspace_name, &bundled.manifest_yaml)?;
         let bindings = validate_bindings(&candidate, &command.bindings)?;
         self.persist_source(
             workspace_name,
             PersistSourceRequest {
                 candidate: &candidate,
+                source_spec: &source_spec,
                 manifest_yaml: None,
                 bindings,
                 origin: SourceOrigin::Bundled,
             },
         )
+        .await
     }
 
-    pub(crate) fn import_source(
+    pub(crate) async fn import_source(
         &self,
         workspace_name: &WorkspaceName,
         command: &ImportSourceCommand,
     ) -> Result<InstalledSource, AppError> {
+        let source_spec = parse_source_manifest_yaml(&command.manifest_yaml)
+            .map_err(|error| AppError::InvalidInput(error.to_string()))?;
         let mut candidate =
             describe_manifest(&command.manifest_yaml, SourceOrigin::Imported, false)?;
         candidate.installed = self.source_exists(workspace_name, &candidate.name)?;
@@ -165,11 +175,30 @@ impl SourceManager {
             workspace_name,
             PersistSourceRequest {
                 candidate: &candidate,
+                source_spec: &source_spec,
                 manifest_yaml: Some(&command.manifest_yaml),
                 bindings,
                 origin: SourceOrigin::Imported,
             },
         )
+        .await
+    }
+
+    pub(crate) async fn refresh_source(
+        &self,
+        workspace_name: &WorkspaceName,
+        source_name: &SourceName,
+    ) -> Result<InstalledSource, AppError> {
+        let stored = self.config_store.get_source(workspace_name, source_name)?;
+        let installed = resolve_installed_manifest(workspace_name, &stored, &self.layout)?;
+        let Some(source_model) = installed.source_spec.as_source_model() else {
+            return Err(AppError::InvalidInput(format!(
+                "source '{source_name}' is not a source-model source"
+            )));
+        };
+        refresh_source_model_manifest(&self.layout, workspace_name, source_name, source_model)
+            .await?;
+        self.populate_source_version(workspace_name, stored)
     }
 
     pub(crate) fn delete_source(
@@ -220,7 +249,7 @@ impl SourceManager {
         Ok(candidate)
     }
 
-    fn persist_source(
+    async fn persist_source(
         &self,
         workspace_name: &WorkspaceName,
         request: PersistSourceRequest<'_>,
@@ -229,6 +258,19 @@ impl SourceManager {
         let previous = self.load_source_rollback_state(workspace_name, &source_name)?;
         if let Err(error) =
             self.persist_manifest_artifact(workspace_name, &source_name, request.manifest_yaml)
+        {
+            self.restore_source_rollback_state(workspace_name, &source_name, previous);
+            return Err(error);
+        }
+
+        if let Some(source_model) = request.source_spec.as_source_model()
+            && let Err(error) = materialize_source_model_manifest(
+                &self.layout,
+                workspace_name,
+                &source_name,
+                source_model,
+            )
+            .await
         {
             self.restore_source_rollback_state(workspace_name, &source_name, previous);
             return Err(error);
@@ -544,11 +586,16 @@ fn cleanup_empty_parent(root: &std::path::Path, path: Option<&std::path::Path>) 
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
+    use url::Url;
+
+    use coral_spec::parse_source_manifest_yaml;
 
     use super::{
         ImportSourceCommand, SourceBinding, SourceBindings, SourceManager, normalize_binding_key,
     };
     use crate::sources::SourceName;
+    use crate::sources::materialization::load_materialized_source_model_manifest;
+    use crate::sources::materialization::test_support::document_sha256;
     use crate::state::{AppStateLayout, ConfigStore, SecretStore};
     use crate::workspaces::WorkspaceName;
 
@@ -589,8 +636,72 @@ tables:
         .to_string()
     }
 
-    #[test]
-    fn import_restores_prior_state_when_secret_persistence_fails() {
+    fn source_model_openapi_document() -> &'static str {
+        r"
+openapi: 3.0.3
+info:
+  title: Test API
+  version: 1.0.0
+paths:
+  /repos/{owner}/{repo}/issues:
+    get:
+      operationId: issues/list-for-repo
+      parameters:
+        - name: owner
+          in: path
+          required: true
+          schema: { type: string }
+        - name: repo
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Issue'
+components:
+  schemas:
+    Issue:
+      type: object
+      required: [id, title]
+      properties:
+        id: { type: integer }
+        title: { type: string }
+"
+    }
+
+    fn source_model_manifest(surface_url: &str, sha256: &str) -> String {
+        format!(
+            r"
+name: github
+version: 1.0.0
+dsl_version: 4
+backend: source_model
+surfaces:
+  - id: github-rest
+    type: open-api
+    url: {surface_url}
+    sha256: {sha256}
+    base_url: https://api.github.com
+projections:
+  - name: issues
+    kind: table
+    surface: github-rest
+    operation: issues/list-for-repo
+    columns:
+      - name: title
+        type: Utf8
+"
+        )
+    }
+
+    #[tokio::test]
+    async fn import_restores_prior_state_when_secret_persistence_fails() {
         let temp = TempDir::new().expect("temp dir");
         let layout =
             AppStateLayout::discover(Some(temp.path().join("coral-config"))).expect("layout");
@@ -624,6 +735,7 @@ tables:
                     },
                 },
             )
+            .await
             .expect_err("secret persistence should fail");
 
         assert!(
@@ -679,8 +791,8 @@ tables:
         assert!(error.to_string().contains("must not start with '#'"));
     }
 
-    #[test]
-    fn import_materializes_variable_defaults_server_side() {
+    #[tokio::test]
+    async fn import_materializes_variable_defaults_server_side() {
         let temp = TempDir::new().expect("temp dir");
         let layout =
             AppStateLayout::discover(Some(temp.path().join("coral-config"))).expect("layout");
@@ -705,11 +817,112 @@ tables:
                     },
                 },
             )
+            .await
             .expect("import source");
 
         assert_eq!(
             source.variables.get("API_BASE").map(String::as_str),
             Some("https://example.com")
+        );
+    }
+
+    #[tokio::test]
+    async fn import_materializes_source_model_ir_from_pinned_file_url() {
+        let temp = TempDir::new().expect("temp dir");
+        let layout =
+            AppStateLayout::discover(Some(temp.path().join("coral-config"))).expect("layout");
+        layout.ensure().expect("ensure layout");
+        let document_path = temp.path().join("openapi.yaml");
+        std::fs::write(&document_path, source_model_openapi_document()).expect("write openapi");
+        let surface_url = Url::from_file_path(&document_path)
+            .expect("file url")
+            .to_string();
+        let manifest = source_model_manifest(
+            &surface_url,
+            &document_sha256(source_model_openapi_document()),
+        );
+        let manager = SourceManager::new(
+            ConfigStore::new(layout.clone()),
+            SecretStore::new(layout.clone()),
+            layout.clone(),
+        );
+
+        manager
+            .import_source(
+                &default_workspace(),
+                &ImportSourceCommand {
+                    manifest_yaml: manifest.clone(),
+                    bindings: SourceBindings::default(),
+                },
+            )
+            .await
+            .expect("import source-model source");
+
+        let parsed = parse_source_manifest_yaml(&manifest).expect("parse manifest");
+        let source_model = parsed.as_source_model().expect("source-model manifest");
+        std::fs::remove_file(&document_path).expect("remove source OpenAPI document");
+        let materialized = load_materialized_source_model_manifest(
+            &layout,
+            &default_workspace(),
+            &SourceName::parse("github").expect("source"),
+            source_model,
+        )
+        .expect("load materialized IR");
+        assert!(
+            materialized
+                .operations
+                .iter()
+                .any(|operation| operation.id == "issues/list-for-repo")
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_rejects_changed_document_hash_and_reports_actual_hash() {
+        let temp = TempDir::new().expect("temp dir");
+        let layout =
+            AppStateLayout::discover(Some(temp.path().join("coral-config"))).expect("layout");
+        layout.ensure().expect("ensure layout");
+        let document_path = temp.path().join("openapi.yaml");
+        std::fs::write(&document_path, source_model_openapi_document()).expect("write openapi");
+        let surface_url = Url::from_file_path(&document_path)
+            .expect("file url")
+            .to_string();
+        let pinned_hash = document_sha256(source_model_openapi_document());
+        let manifest = source_model_manifest(&surface_url, &pinned_hash);
+        let manager = SourceManager::new(
+            ConfigStore::new(layout.clone()),
+            SecretStore::new(layout.clone()),
+            layout,
+        );
+        let source_name = SourceName::parse("github").expect("source");
+        manager
+            .import_source(
+                &default_workspace(),
+                &ImportSourceCommand {
+                    manifest_yaml: manifest,
+                    bindings: SourceBindings::default(),
+                },
+            )
+            .await
+            .expect("import source-model source");
+
+        let changed_document = source_model_openapi_document().replace("Test API", "Changed API");
+        std::fs::write(&document_path, &changed_document).expect("rewrite openapi");
+        let changed_hash = document_sha256(&changed_document);
+
+        let error = manager
+            .refresh_source(&default_workspace(), &source_name)
+            .await
+            .expect_err("refresh should reject changed hash");
+
+        let message = error.to_string();
+        assert!(
+            message.contains(&pinned_hash),
+            "missing pinned hash: {message}"
+        );
+        assert!(
+            message.contains(&changed_hash),
+            "missing actual hash: {message}"
         );
     }
 }

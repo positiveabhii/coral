@@ -98,6 +98,14 @@ coral source test github
 coral source test local_messages
 ```
 
+### `coral source refresh <NAME>`
+
+Refresh materialized artifacts for an installed source. For DSL v4 source-model sources, Coral re-fetches each pinned OpenAPI descriptor, verifies the manifest `sha256`, re-imports IR, validates projections, and replaces the local materialized IR only if the pin still matches.
+
+```shellscript
+coral source refresh github
+```
+
 ### `coral source remove <NAME>`
 
 Remove an installed source.

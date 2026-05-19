@@ -22,8 +22,9 @@ use coral_api::v1::{
     GetSourceInfoResponse, GetSourceRequest, GetSourceResponse, ImportSourceRequest,
     ImportSourceResponse, ListCatalogRequest, ListCatalogResponse, ListColumnsRequest,
     ListColumnsResponse, ListSourcesRequest, ListSourcesResponse, PaginationRequest,
-    PaginationResponse, QueryPlan, SearchCatalogRequest, SearchCatalogResponse, Source, SourceInfo,
-    SourceInputKind, SourceInputSpec, SourceOrigin, Table, TableSummary, ValidateSourceRequest,
+    PaginationResponse, QueryPlan, RefreshSourceRequest, RefreshSourceResponse,
+    SearchCatalogRequest, SearchCatalogResponse, Source, SourceInfo, SourceInputKind,
+    SourceInputSpec, SourceOrigin, Table, TableSummary, ValidateSourceRequest,
     ValidateSourceResponse, Workspace, catalog_item,
 };
 use coral_api::{CORAL_ERROR_DOMAIN, CORAL_ERROR_REASON_SOURCE_NOT_FOUND};
@@ -551,6 +552,7 @@ struct Captured {
     get_source_info: Mutex<Vec<GetSourceInfoRequest>>,
     create_bundled_source: Mutex<Vec<CreateBundledSourceRequest>>,
     import_source: Mutex<Vec<ImportSourceRequest>>,
+    refresh_source: Mutex<Vec<RefreshSourceRequest>>,
     delete_source: Mutex<Vec<DeleteSourceRequest>>,
     validate_source: Mutex<Vec<ValidateSourceRequest>>,
 }
@@ -868,6 +870,20 @@ impl SourceService for MockSourceService {
         }))
     }
 
+    async fn refresh_source(
+        &self,
+        request: Request<RefreshSourceRequest>,
+    ) -> Result<Response<RefreshSourceResponse>, Status> {
+        self.captured
+            .refresh_source
+            .lock()
+            .expect("refresh_source capture")
+            .push(request.into_inner());
+        Ok(Response::new(RefreshSourceResponse {
+            source: Some(mock_source()),
+        }))
+    }
+
     async fn delete_source(
         &self,
         request: Request<DeleteSourceRequest>,
@@ -1038,6 +1054,14 @@ impl MockServer {
             .delete_source
             .lock()
             .expect("delete_source capture")
+            .clone()
+    }
+
+    pub(crate) fn refresh_source_requests(&self) -> Vec<RefreshSourceRequest> {
+        self.captured
+            .refresh_source
+            .lock()
+            .expect("refresh_source capture")
             .clone()
     }
 

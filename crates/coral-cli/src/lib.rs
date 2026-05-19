@@ -166,6 +166,11 @@ enum SourceCommand {
         /// Name of the source to test
         name: String,
     },
+    /// Refresh materialized artifacts for a source
+    Refresh {
+        /// Name of the source to refresh
+        name: String,
+    },
     /// Remove a source
     Remove {
         /// Name of the source to remove
@@ -524,6 +529,10 @@ async fn run_source(app: &AppClient, args: SourceArgs) -> Result<(), CliError> {
             )
             .await?;
         }
+        SourceCommand::Refresh { name } => {
+            source_ops::refresh_source(app, &name).await?;
+            println!("Refreshed source {name}");
+        }
         SourceCommand::Remove { name } => {
             source_ops::remove_and_print(app, &name).await?;
         }
@@ -707,6 +716,20 @@ mod tests {
         let cli = Cli::try_parse_from(["coral", "source", "list"]).expect("source list parses");
 
         assert_eq!(cli.command.required_runtime(), RequiredRuntime::AppClient);
+    }
+
+    #[test]
+    fn source_refresh_parses() {
+        let cli = Cli::try_parse_from(["coral", "source", "refresh", "github"])
+            .expect("source refresh parses");
+
+        let super::Command::Source(args) = cli.command else {
+            panic!("expected source command");
+        };
+        let super::SourceCommand::Refresh { name } = args.command else {
+            panic!("expected source refresh command");
+        };
+        assert_eq!(name, "github");
     }
 
     #[test]

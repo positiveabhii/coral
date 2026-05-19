@@ -140,6 +140,20 @@ message ImportSourceResponse {
   Source source = 1;
 }
 
+// Refreshes materialized artifacts for an installed source.
+message RefreshSourceRequest {
+  // Owning workspace resource.
+  Workspace workspace = 1;
+  // Bare source name to refresh.
+  string name = 2;
+}
+
+// Returns the refreshed source.
+message RefreshSourceResponse {
+  // The refreshed source resource.
+  Source source = 1;
+}
+
 // Lists all registered sources in one workspace.
 message ListSourcesRequest {
   // Workspace whose sources should be listed.
@@ -250,6 +264,8 @@ service SourceService {
   rpc CreateBundledSource(CreateBundledSourceRequest) returns (CreateBundledSourceResponse);
   // Imports one user-provided source manifest.
   rpc ImportSource(ImportSourceRequest) returns (ImportSourceResponse);
+  // Refreshes materialized artifacts for one installed source.
+  rpc RefreshSource(RefreshSourceRequest) returns (RefreshSourceResponse);
   // Deletes a registered source.
   rpc DeleteSource(DeleteSourceRequest) returns (DeleteSourceResponse);
   // Validates that a registered source is queryable.

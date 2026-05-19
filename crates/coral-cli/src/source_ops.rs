@@ -5,9 +5,9 @@ use std::path::Path;
 use coral_api::CORAL_ERROR_REASON_SOURCE_NOT_FOUND;
 use coral_api::v1::{
     CreateBundledSourceRequest, DeleteSourceRequest, DiscoverSourcesRequest, GetSourceInfoRequest,
-    ImportSourceRequest, ListSourcesRequest, QueryTestFailure, QueryTestSuccess, Source,
-    SourceInfo, SourceInputKind, SourceInputSpec, SourceOrigin, SourceSecret, SourceVariable,
-    ValidateSourceRequest, ValidateSourceResponse, query_test_result,
+    ImportSourceRequest, ListSourcesRequest, QueryTestFailure, QueryTestSuccess,
+    RefreshSourceRequest, Source, SourceInfo, SourceInputKind, SourceInputSpec, SourceOrigin,
+    SourceSecret, SourceVariable, ValidateSourceRequest, ValidateSourceResponse, query_test_result,
 };
 use coral_client::{AppClient, DecodedStatusError, decode_status_error, default_workspace};
 use coral_spec::{
@@ -115,6 +115,20 @@ pub(crate) async fn import_source(
     response
         .source
         .ok_or_else(|| anyhow::anyhow!("import source response missing source"))
+}
+
+pub(crate) async fn refresh_source(app: &AppClient, name: &str) -> Result<Source, anyhow::Error> {
+    let response = app
+        .source_client()
+        .refresh_source(Request::new(RefreshSourceRequest {
+            workspace: Some(default_workspace()),
+            name: name.to_string(),
+        }))
+        .await?
+        .into_inner();
+    response
+        .source
+        .ok_or_else(|| anyhow::anyhow!("refresh source response missing source"))
 }
 
 pub(crate) async fn validate_source(
