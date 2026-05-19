@@ -11,6 +11,11 @@ pub(crate) struct Bootstrap {
     server: Option<RunningServer>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct BootstrapOptions {
+    pub(crate) enable_stderr_logs: bool,
+}
+
 impl Bootstrap {
     pub(crate) async fn shutdown(self) {
         if let Some(server) = self.server {
@@ -31,7 +36,7 @@ pub(crate) enum BootstrapError {
     },
 }
 
-pub(crate) async fn bootstrap(enable_stderr_logs: bool) -> Result<Bootstrap, BootstrapError> {
+pub(crate) async fn bootstrap(options: BootstrapOptions) -> Result<Bootstrap, BootstrapError> {
     if let Some(endpoint) = bootstrap_endpoint() {
         let app =
             AppClient::connect(&endpoint)
@@ -43,7 +48,7 @@ pub(crate) async fn bootstrap(enable_stderr_logs: bool) -> Result<Bootstrap, Boo
         return Ok(Bootstrap { app, server: None });
     }
 
-    let server = configure_server_builder(ServerBuilder::new(), enable_stderr_logs)
+    let server = configure_server_builder(ServerBuilder::new(), options)
         .start()
         .await?;
     let endpoint = server.endpoint_uri().to_string();
@@ -60,16 +65,16 @@ pub(crate) async fn bootstrap(enable_stderr_logs: bool) -> Result<Bootstrap, Boo
 pub(crate) async fn start_ui_server(port: u16) -> Result<RunningServer, BootstrapError> {
     let server = configure_server_builder(
         ServerBuilder::embedded_ui_loopback(port, crate::embedded_ui_assets()),
-        false,
+        BootstrapOptions::default(),
     )
     .start()
     .await?;
     Ok(server)
 }
 
-fn configure_server_builder(builder: ServerBuilder, enable_stderr_logs: bool) -> ServerBuilder {
+fn configure_server_builder(builder: ServerBuilder, options: BootstrapOptions) -> ServerBuilder {
     builder
-        .with_stderr_logs(enable_stderr_logs)
+        .with_stderr_logs(options.enable_stderr_logs)
         .add_engine_extensions_provider(Arc::new(AwsEngineExtensionsProvider))
 }
 
