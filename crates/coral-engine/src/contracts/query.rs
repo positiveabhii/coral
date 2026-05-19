@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
-use coral_spec::ValidatedSourceManifest;
+use coral_spec::{SourceModelIr, ValidatedSourceManifest};
 
 use super::ColumnInfo;
 use crate::EngineExtensions;
@@ -17,6 +17,7 @@ pub struct QuerySource {
     source_spec: ValidatedSourceManifest,
     variables: BTreeMap<String, String>,
     secrets: BTreeMap<String, String>,
+    source_model_ir: Option<SourceModelIr>,
 }
 
 impl QuerySource {
@@ -32,7 +33,15 @@ impl QuerySource {
             source_spec,
             variables,
             secrets,
+            source_model_ir: None,
         }
+    }
+
+    #[must_use]
+    /// Attaches materialized DSL v4 source-model IR to this selected source.
+    pub fn with_source_model_ir(mut self, source_model_ir: SourceModelIr) -> Self {
+        self.source_model_ir = Some(source_model_ir);
+        self
     }
 
     #[must_use]
@@ -63,6 +72,12 @@ impl QuerySource {
     /// Returns resolved source secrets required by the manifest.
     pub fn secrets(&self) -> &BTreeMap<String, String> {
         &self.secrets
+    }
+
+    #[must_use]
+    /// Returns materialized DSL v4 source-model IR when this source uses it.
+    pub fn source_model_ir(&self) -> Option<&SourceModelIr> {
+        self.source_model_ir.as_ref()
     }
 }
 

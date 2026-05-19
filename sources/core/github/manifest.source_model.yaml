@@ -47,6 +47,14 @@ projections:
     surface: github-rest
     operation: issues/list-for-repo
     columns:
+      - name: owner
+        type: Utf8
+        nullable: true
+        virtual: true
+      - name: repo
+        type: Utf8
+        nullable: true
+        virtual: true
       - name: id
         type: Int64
         nullable: true

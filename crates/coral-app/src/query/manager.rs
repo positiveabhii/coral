@@ -189,14 +189,16 @@ impl QueryManager {
     ) -> Result<(QuerySource, String), AppError> {
         let installed = resolve_installed_manifest(workspace_name, source, &self.layout)?;
         let source_spec = installed.source_spec;
-        if let Some(source_model) = source_spec.as_source_model() {
-            load_materialized_source_model_manifest(
+        let source_model_ir = if let Some(source_model) = source_spec.as_source_model() {
+            Some(load_materialized_source_model_manifest(
                 &self.layout,
                 workspace_name,
                 &source.name,
                 source_model,
-            )?;
-        }
+            )?)
+        } else {
+            None
+        };
         validate_required_variables(source, source_spec.declared_inputs())?;
         let stored_secrets = self
             .secret_store
@@ -227,10 +229,12 @@ impl QueryManager {
             })?;
             resolved_secrets.insert(secret_name, value);
         }
-        Ok((
-            QuerySource::new(source_spec, source.variables.clone(), resolved_secrets),
-            installed.candidate.version,
-        ))
+        let mut query_source =
+            QuerySource::new(source_spec, source.variables.clone(), resolved_secrets);
+        if let Some(ir) = source_model_ir {
+            query_source = query_source.with_source_model_ir(ir);
+        }
+        Ok((query_source, installed.candidate.version))
     }
 
     fn runtime_config(&self, selected_sources: &[QuerySource]) -> QueryRuntimeConfig {

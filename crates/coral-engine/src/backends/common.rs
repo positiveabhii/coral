@@ -8,7 +8,7 @@ use crate::{QueryRuntimeContext, RequestAuthenticator};
 use async_trait::async_trait;
 use coral_spec::backends::file::PartitionColumnSpec;
 use coral_spec::{
-    ColumnSpec, FilterSpec, ManifestDataType, ManifestInputKind, ManifestInputSpec,
+    ColumnSpec, FilterSpec, ManifestDataType, ManifestInputKind, ManifestInputSpec, SourceModelIr,
     SourceTableFunctionSpec, TableCommon,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
@@ -118,6 +118,7 @@ pub(crate) struct BackendCompileRequest<'a> {
     pub(crate) source_secrets: BTreeMap<String, String>,
     pub(crate) source_variables: BTreeMap<String, String>,
     pub(crate) request_authenticators: &'a HashMap<String, Arc<dyn RequestAuthenticator>>,
+    pub(crate) source_model_ir: Option<SourceModelIr>,
 }
 
 #[async_trait]

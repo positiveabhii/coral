@@ -19,6 +19,7 @@ pub(crate) mod http;
 pub(crate) mod jsonl;
 pub(crate) mod parquet;
 pub(crate) mod shared;
+pub(crate) mod source_model;
 
 pub(crate) fn compile_query_source(
     source: &QuerySource,
@@ -32,6 +33,7 @@ pub(crate) fn compile_query_source(
             source_secrets: source.secrets().clone(),
             source_variables: source.variables().clone(),
             request_authenticators,
+            source_model_ir: source.source_model_ir().cloned(),
         },
     )
 }
@@ -51,6 +53,7 @@ pub(crate) fn compile_source_manifest(
             source_secrets,
             source_variables,
             request_authenticators: &request_authenticators,
+            source_model_ir: None,
         },
     )
 }
@@ -67,6 +70,9 @@ pub(crate) fn compile_validated_manifest(
     }
     if let Some(jsonl_manifest) = manifest.as_jsonl() {
         return jsonl::compile_manifest(jsonl_manifest, request);
+    }
+    if let Some(source_model_manifest) = manifest.as_source_model() {
+        return source_model::compile_manifest(source_model_manifest, request);
     }
 
     Err(CoreError::internal(

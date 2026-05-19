@@ -21,6 +21,8 @@ mod parquet_tests;
 mod pattern_error_tests;
 #[path = "engine/query_result_observer_tests.rs"]
 mod query_result_observer_tests;
+#[path = "engine/source_model_tests.rs"]
+mod source_model_tests;
 #[path = "engine/structured_error_tests.rs"]
 mod structured_error_tests;
 #[path = "engine/test_source_tests.rs"]
