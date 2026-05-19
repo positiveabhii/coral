@@ -1017,6 +1017,11 @@ fn http_method_label(method: HttpMethod) -> &'static str {
     match method {
         HttpMethod::GET => "GET",
         HttpMethod::POST => "POST",
+        HttpMethod::PUT => "PUT",
+        HttpMethod::PATCH => "PATCH",
+        HttpMethod::DELETE => "DELETE",
+        HttpMethod::HEAD => "HEAD",
+        HttpMethod::OPTIONS => "OPTIONS",
     }
 }
 
@@ -1028,6 +1033,11 @@ fn build_http_request(
     match method {
         HttpMethod::GET => http.get(url),
         HttpMethod::POST => http.post(url),
+        HttpMethod::PUT => http.put(url),
+        HttpMethod::PATCH => http.patch(url),
+        HttpMethod::DELETE => http.delete(url),
+        HttpMethod::HEAD => http.head(url),
+        HttpMethod::OPTIONS => http.request(reqwest::Method::OPTIONS, url),
     }
 }
 

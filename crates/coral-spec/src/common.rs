@@ -309,6 +309,11 @@ pub enum HttpMethod {
     #[default]
     GET,
     POST,
+    PUT,
+    PATCH,
+    DELETE,
+    HEAD,
+    OPTIONS,
 }
 
 /// One query parameter emitted into an HTTP request.

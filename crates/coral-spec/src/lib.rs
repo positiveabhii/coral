@@ -80,6 +80,7 @@ mod common;
 mod error;
 mod inputs;
 mod loader;
+pub mod openapi;
 mod parser;
 mod schema;
 pub mod source_model;
@@ -103,6 +104,9 @@ pub use common::{
 pub use error::{ManifestError, Result};
 pub use inputs::{ManifestInputKind, ManifestInputSpec, resolve_inputs};
 pub use loader::load_manifest_path;
+pub use openapi::{
+    OPENAPI_IMPORTER_VERSION, OpenApiImportDiagnostic, OpenApiImportResult, import_openapi_surface,
+};
 pub use parser::{
     ValidatedSourceManifest, parse_source_manifest_value, parse_source_manifest_yaml,
 };
