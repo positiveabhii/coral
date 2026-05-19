@@ -15,6 +15,7 @@ use rmcp::model::{Content, Tool};
 use serde_json::{Map, Value, json};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument as _;
 
 use crate::bridge::{BridgeCallOutcome, CoralToolBridge, bridge_outcome_result};
 use crate::surface::{ExecArguments, WaitArguments};
@@ -128,8 +129,11 @@ Coral guidance:
         let source = wrap_source(&parsed.code);
         let cell_id = self.service.allocate_cell_id();
         telemetry::record_code_mode_cell_id(&tracing::Span::current(), &cell_id);
+        self.host
+            .set_cell_span(&cell_id, tracing::Span::current())
+            .await;
         let request = ExecuteRequest {
-            cell_id,
+            cell_id: cell_id.clone(),
             enabled_tools: tool_definitions(nested_tools),
             source,
             stored_values: self.service.stored_values().await,
@@ -139,7 +143,10 @@ Coral guidance:
 
         match self.service.execute(request).await {
             Ok(response) => self.runtime_response_result(response).await,
-            Err(error) => failed_code_mode_result(error),
+            Err(error) => {
+                self.host.clear_cell(&cell_id).await;
+                failed_code_mode_result(error)
+            }
         }
     }
 
@@ -149,6 +156,9 @@ Coral guidance:
         if let Err(outcome) = self.begin_wait(&cell_id).await {
             return outcome;
         }
+        self.host
+            .set_cell_span(&cell_id, tracing::Span::current())
+            .await;
         let response = self
             .service
             .wait(WaitRequest {
@@ -165,7 +175,10 @@ Coral guidance:
             Ok(WaitOutcome::LiveCell(response) | WaitOutcome::MissingCell(response)) => {
                 self.runtime_response_result(response).await
             }
-            Err(error) => failed_code_mode_result(error),
+            Err(error) => {
+                self.host.clear_cell(&cell_id).await;
+                failed_code_mode_result(error)
+            }
         }
     }
 
@@ -197,6 +210,7 @@ Coral guidance:
 struct CoralCodeModeHost {
     bridge: CoralToolBridge,
     nested_call_counts: Mutex<HashMap<String, usize>>,
+    cell_spans: Mutex<HashMap<String, tracing::Span>>,
 }
 
 impl CoralCodeModeHost {
@@ -204,11 +218,24 @@ impl CoralCodeModeHost {
         Self {
             bridge,
             nested_call_counts: Mutex::new(HashMap::new()),
+            cell_spans: Mutex::new(HashMap::new()),
         }
     }
 
     async fn clear_cell(&self, cell_id: &str) {
         self.nested_call_counts.lock().await.remove(cell_id);
+        self.cell_spans.lock().await.remove(cell_id);
+    }
+
+    async fn set_cell_span(&self, cell_id: &str, span: tracing::Span) {
+        self.cell_spans
+            .lock()
+            .await
+            .insert(cell_id.to_string(), span);
+    }
+
+    async fn cell_span(&self, cell_id: &str) -> Option<tracing::Span> {
+        self.cell_spans.lock().await.get(cell_id).cloned()
     }
 
     async fn increment_nested_call(&self, cell_id: &str) -> Result<(), String> {
@@ -240,7 +267,14 @@ impl CodeModeTurnHost for CoralCodeModeHost {
         let arguments = input.as_object().ok_or_else(|| {
             format!("tools.{tool_name} expects an object argument in Coral Code Mode")
         })?;
-        bridge_outcome_result(self.bridge.call(&tool_name, Some(arguments)).await)
+        let parent_span = self.cell_span(&invocation.cell_id).await;
+        let call = self.bridge.call(&tool_name, Some(arguments));
+        let outcome = if let Some(parent_span) = parent_span {
+            call.instrument(parent_span).await
+        } else {
+            call.await
+        };
+        bridge_outcome_result(outcome)
     }
 }
 
