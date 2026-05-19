@@ -1101,6 +1101,11 @@ async fn assert_code_mode_tool_surface(client: &RunningService<RoleClient, ()>) 
     assert_code_mode_annotations(&tools, true);
     let exec_tool = tool_by_name(&tools, "exec");
     let exec_description = exec_tool.description.as_deref().expect("exec description");
+    assert!(exec_description.starts_with("Coral SQL-first guidance"));
+    assert!(exec_description.contains("not a replacement for SQL"));
+    assert!(exec_description.contains("default to one `tools.sql` query"));
+    assert!(exec_description.contains("joins across tables or sources"));
+    assert!(exec_description.contains("Do not fetch multiple tables into JavaScript"));
     assert!(exec_description.contains("DataFusion"));
     assert!(exec_description.contains("tools.sql"));
     assert!(
@@ -1108,7 +1113,7 @@ async fn assert_code_mode_tool_surface(client: &RunningService<RoleClient, ()>) 
     );
     assert!(exec_description.contains("information_schema"));
     assert!(exec_description.contains("LIMIT 0"));
-    assert!(exec_description.contains("source-aware `LIMIT` pushdown"));
+    assert!(exec_description.contains("source-aware filters/limits"));
     assert!(exec_description.contains("json_get_str"));
     assert!(exec_description.contains("type SqlFunction"));
     assert!(exec_description.contains("<TRow extends SqlRow = SqlRow>"));

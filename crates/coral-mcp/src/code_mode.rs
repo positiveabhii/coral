@@ -90,22 +90,22 @@ impl CodeModeState {
         let definitions = tool_definitions(nested_tools);
         let mut description =
             build_exec_tool_description(&definitions, &BTreeMap::new(), true, false);
-        description.push_str(
-            r#"
+        let coral_guidance = r#"Coral SQL-first guidance:
+- Code Mode is a JavaScript orchestration layer around Coral SQL, not a replacement for SQL. For relational questions, default to one `tools.sql` query.
+- Put filtering, projection, joins across tables or sources, grouping, ordering, and limits in SQL so DataFusion can optimize the plan and push source-aware filters/limits into scans.
+- Do not fetch multiple tables into JavaScript and join, filter, sort, or aggregate them there unless SQL cannot express the operation or you are post-processing a deliberately small result.
+- Use JavaScript for dynamic query construction, schema inspection, small result shaping, branching/retry orchestration, or combining a few SQL results that cannot be expressed as one SQL statement.
+- Discover table names with `tools.list_catalog`, `tools.search_catalog`, `tools.describe_table`, and `tools.list_columns`, then query with `tools.sql`.
 
-Coral guidance:
 - Return the JSON-serializable value you want `exec` to return; do not rely on printing, a bare final expression, or a bare awaited tool call.
-- Prefer one SQL query for filtering, projection, joins, grouping, ordering, and limits. Coral SQL is backed by DataFusion, so these operations belong in SQL rather than JavaScript loops when possible.
 - Use `information_schema` and `LIMIT 0` queries for schema inspection when you need the concrete output columns before fetching rows.
-- Use source-aware `LIMIT` pushdown by putting `LIMIT` in SQL; do not fetch broad result sets and slice them in JavaScript.
 - Use registered JSON SQL functions such as `json_get_str`, `json_get_int`, `json_get_bool`, and `json_as_text` for filtering and projection over JSON payloads.
-- Use `tools.list_catalog`, `tools.search_catalog`, `tools.describe_table`, and `tools.list_columns` for discovery, then query with `tools.sql`.
 - `tools.sql("SELECT 1 AS n")` and `tools.sql({ sql: "SELECT $1 AS n", params: [1] })` return `{ columns, rows, row_count }`.
 - `tools.sql` also supports tagged-template syntax such as `tools.sql`SELECT ${value} AS n``; template values become bound parameters, not interpolated SQL text.
 - Models may optionally narrow simple SQL results, for example `await tools.sql<{ n: number }>("SELECT 1 AS n")`; this is a model-authored assertion, not runtime SQL inference.
 - Nested tools are limited to Coral's finite MCP functions. Source tables and provider API operations are queryable through SQL, not direct `tools.*` functions.
-"#,
-        );
+"#;
+        description = format!("{coral_guidance}\n{description}");
         description.push_str("\nCoral SQL TypeScript helpers:\n```ts\n");
         description.push_str(CORAL_SQL_TYPESCRIPT_DECLARATIONS);
         description.push_str("\n```");
