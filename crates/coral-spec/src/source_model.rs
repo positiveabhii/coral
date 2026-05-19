@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{HttpMethod, ManifestError, Result};
+use crate::{HttpMethod, ManifestError, Result, SourceModelProjectionRef};
 
 pub const SOURCE_MODEL_IR_VERSION: u32 = 1;
 
@@ -419,22 +419,6 @@ pub struct IdentityKey {
 }
 
 pub type FieldPath = Vec<String>;
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct SourceModelProjectionRef {
-    pub name: String,
-    pub kind: ProjectionKind,
-    pub surface: String,
-    pub operation: String,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProjectionKind {
-    Table,
-    Function,
-}
 
 impl SourceModelIr {
     pub fn validate(&self, projections: &[SourceModelProjectionRef]) -> Result<()> {
@@ -933,10 +917,13 @@ fn validate_projection_refs(
                 projection.name
             )));
         }
-        if !operations.contains(&(projection.surface.as_str(), projection.operation.as_str())) {
+        if !operations.contains(&(
+            projection.operation.surface.as_str(),
+            projection.operation.operation.as_str(),
+        )) {
             return Err(ManifestError::validation(format!(
                 "source model projection '{}' references unknown operation '{}.{}'",
-                projection.name, projection.surface, projection.operation
+                projection.name, projection.operation.surface, projection.operation.operation
             )));
         }
     }
@@ -1027,13 +1014,12 @@ mod tests {
     use super::{
         EntityCandidate, GraphqlOperationDetails, GraphqlOperationKind, GraphqlPagination,
         GraphqlPartialDataPolicy, GraphqlSelectionPolicy, IdentityKey, ObjectField,
-        OperationDetails, OperationInput, OperationResult, ProjectionKind, RestOperationDetails,
-        RestPagination, RestParameter, RestParameterLocation, RestResponse, RestStatusCode,
+        OperationDetails, OperationInput, OperationResult, RestOperationDetails, RestPagination,
+        RestParameter, RestParameterLocation, RestResponse, RestStatusCode,
         SOURCE_MODEL_IR_VERSION, ScalarType, SourceModelIr, SourceModelOperation,
-        SourceModelProjectionRef, SourceModelSurface, SurfaceProtocol, TypeDefinition,
-        TypeDefinitionKind, TypeRef,
+        SourceModelSurface, SurfaceProtocol, TypeDefinition, TypeDefinitionKind, TypeRef,
     };
-    use crate::HttpMethod;
+    use crate::{HttpMethod, ProjectionKind, SourceModelOperationRef, SourceModelProjectionRef};
 
     #[test]
     fn source_model_ir_round_trips_representative_rest_fragment() {
@@ -1041,8 +1027,10 @@ mod tests {
         let projections = vec![SourceModelProjectionRef {
             name: "issues".to_string(),
             kind: ProjectionKind::Table,
-            surface: "github-rest".to_string(),
-            operation: "issues/list-for-repo".to_string(),
+            operation: SourceModelOperationRef {
+                surface: "github-rest".to_string(),
+                operation: "issues/list-for-repo".to_string(),
+            },
         }];
 
         model
@@ -1064,8 +1052,10 @@ mod tests {
         let projections = vec![SourceModelProjectionRef {
             name: "repository_issues".to_string(),
             kind: ProjectionKind::Function,
-            surface: "github-graphql".to_string(),
-            operation: "repository.issues".to_string(),
+            operation: SourceModelOperationRef {
+                surface: "github-graphql".to_string(),
+                operation: "repository.issues".to_string(),
+            },
         }];
 
         model
@@ -1107,8 +1097,10 @@ mod tests {
         let projections = vec![SourceModelProjectionRef {
             name: "missing".to_string(),
             kind: ProjectionKind::Table,
-            surface: "github-rest".to_string(),
-            operation: "missing/op".to_string(),
+            operation: SourceModelOperationRef {
+                surface: "github-rest".to_string(),
+                operation: "missing/op".to_string(),
+            },
         }];
 
         let error = model

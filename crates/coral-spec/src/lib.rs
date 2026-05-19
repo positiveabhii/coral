@@ -82,6 +82,7 @@ mod inputs;
 mod loader;
 pub mod openapi;
 mod parser;
+mod projection;
 mod schema;
 pub mod source_model;
 mod template;
@@ -89,8 +90,7 @@ mod validate;
 
 pub use backends::http::{AuthSpec, BasicAuthSpec, CustomAuthSpec, HeaderAuthSpec};
 pub use backends::source_model::{
-    SourceModelManifestProjection, SourceModelManifestSurface, SourceModelSourceManifest,
-    SurfaceDescriptionType,
+    SourceModelManifestSurface, SourceModelSourceManifest, SurfaceDescriptionType,
 };
 pub(crate) use common::validate_test_queries;
 pub use common::{
@@ -110,14 +110,17 @@ pub use openapi::{
 pub use parser::{
     ValidatedSourceManifest, parse_source_manifest_value, parse_source_manifest_yaml,
 };
+pub use projection::{
+    ProjectionKind, SourceModelOperationRef, SourceModelProjection, SourceModelProjectionRef,
+};
 pub use source_model::{
     EntityCandidate, EnumValue, FieldPath, GraphqlOperationDetails, GraphqlOperationKind,
     GraphqlPagination, GraphqlPartialDataPolicy, GraphqlSelectionPolicy, GraphqlVariable,
     IdentityKey, InputField, ObjectField, OperationDetails, OperationInput, OperationResult,
-    ProjectionKind, RestOperationDetails, RestPagination, RestParameter, RestParameterLocation,
-    RestRequestBody, RestResponse, RestStatusCode, SOURCE_MODEL_IR_VERSION, ScalarType,
-    SourceModelIr, SourceModelOperation, SourceModelProjectionRef, SourceModelSurface,
-    SurfaceProtocol, TypeDefinition, TypeDefinitionKind, TypeRef, TypeRefKind,
+    RestOperationDetails, RestPagination, RestParameter, RestParameterLocation, RestRequestBody,
+    RestResponse, RestStatusCode, SOURCE_MODEL_IR_VERSION, ScalarType, SourceModelIr,
+    SourceModelOperation, SourceModelSurface, SurfaceProtocol, TypeDefinition, TypeDefinitionKind,
+    TypeRef, TypeRefKind,
 };
 pub use template::{ParsedTemplate, TemplateNamespace, TemplatePart, TemplateToken};
 pub(crate) use validate::{

@@ -18,8 +18,8 @@ use crate::backends::http::{AuthSpec, RateLimitSpec};
 use crate::inputs::collect_source_inputs_value;
 use crate::validate::validate_template;
 use crate::{
-    ColumnSpec, HeaderSpec, ManifestError, ManifestInputKind, ManifestInputSpec, ParsedTemplate,
-    ProjectionKind, Result, SourceBackend, SourceManifestCommon, SourceModelProjectionRef,
+    HeaderSpec, ManifestError, ManifestInputKind, ManifestInputSpec, ParsedTemplate, Result,
+    SourceBackend, SourceManifestCommon, SourceModelProjection, SourceModelProjectionRef,
     validate_columns, validate_test_queries,
 };
 
@@ -28,7 +28,7 @@ use crate::{
 pub struct SourceModelSourceManifest {
     pub common: SourceManifestCommon,
     pub surfaces: Vec<SourceModelManifestSurface>,
-    pub projections: Vec<SourceModelManifestProjection>,
+    pub projections: Vec<SourceModelProjection>,
     pub declared_inputs: Vec<ManifestInputSpec>,
 }
 
@@ -57,18 +57,6 @@ pub enum SurfaceDescriptionType {
     OpenApi,
 }
 
-/// One explicit SQL projection declared by a DSL v4 manifest.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SourceModelManifestProjection {
-    pub name: String,
-    pub kind: ProjectionKind,
-    pub surface: String,
-    pub operation: String,
-    #[serde(default)]
-    pub columns: Vec<ColumnSpec>,
-}
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSourceModelSourceManifest {
@@ -83,7 +71,7 @@ struct RawSourceModelSourceManifest {
     #[serde(default)]
     inputs: Option<Value>,
     surfaces: Vec<SourceModelManifestSurface>,
-    projections: Vec<SourceModelManifestProjection>,
+    projections: Vec<SourceModelProjection>,
 }
 
 impl SourceModelSourceManifest {
@@ -134,12 +122,7 @@ impl SourceModelSourceManifest {
     pub fn projection_refs(&self) -> Vec<SourceModelProjectionRef> {
         self.projections
             .iter()
-            .map(|projection| SourceModelProjectionRef {
-                name: projection.name.clone(),
-                kind: projection.kind,
-                surface: projection.surface.clone(),
-                operation: projection.operation.clone(),
-            })
+            .map(SourceModelProjection::reference)
             .collect()
     }
 }
@@ -195,7 +178,7 @@ fn validate_sha256(source_name: &str, surface: &SourceModelManifestSurface) -> R
 fn validate_projections(
     source_name: &str,
     surfaces: &[SourceModelManifestSurface],
-    projections: &[SourceModelManifestProjection],
+    projections: &[SourceModelProjection],
 ) -> Result<()> {
     if projections.is_empty() {
         return Err(ManifestError::validation(format!(
@@ -219,14 +202,14 @@ fn validate_projections(
                 projection.name
             )));
         }
-        if !surface_ids.contains(projection.surface.as_str()) {
+        if !surface_ids.contains(projection.operation.surface.as_str()) {
             return Err(ManifestError::validation(format!(
                 "source '{source_name}' projection '{}' references unknown surface '{}'",
-                projection.name, projection.surface
+                projection.name, projection.operation.surface
             )));
         }
         validate_non_empty(
-            &projection.operation,
+            &projection.operation.operation,
             &format!(
                 "source '{source_name}' projection '{}' operation",
                 projection.name
@@ -251,6 +234,7 @@ fn validate_non_empty(value: &str, context: &str) -> Result<()> {
 mod tests {
     use serde_json::Value;
 
+    use crate::ProjectionKind;
     use crate::backends::source_model::{SourceModelSourceManifest, SurfaceDescriptionType};
 
     fn source_model_manifest() -> Value {
@@ -303,11 +287,21 @@ projections:
         assert_eq!(surface.id, "github-rest");
         assert_eq!(surface.surface_type, SurfaceDescriptionType::OpenApi);
         assert_eq!(manifest.projections.len(), 1);
+        let projection = manifest
+            .projections
+            .first()
+            .expect("manifest should have a parsed projection");
+        assert_eq!(projection.name, "issues");
+        assert_eq!(projection.kind, ProjectionKind::Table);
+        assert_eq!(projection.operation.surface, "github-rest");
+        assert_eq!(projection.operation.operation, "issues/list-for-repo");
+        assert_eq!(projection.columns.len(), 1);
         let projection_refs = manifest.projection_refs();
         let projection_ref = projection_refs
             .first()
             .expect("manifest should have a projection ref");
-        assert_eq!(projection_ref.operation, "issues/list-for-repo");
+        assert_eq!(projection_ref.operation.surface, "github-rest");
+        assert_eq!(projection_ref.operation.operation, "issues/list-for-repo");
         assert_eq!(
             manifest
                 .required_secret_names()

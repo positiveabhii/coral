@@ -364,7 +364,8 @@ projections:
         let projection_ref = projection_refs
             .first()
             .expect("source-model manifest should have a projection ref");
-        assert_eq!(projection_ref.operation, "issues/list-for-repo");
+        assert_eq!(projection_ref.operation.surface, "github-rest");
+        assert_eq!(projection_ref.operation.operation, "issues/list-for-repo");
     }
 
     #[test]
