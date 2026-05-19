@@ -478,8 +478,7 @@ pub async fn run_from_env() -> Result<(), CliError> {
             let bootstrap = bootstrap::bootstrap(bootstrap::BootstrapOptions {
                 enable_stderr_logs: command.enables_stderr_logs(),
             })
-            .await
-            .map_err(anyhow::Error::from)?;
+            .await?;
             let app = bootstrap.app.clone();
             let result = if is_mcp_stdio {
                 run_app_command(app, command, Some(&ctx)).await
