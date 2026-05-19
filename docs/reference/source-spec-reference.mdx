@@ -23,13 +23,18 @@ test_queries:
   - SELECT * FROM my_source.messages LIMIT 1
 ```
 
-| Field         | Description                                        |
-| ------------- | -------------------------------------------------- |
-| `name`        | Source name, also used as the SQL schema name      |
-| `version`     | Source spec version string                         |
-| `dsl_version` | Coral source spec DSL version (currently `3`)      |
-| `backend`     | How data is fetched: `http`, `jsonl`, or `parquet` |
-| `test_queries` | Optional read-only SQL checks Coral runs during `coral source test` |
+| Field          | Description                             |
+| -------------- | --------------------------------------- |
+| `name`         | Source name and SQL schema name         |
+| `version`      | Source spec version string              |
+| `dsl_version`  | Coral source spec DSL version           |
+| `backend`      | Backend selector                        |
+| `test_queries` | Optional source validation queries      |
+
+Use `dsl_version: 3` with `backend: http`, `jsonl`, or `parquet` for
+hand-authored sources. Use `dsl_version: 4` only with
+`backend: source_model`; v4 imports API operations from a pinned OpenAPI
+document and exposes explicit SQL projections from that imported model.
 
 ## Test queries
 
@@ -509,6 +514,142 @@ rate_limit:
   reset_header: X-RateLimit-Reset
 ```
 
+## Source-model sources (DSL v4)
+
+For `source_model`, the source spec declares which API description Coral should
+import and which SQL projections to expose. The first DSL v4 implementation is
+OpenAPI-only:
+
+- Set `dsl_version: 4` and `backend: source_model`.
+- Declare one or more `surfaces` with `type: open-api`, a retrieval `url`, and
+  a pinned `sha256`.
+- Put runtime API config on each surface: `base_url`, `auth`,
+  `request_headers`, and `rate_limit`.
+- Declare explicit `projections` that map SQL tables or functions to imported
+  `(surface, operation)` pairs.
+- Do not declare `tables`, `functions`, `entities`, `operations`, or
+  `bindings` in a v4 manifest. Operations, entities, and protocol binding
+  details come from the imported OpenAPI document, not from hand-authored YAML.
+
+```yaml
+name: github
+version: 1.1.6-source-model.0
+dsl_version: 4
+backend: source_model
+description: Query GitHub repository issues through the DSL v4 source-model path.
+inputs:
+  GITHUB_API_BASE:
+    kind: variable
+    default: https://api.github.com
+    hint: GitHub REST API base URL.
+  GITHUB_TOKEN:
+    kind: secret
+    hint: GitHub personal access token.
+surfaces:
+  - id: github-rest
+    type: open-api
+    url: https://raw.githubusercontent.com/github/rest-api-description/f5d3342150d3748e7307c81639635706f8338a12/descriptions/api.github.com/api.github.com.yaml
+    sha256: 2d2094fd1bab20958ae7f7b885fe818f19e57deea0bfdcbde7c9db450d5cc5a0
+    base_url: "{{input.GITHUB_API_BASE}}"
+    auth:
+      type: HeaderAuth
+      headers:
+        - name: Authorization
+          from: template
+          template: Bearer {{input.GITHUB_TOKEN}}
+    request_headers:
+      - name: Accept
+        from: literal
+        value: application/vnd.github+json
+      - name: X-GitHub-Api-Version
+        from: literal
+        value: "2022-11-28"
+    rate_limit:
+      extra_statuses: [403]
+      remaining_header: x-ratelimit-remaining
+      reset_header: x-ratelimit-reset
+projections:
+  - name: issues
+    kind: table
+    surface: github-rest
+    operation: issues/list-for-repo
+    columns:
+      - name: owner
+        type: Utf8
+        virtual: true
+      - name: repo
+        type: Utf8
+        virtual: true
+      - name: number
+        type: Int64
+        expr: {kind: path, path: [number]}
+      - name: title
+        type: Utf8
+        expr: {kind: path, path: [title]}
+```
+
+### Surfaces
+
+A v4 surface identifies an upstream API description and the runtime config used
+when Coral calls that API.
+
+| Field             | Type     | Description                           |
+| ----------------- | -------- | ------------------------------------- |
+| `id`              | string   | Manifest-local surface ID             |
+| `type`            | string   | Importer; currently only `open-api`   |
+| `url`             | string   | OpenAPI document URL                  |
+| `sha256`          | string   | SHA-256 hex digest of document bytes  |
+| `base_url`        | template | Runtime API base URL                  |
+| `auth`            | object   | Auth config for this surface          |
+| `request_headers` | list     | Non-auth headers for this surface     |
+| `rate_limit`      | object   | Rate-limit hints for this surface     |
+
+The `url` may use `https://`, `http://`, or a development `file://` URL.
+
+The `sha256` pin is mandatory. If fetched bytes do not match the manifest pin,
+Coral refuses to materialize the source model. For bundled/core sources, prefer
+provider-owned immutable OpenAPI URLs. When the provider does not publish a
+stable historical artifact, bundled/core sources should pin a Coral-owned
+mirrored OpenAPI artifact that lives outside the Coral binary. Community and
+user-installed sources may use mutable provider URLs, but the hash remains the
+reproducibility contract.
+
+### Materialized IR
+
+During `coral source add`, Coral fetches or reads each pinned OpenAPI document,
+verifies `sha256`, imports source-model IR, validates the declared projections,
+and writes the materialized IR to local app state. Normal query-time loads read
+that local IR. They do not re-fetch OpenAPI documents and do not rerun the
+importer.
+
+Use `coral source refresh <NAME>` when you want to refresh materialized IR for
+an installed v4 source. Refresh still verifies the manifest pin. If the remote
+document has changed and no longer matches `sha256`, refresh fails and reports
+the new hash instead of silently importing a different model.
+
+### Projections
+
+Projections are the only place a v4 manifest declares Coral's SQL surface. Each
+projection has:
+
+| Field       | Type   | Description                         |
+| ----------- | ------ | ----------------------------------- |
+| `name`      | string | SQL table or table function name    |
+| `kind`      | string | `table` or `function`               |
+| `surface`   | string | Surface ID for the operation        |
+| `operation` | string | Imported operation ID               |
+| `columns`   | list   | SQL columns exposed from row values |
+
+DSL v4 does not derive projections automatically yet. Authors choose the
+operations and columns to expose explicitly.
+
+### GraphQL fast-follow
+
+The source-model IR is intended to support a later GraphQL importer, but DSL v4
+manifests cannot reference GraphQL schemas yet. Use `type: open-api` today; a
+GraphQL surface type is a planned fast-follow, not part of the current authoring
+contract.
+
 ### HTTP value sources
 
 Request query params, body fields, and headers support these `from` values:
@@ -671,7 +812,10 @@ pagination:
 
 ## Source inputs
 
-HTTP source specs can declare the variables and secrets this source needs under a top-level `inputs` map. At install time, `coral source add` collects each input from an environment variable matching the key, or prompts interactively when you pass `--interactive`.
+HTTP and source-model source specs can declare the variables and secrets this
+source needs under a top-level `inputs` map. At install time,
+`coral source add` collects each input from an environment variable matching the
+key, or prompts interactively when you pass `--interactive`.
 
 - **Variables**: non-secret configuration like base URLs or organization IDs
 - **Secrets**: API keys or bearer tokens

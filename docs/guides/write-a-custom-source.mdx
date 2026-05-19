@@ -25,6 +25,13 @@ API-backed sources vary in difficulty. The source spec model is designed for API
 - **Structured, accessible documentation** — an OpenAPI spec, GraphQL schema, or clearly organized REST docs that describe endpoints and response shapes
 - **Real data to validate against** — actual records in the account so you can confirm the source is returning the expected results during development
 
+For custom source specs, `dsl_version: 3` is still the broadest authoring path:
+you hand-author tables, functions, HTTP requests, response mapping, pagination,
+and columns. `dsl_version: 4` is available for the source-model path when you
+have a pinned OpenAPI document and want Coral to import operations from that
+document. DSL v4 is OpenAPI-only today; GraphQL importing is planned as a
+fast-follow.
+
 If you are unsure whether your API is a good candidate, ask us in [Discord](https://withcoral.com/discord) before getting started.
 
 ## Agent-driven authoring
@@ -196,6 +203,92 @@ tables:
 When you run `coral source add --file`, Coral reads each declared `input` from an environment variable of the same name, or prompts for them when you pass `--interactive`. `kind: variable` values go to source variables; `kind: secret` values go to the secret store. API keys, bearer tokens, passwords, private keys, and authorization values must be secrets, even when the API key is read-only.
 
 For the full set of HTTP response, pagination, auth, and column fields, see [HTTP-backed tables](/reference/source-spec-reference#http-backed-tables).
+
+## Example: OpenAPI source-model source
+
+Use DSL v4 when you want Coral to import API operations from an OpenAPI
+document, then expose a smaller SQL surface through explicit projections.
+
+This model is intentionally narrower than v3 HTTP authoring:
+
+- The API description must be OpenAPI (`type: open-api`).
+- The surface must include both a retrieval `url` and a pinned `sha256`.
+- `base_url`, `auth`, `request_headers`, and `rate_limit` live under the
+  surface, not at the top level.
+- You declare `projections`, not `tables` or `functions`.
+- You do not hand-author `entities`, `operations`, `bindings`, endpoint paths,
+  HTTP methods, parameter mappings, or response paths in the manifest.
+
+```yaml
+name: github_issues
+version: 0.1.0
+dsl_version: 4
+backend: source_model
+inputs:
+  GITHUB_API_BASE:
+    kind: variable
+    default: https://api.github.com
+    hint: GitHub REST API base URL.
+  GITHUB_TOKEN:
+    kind: secret
+    hint: GitHub personal access token.
+surfaces:
+  - id: github-rest
+    type: open-api
+    url: https://raw.githubusercontent.com/github/rest-api-description/f5d3342150d3748e7307c81639635706f8338a12/descriptions/api.github.com/api.github.com.yaml
+    sha256: 2d2094fd1bab20958ae7f7b885fe818f19e57deea0bfdcbde7c9db450d5cc5a0
+    base_url: "{{input.GITHUB_API_BASE}}"
+    auth:
+      type: HeaderAuth
+      headers:
+        - name: Authorization
+          from: template
+          template: Bearer {{input.GITHUB_TOKEN}}
+    request_headers:
+      - name: Accept
+        from: literal
+        value: application/vnd.github+json
+      - name: X-GitHub-Api-Version
+        from: literal
+        value: "2022-11-28"
+    rate_limit:
+      extra_statuses: [403]
+      remaining_header: x-ratelimit-remaining
+      reset_header: x-ratelimit-reset
+projections:
+  - name: issues
+    kind: table
+    surface: github-rest
+    operation: issues/list-for-repo
+    columns:
+      - name: owner
+        type: Utf8
+        virtual: true
+      - name: repo
+        type: Utf8
+        virtual: true
+      - name: number
+        type: Int64
+        expr: {kind: path, path: [number]}
+      - name: title
+        type: Utf8
+        expr: {kind: path, path: [title]}
+```
+
+When you run `coral source add --file ./github-issues.yaml`, Coral fetches or
+reads the pinned OpenAPI document, verifies the hash, imports the source-model
+IR, validates the projections, and stores the materialized IR locally. Later
+queries load that local IR; they do not fetch OpenAPI documents at query time.
+
+Use `coral source refresh github_issues` to refresh materialized IR for an
+installed v4 source. Refresh still checks the manifest `sha256`, so a changed
+upstream document fails clearly instead of silently changing the imported model.
+
+Bundled/core v4 sources should pin provider-owned immutable OpenAPI URLs when
+available. If the provider only publishes mutable OpenAPI artifacts, the bundled
+source should pin a Coral-owned mirrored artifact that lives outside the Coral
+binary. For the full DSL v4 field reference, see [Source-model sources (DSL
+v4)](/reference/source-spec-reference#source-model-sources-dsl-v4).
 
 ## Tips
 
