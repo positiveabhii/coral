@@ -14,14 +14,16 @@ use std::sync::Arc;
 use arrow::array::{Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-#[cfg(feature = "embedded-ui")]
 use assert_cmd::Command;
 use coral_api::v1::{
     DiscoverSourcesResponse, ExecuteSqlResponse, ListSourcesResponse, SourceInfo, SourceOrigin,
 };
 use tonic::Code;
 
-use harness::{MockServer, MockServerConfig, encode_arrow_ipc_stream};
+use harness::{
+    MockServer, MockServerConfig, coral_local_file_not_found_status, coral_source_not_found_status,
+    encode_arrow_ipc_stream,
+};
 
 #[cfg(feature = "embedded-ui")]
 #[test]
@@ -805,7 +807,8 @@ async fn source_remove_rejects_invalid_name() {
 #[tokio::test(flavor = "multi_thread")]
 async fn source_remove_unknown_source_renders_diagnostic() {
     let server = MockServer::start_with_config(
-        MockServerConfig::default().with_delete_source_error(Code::NotFound, "unknown source"),
+        MockServerConfig::default()
+            .with_delete_source_status(coral_source_not_found_status("nope")),
     )
     .await;
 
@@ -817,12 +820,47 @@ async fn source_remove_unknown_source_renders_diagnostic() {
 
     let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
     assert!(
-        stderr.contains("Error: Source `nope` was not found"),
-        "expected source-not-found diagnostic: {stderr}"
+        stderr.contains("Error: Source `nope` is not installed"),
+        "expected source-not-installed diagnostic: {stderr}"
+    );
+    assert!(
+        stderr.contains("Detail: `nope` is not installed in this workspace"),
+        "expected source-not-installed detail: {stderr}"
     );
     assert!(
         stderr.contains("Hint: Run `coral source list`"),
-        "expected source-not-found hint: {stderr}"
+        "expected installed-source hint: {stderr}"
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn source_remove_preserves_local_file_not_found_diagnostic() {
+    let server =
+        MockServer::start_with_config(MockServerConfig::default().with_delete_source_status(
+            coral_local_file_not_found_status("workspaces/default/sources/jira/source.yaml"),
+        ))
+        .await;
+
+    let assert = server
+        .cmd()
+        .args(["source", "remove", "jira"])
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+    assert!(
+        stderr.contains("Error: Coral could not read or write a local file"),
+        "expected local-file diagnostic: {stderr}"
+    );
+    assert!(
+        stderr.contains("Detail: No such file or directory"),
+        "expected local-file detail: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Source `jira` was not found"),
+        "must not collapse local file NotFound into missing source: {stderr}"
     );
 
     server.shutdown().await;
@@ -892,7 +930,7 @@ async fn source_add_interactive_requires_tty() {
 async fn source_test_suggests_add_for_uninstalled_bundled_source() {
     let server = MockServer::start_with_config(
         MockServerConfig::default()
-            .with_validate_source_error(Code::NotFound, "source 'default:demo_bundled' not found")
+            .with_validate_source_status(coral_source_not_found_status("demo_bundled"))
             .with_discover_sources(DiscoverSourcesResponse {
                 sources: vec![SourceInfo {
                     name: "demo_bundled".to_string(),
@@ -937,10 +975,7 @@ async fn source_test_suggests_add_for_uninstalled_bundled_source() {
 async fn source_test_normalizes_error_for_unknown_source() {
     let server = MockServer::start_with_config(
         MockServerConfig::default()
-            .with_validate_source_error(
-                Code::NotFound,
-                "source 'default:totally_unknown' not found",
-            )
+            .with_validate_source_status(coral_source_not_found_status("totally_unknown"))
             .with_discover_sources(DiscoverSourcesResponse {
                 sources: Vec::new(),
             }),

@@ -2,13 +2,14 @@ use std::collections::BTreeMap;
 use std::io::{IsTerminal, stdin, stdout};
 use std::path::Path;
 
+use coral_api::CORAL_ERROR_REASON_SOURCE_NOT_FOUND;
 use coral_api::v1::{
     CreateBundledSourceRequest, DeleteSourceRequest, DiscoverSourcesRequest, GetSourceInfoRequest,
     ImportSourceRequest, ListSourcesRequest, QueryTestFailure, QueryTestSuccess, Source,
     SourceInfo, SourceInputKind, SourceInputSpec, SourceOrigin, SourceSecret, SourceVariable,
     ValidateSourceRequest, ValidateSourceResponse, query_test_result,
 };
-use coral_client::{AppClient, default_workspace};
+use coral_client::{AppClient, DecodedStatusError, decode_status_error, default_workspace};
 use coral_spec::{
     ManifestInputKind, ManifestInputSpec, ValidatedSourceManifest, parse_source_manifest_yaml,
 };
@@ -173,7 +174,7 @@ pub(crate) async fn print_source_info(
         .await
     {
         Ok(response) => response.into_inner(),
-        Err(status) if status.code() == tonic::Code::NotFound => {
+        Err(status) if is_structured_source_not_found(&status) => {
             // Normalize server NotFound details so CLI users see the source
             // name they typed, not workspace-qualified or transport-specific
             // context from the app layer.
@@ -247,13 +248,8 @@ pub(crate) async fn delete_source(app: &AppClient, name: &str) -> Result<(), cra
         .await
     {
         Ok(_) => Ok(()),
-        Err(status) if status.code() == tonic::Code::NotFound => {
-            // Normalize server NotFound details so CLI users see the source
-            // name they typed, not workspace-qualified or transport-specific
-            // context from the app layer.
-            Err(crate::CliError::SourceNotFound {
-                source_name: normalized,
-            })
+        Err(status) if is_structured_source_not_found(&status) => {
+            Err(source_remove_not_installed_error(&normalized))
         }
         Err(status) => Err(crate::CliError::server_status(&status)),
     }?;
@@ -457,7 +453,7 @@ pub(crate) async fn test_and_print(
     let normalized = source_name_arg(Some(source_name))?;
     let response = match validate_source_request(app, normalized.clone()).await {
         Ok(response) => response,
-        Err(status) if status.code() == tonic::Code::NotFound => {
+        Err(status) if is_structured_source_not_found(&status) => {
             return source_test_not_found_error(app, &normalized, status).await;
         }
         Err(status) => return Err(crate::CliError::server_status(&status)),
@@ -494,6 +490,23 @@ async fn source_test_not_found_error(
     Err(crate::CliError::SourceNotFound {
         source_name: source_name.to_string(),
     })
+}
+
+fn is_structured_source_not_found(status: &tonic::Status) -> bool {
+    matches!(
+        decode_status_error(status),
+        DecodedStatusError::Structured(error) if error.reason == CORAL_ERROR_REASON_SOURCE_NOT_FOUND
+    )
+}
+
+fn source_remove_not_installed_error(source_name: &str) -> crate::CliError {
+    crate::CliError::diagnostic(
+        format!("Source `{source_name}` is not installed"),
+        format!(
+            "`{source_name}` is not installed in this workspace, so there is nothing to remove."
+        ),
+        "Run `coral source list` to see installed sources.",
+    )
 }
 
 pub(crate) fn print_validation_pretty(
@@ -716,14 +729,49 @@ mod tests {
     )]
 
     use coral_api::v1::ValidateSourceResponse;
+    use coral_api::{
+        CORAL_ERROR_DOMAIN, CORAL_ERROR_METADATA_SUMMARY, CORAL_ERROR_REASON_LOCAL_FILE_ERROR,
+        CORAL_ERROR_REASON_SOURCE_NOT_FOUND,
+    };
     use coral_spec::{ManifestInputKind, ManifestInputSpec};
+    use tonic::{Code, Status};
+    use tonic_types::{ErrorDetail, StatusExt as _};
 
     use std::collections::HashMap;
 
     use super::{
         ValidationFollowUp, ValidationSeverityMode, collect_inputs_with, finalize_input_value,
-        source_name_arg, validation_follow_up,
+        is_structured_source_not_found, source_name_arg, validation_follow_up,
     };
+
+    fn structured_status(reason: &'static str) -> Status {
+        let metadata = HashMap::from([(
+            CORAL_ERROR_METADATA_SUMMARY.to_string(),
+            "test summary".to_string(),
+        )]);
+        Status::with_error_details_vec(
+            Code::NotFound,
+            "plain message",
+            vec![ErrorDetail::ErrorInfo(tonic_types::ErrorInfo::new(
+                reason,
+                CORAL_ERROR_DOMAIN,
+                metadata,
+            ))],
+        )
+    }
+
+    #[test]
+    fn source_not_found_normalizer_requires_structured_reason() {
+        assert!(is_structured_source_not_found(&structured_status(
+            CORAL_ERROR_REASON_SOURCE_NOT_FOUND
+        )));
+        assert!(!is_structured_source_not_found(&structured_status(
+            CORAL_ERROR_REASON_LOCAL_FILE_ERROR
+        )));
+        assert!(!is_structured_source_not_found(&Status::not_found(
+            "legacy plain not found"
+        )));
+    }
 
     #[test]
     fn collect_inputs_reads_variables_and_secrets_from_lookup() {
