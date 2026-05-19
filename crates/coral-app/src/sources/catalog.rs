@@ -163,8 +163,8 @@ mod tests {
             "Slack manifest hint should mention {FILES_SCOPE}"
         );
         assert!(
-            manifest.manifest_yaml.contains(ENCODED_FILES_SCOPE),
-            "prefilled Slack app link should request {FILES_SCOPE}"
+            !manifest.manifest_yaml.contains(ENCODED_FILES_SCOPE),
+            "prefilled Slack app link should stay on the baseline scopes"
         );
     }
 
