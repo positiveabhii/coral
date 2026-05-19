@@ -21,8 +21,8 @@ use coral_spec::{
     ProjectionKind, QueryParamSpec, RequestSpec, ResponseSpec, RestOperationDetails,
     RestPagination, RestParameterLocation, SourceManifestCommon, SourceModelIr,
     SourceModelManifestSurface, SourceModelOperation, SourceModelProjection,
-    SourceModelSourceManifest, SourceTableFunctionSpec, TableCommon, TableFunctionArgSpec,
-    ValueSourceSpec,
+    SourceModelSourceManifest, SourceTableFunctionKind, SourceTableFunctionSpec, TableCommon,
+    TableFunctionArgSpec, ValueSourceSpec,
 };
 
 #[derive(Debug, Clone)]
@@ -234,6 +234,8 @@ fn rest_projection_table(
             guide: String::new(),
             filters: operation_inputs_as_filters(&operation.inputs),
             fetch_limit_default: None,
+            search_limits: None,
+            detail_hints: Vec::new(),
             columns: projection.columns.clone(),
         },
         request: rest_request(
@@ -256,8 +258,11 @@ fn rest_projection_function(
     let rest = rest_details(source_schema, projection, operation)?;
     Ok(SourceTableFunctionSpec {
         name: projection.name.clone(),
+        kind: SourceTableFunctionKind::Table,
         description: operation.description.clone(),
         fetch_limit_default: None,
+        search_limits: None,
+        detail_hints: Vec::new(),
         args: operation_inputs_as_args(&operation.inputs),
         request: rest_request(source_schema, &projection.name, rest, RequestBinding::Arg)?,
         response: rest_response(&operation.result, rest),
@@ -285,8 +290,10 @@ fn operation_inputs_as_filters(inputs: &[OperationInput]) -> Vec<FilterSpec> {
         .iter()
         .map(|input| FilterSpec {
             name: input.name.clone(),
+            data_type: "Utf8".to_string(),
             required: input.required,
             mode: FilterMode::default(),
+            description: String::new(),
         })
         .collect()
 }

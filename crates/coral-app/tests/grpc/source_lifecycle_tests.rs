@@ -5,6 +5,7 @@
 )]
 
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use coral_api::v1::{
     CreateBundledSourceRequest, DeleteSourceRequest, DiscoverSourcesRequest, ExecuteSqlRequest,
@@ -14,8 +15,13 @@ use coral_api::v1::{
     query_test_result,
 };
 use coral_client::default_workspace;
+use serde_json::json;
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tonic::Request;
+use url::Url;
+use wiremock::matchers::{header, method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use crate::harness::{
     FailingHttpFixture, GrpcHarness, fixture_function_only_manifest_yaml,
@@ -23,6 +29,212 @@ use crate::harness::{
     fixture_manifest_with_required_inputs_yaml, fixture_manifest_with_test_queries_yaml,
     fixture_manifest_yaml, invalid_manifest_yaml, source_dir,
 };
+
+const SOURCE_MODEL_OPENAPI: &str = r"
+openapi: 3.0.3
+info:
+  title: GitHub source-model runtime fixture
+  version: 1.0.0
+paths:
+  /repos/{owner}/{repo}/issues:
+    parameters:
+      - name: owner
+        in: path
+        required: true
+        schema: { type: string }
+      - name: repo
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: issues/list-for-repo
+      parameters:
+        - name: state
+          in: query
+          schema: { type: string }
+        - name: per_page
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Issue'
+  /repos/{owner}/{repo}/issues/{issue_number}:
+    get:
+      operationId: issues/get
+      parameters:
+        - name: owner
+          in: path
+          required: true
+          schema: { type: string }
+        - name: repo
+          in: path
+          required: true
+          schema: { type: string }
+        - name: issue_number
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Issue'
+  /search/issues:
+    get:
+      operationId: search/issues-and-pull-requests
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+        - name: per_page
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_count: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Issue'
+components:
+  schemas:
+    Issue:
+      type: object
+      properties:
+        id: { type: integer }
+        number: { type: integer }
+        title: { type: string }
+        state: { type: string }
+        html_url: { type: string }
+        repository_url: { type: string }
+        created_at: { type: string }
+        updated_at: { type: string }
+        user:
+          type: object
+          properties:
+            login: { type: string }
+        pull_request:
+          type: object
+";
+
+fn write_source_model_openapi(root: &Path) -> PathBuf {
+    let document_path = root.join("github-source-model-openapi.yaml");
+    fs::write(&document_path, SOURCE_MODEL_OPENAPI).expect("write source-model OpenAPI fixture");
+    document_path
+}
+
+fn source_model_manifest_yaml(openapi_path: &Path, api_base_url: &str) -> String {
+    let surface_url = Url::from_file_path(openapi_path)
+        .expect("OpenAPI fixture path should convert to file URL")
+        .to_string();
+    let sha256 = sha256_hex(SOURCE_MODEL_OPENAPI.as_bytes());
+    format!(
+        r#"
+name: github
+version: 1.0.0-source-model-e2e
+dsl_version: 4
+backend: source_model
+inputs:
+  GITHUB_API_BASE:
+    kind: variable
+    default: {api_base_url}
+  GITHUB_TOKEN:
+    kind: secret
+surfaces:
+  - id: github-rest
+    type: open-api
+    url: {surface_url}
+    sha256: {sha256}
+    base_url: "{{{{input.GITHUB_API_BASE}}}}"
+    auth:
+      type: HeaderAuth
+      headers:
+        - name: Authorization
+          from: template
+          template: Bearer {{{{input.GITHUB_TOKEN}}}}
+    request_headers:
+      - name: Accept
+        from: literal
+        value: application/vnd.github+json
+      - name: X-GitHub-Api-Version
+        from: literal
+        value: "2022-11-28"
+    rate_limit:
+      extra_statuses: [403]
+      remaining_header: x-ratelimit-remaining
+      reset_header: x-ratelimit-reset
+projections:
+  - name: issues
+    kind: table
+    surface: github-rest
+    operation: issues/list-for-repo
+    columns:
+      - {{ name: owner, type: Utf8, virtual: true, expr: {{ kind: from_filter, key: owner }} }}
+      - {{ name: repo, type: Utf8, virtual: true, expr: {{ kind: from_filter, key: repo }} }}
+      - {{ name: state, type: Utf8, virtual: true, expr: {{ kind: from_filter, key: state }} }}
+      - {{ name: id, type: Int64, expr: {{ kind: path, path: [id] }} }}
+      - {{ name: number, type: Int64, expr: {{ kind: path, path: [number] }} }}
+      - {{ name: title, type: Utf8, expr: {{ kind: path, path: [title] }} }}
+      - {{ name: user_login, type: Utf8, expr: {{ kind: path, path: [user, login] }} }}
+  - name: search_issues
+    kind: function
+    surface: github-rest
+    operation: search/issues-and-pull-requests
+    columns:
+      - {{ name: number, type: Int64, expr: {{ kind: path, path: [number] }} }}
+      - {{ name: title, type: Utf8, expr: {{ kind: path, path: [title] }} }}
+      - {{ name: score, type: Float64, expr: {{ kind: path, path: [score] }} }}
+  - name: issue
+    kind: function
+    surface: github-rest
+    operation: issues/get
+    columns:
+      - {{ name: number, type: Int64, expr: {{ kind: path, path: [number] }} }}
+      - {{ name: title, type: Utf8, expr: {{ kind: path, path: [title] }} }}
+      - {{ name: state, type: Utf8, expr: {{ kind: path, path: [state] }} }}
+"#
+    )
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut out, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    out
+}
+
+fn github_issue_json(number: i64, title: &str) -> serde_json::Value {
+    json!({
+        "id": number,
+        "number": number,
+        "title": title,
+        "state": "open",
+        "html_url": format!("https://github.test/withcoral/coral/issues/{number}"),
+        "repository_url": "https://api.github.test/repos/withcoral/coral",
+        "created_at": "2026-05-19T00:00:00Z",
+        "updated_at": "2026-05-19T00:00:00Z",
+        "user": { "login": "simonwhitaker" },
+        "pull_request": null
+    })
+}
 
 #[tokio::test]
 async fn import_source_persists_and_lists() {
@@ -244,6 +456,160 @@ async fn validate_source_returns_table_functions() {
     assert_eq!(function.result_columns.len(), 1);
     assert_eq!(function.result_columns[0].name, "title");
     assert!(validated.query_tests.is_empty());
+}
+
+#[tokio::test]
+async fn import_source_model_source_materializes_openapi_ir() {
+    let harness = GrpcHarness::new().await;
+    let document_path = write_source_model_openapi(harness.temp_path());
+    let manifest_yaml = source_model_manifest_yaml(&document_path, "https://api.github.test");
+
+    harness
+        .import_source(
+            manifest_yaml,
+            Vec::new(),
+            vec![SourceSecret {
+                key: "GITHUB_TOKEN".to_string(),
+                value: "secret-token".to_string(),
+            }],
+        )
+        .await;
+
+    let materializations = source_dir(harness.config_dir(), "github").join("source-model-ir");
+    let entries = fs::read_dir(&materializations)
+        .expect("read source-model materializations")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("read materialization entries");
+    assert_eq!(entries.len(), 1);
+    let materialization = entries.first().expect("materialization entry").path();
+    assert!(materialization.join("ir.json").exists());
+    assert!(materialization.join("metadata.json").exists());
+}
+
+#[tokio::test]
+async fn source_model_github_issue_slice_queries_after_materialization_without_openapi() {
+    let harness = GrpcHarness::new().await;
+    let document_path = write_source_model_openapi(harness.temp_path());
+    let api = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/repos/withcoral/coral/issues"))
+        .and(query_param("state", "open"))
+        .and(header("authorization", "Bearer secret-token"))
+        .and(header("accept", "application/vnd.github+json"))
+        .and(header("x-github-api-version", "2022-11-28"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            github_issue_json(41, "first issue"),
+            github_issue_json(42, "second issue")
+        ])))
+        .mount(&api)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/search/issues"))
+        .and(query_param("q", "repo:withcoral/coral is:issue second"))
+        .and(header("authorization", "Bearer secret-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total_count": 1,
+            "items": [{
+                "id": 42,
+                "number": 42,
+                "title": "second issue",
+                "state": "open",
+                "html_url": "https://github.test/withcoral/coral/issues/42",
+                "repository_url": "https://api.github.test/repos/withcoral/coral",
+                "user": { "login": "simonwhitaker" },
+                "score": 10.5
+            }]
+        })))
+        .mount(&api)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/withcoral/coral/issues/42"))
+        .and(header("authorization", "Bearer secret-token"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(github_issue_json(42, "second issue")),
+        )
+        .mount(&api)
+        .await;
+
+    harness
+        .import_source(
+            source_model_manifest_yaml(&document_path, &api.uri()),
+            Vec::new(),
+            vec![SourceSecret {
+                key: "GITHUB_TOKEN".to_string(),
+                value: "secret-token".to_string(),
+            }],
+        )
+        .await;
+    fs::remove_file(&document_path).expect("remove OpenAPI document after materialization");
+
+    let list_rows = harness
+        .execute_sql_rows(
+            "SELECT number, title, user_login FROM github.issues \
+             WHERE owner = 'withcoral' AND repo = 'coral' AND state = 'open' \
+             ORDER BY number",
+        )
+        .await;
+    assert_eq!(
+        list_rows,
+        vec![
+            json!({"number": 41, "title": "first issue", "user_login": "simonwhitaker"}),
+            json!({"number": 42, "title": "second issue", "user_login": "simonwhitaker"})
+        ]
+    );
+
+    let search_rows = harness
+        .execute_sql_rows(
+            "SELECT number, title, score FROM github.search_issues(q => 'repo:withcoral/coral is:issue second')",
+        )
+        .await;
+    assert_eq!(
+        search_rows,
+        vec![json!({"number": 42, "title": "second issue", "score": 10.5})]
+    );
+
+    let get_rows = harness
+        .execute_sql_rows(
+            "SELECT number, title, state FROM github.issue(owner => 'withcoral', repo => 'coral', issue_number => 42)",
+        )
+        .await;
+    assert_eq!(
+        get_rows,
+        vec![json!({"number": 42, "title": "second issue", "state": "open"})]
+    );
+}
+
+#[tokio::test]
+async fn source_model_missing_materialized_ir_fails_with_recovery_hint() {
+    let harness = GrpcHarness::new().await;
+    let document_path = write_source_model_openapi(harness.temp_path());
+    harness
+        .import_source(
+            source_model_manifest_yaml(&document_path, "https://api.github.test"),
+            Vec::new(),
+            vec![SourceSecret {
+                key: "GITHUB_TOKEN".to_string(),
+                value: "secret-token".to_string(),
+            }],
+        )
+        .await;
+    fs::remove_dir_all(source_dir(harness.config_dir(), "github").join("source-model-ir"))
+        .expect("remove materialized IR");
+
+    let error = harness
+        .source_client()
+        .validate_source(Request::new(ValidateSourceRequest {
+            workspace: Some(default_workspace()),
+            name: "github".to_string(),
+        }))
+        .await
+        .expect_err("missing materialized IR should fail clearly");
+
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert!(error.message().contains("no materialized source-model IR"));
+    assert!(error.message().contains("coral source refresh github"));
+    assert!(error.message().contains("coral source add github"));
 }
 
 #[tokio::test]

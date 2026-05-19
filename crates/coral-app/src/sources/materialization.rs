@@ -89,7 +89,7 @@ pub(crate) fn load_materialized_source_model_manifest(
             serde_json::from_slice(&std::fs::read(&metadata_path).map_err(|error| {
                 if error.kind() == std::io::ErrorKind::NotFound {
                     AppError::FailedPrecondition(format!(
-                        "source '{source_name}' surface '{}' has no materialized source-model IR; run `coral source refresh {source_name}` or reinstall the source",
+                        "source '{source_name}' surface '{}' has no materialized source-model IR; run `coral source refresh {source_name}` or reinstall the source with `coral source add {source_name}`",
                         surface.id
                     ))
                 } else {
@@ -276,7 +276,7 @@ fn validate_metadata(
         || metadata.importer_version != OPENAPI_IMPORTER_VERSION
     {
         return Err(AppError::FailedPrecondition(format!(
-            "source '{source_name}' surface '{}' materialized source-model IR does not match the current manifest; run `coral source refresh {source_name}` or reinstall the source",
+            "source '{source_name}' surface '{}' materialized source-model IR does not match the current manifest; run `coral source refresh {source_name}` or reinstall the source with `coral source add {source_name}`",
             surface.id
         )));
     }
