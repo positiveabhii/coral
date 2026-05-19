@@ -369,6 +369,58 @@ projections:
     }
 
     #[test]
+    fn parse_source_manifest_accepts_staged_github_source_model_manifest() {
+        let manifest = parse_source_manifest_yaml(include_str!(
+            "../../../sources/core/github/manifest.source_model.yaml"
+        ))
+        .expect("staged GitHub source-model manifest should parse");
+
+        let source_model = manifest
+            .as_source_model()
+            .expect("source-model manifest variant");
+        assert_eq!(manifest.schema_name(), "github");
+        assert_eq!(source_model.surfaces.len(), 1);
+        assert_eq!(
+            source_model
+                .surfaces
+                .first()
+                .expect("GitHub source-model manifest should have a surface")
+                .id,
+            "github-rest"
+        );
+
+        let projection_refs = source_model.projection_refs();
+        let explicit_refs = projection_refs
+            .iter()
+            .map(|projection| {
+                (
+                    projection.name.as_str(),
+                    projection.operation.surface.as_str(),
+                    projection.operation.operation.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            explicit_refs,
+            vec![
+                ("issues", "github-rest", "issues/list-for-repo"),
+                (
+                    "search_issues",
+                    "github-rest",
+                    "search/issues-and-pull-requests",
+                ),
+                ("issue", "github-rest", "issues/get"),
+            ]
+        );
+        assert!(
+            source_model
+                .projections
+                .iter()
+                .all(|projection| { !projection.columns.is_empty() })
+        );
+    }
+
+    #[test]
     fn parse_source_manifest_rejects_source_model_entities_block() {
         let error = parse_source_manifest_yaml(
             r"

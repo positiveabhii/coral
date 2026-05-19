@@ -1,0 +1,175 @@
+name: github
+version: 1.1.6-source-model.0
+dsl_version: 4
+backend: source_model
+description: >-
+  Query GitHub repository issues through the DSL v4 source-model path.
+inputs:
+  GITHUB_API_BASE:
+    kind: variable
+    default: https://api.github.com
+    hint: |
+      Base URL for the GitHub REST API. Keep the default for GitHub
+      Cloud; for GitHub Enterprise Server, use
+      `https://<host>/api/v3`.
+  GITHUB_TOKEN:
+    kind: secret
+    hint: |
+      If you're already authenticated in GitHub CLI, run
+      `gh auth token`, or create a new personal access token (PAT).
+      Grant read access to the repositories you plan to query.
+surfaces:
+  - id: github-rest
+    type: open-api
+    url: https://raw.githubusercontent.com/github/rest-api-description/f5d3342150d3748e7307c81639635706f8338a12/descriptions/api.github.com/api.github.com.yaml
+    sha256: 2d2094fd1bab20958ae7f7b885fe818f19e57deea0bfdcbde7c9db450d5cc5a0
+    base_url: "{{input.GITHUB_API_BASE}}"
+    auth:
+      type: HeaderAuth
+      headers:
+        - name: Authorization
+          from: template
+          template: Bearer {{input.GITHUB_TOKEN}}
+    request_headers:
+      - name: Accept
+        from: literal
+        value: application/vnd.github+json
+      - name: X-GitHub-Api-Version
+        from: literal
+        value: "2022-11-28"
+    rate_limit:
+      extra_statuses: [403]
+      remaining_header: x-ratelimit-remaining
+      reset_header: x-ratelimit-reset
+projections:
+  - name: issues
+    kind: table
+    surface: github-rest
+    operation: issues/list-for-repo
+    columns:
+      - name: id
+        type: Int64
+        nullable: true
+        expr: {kind: path, path: [id]}
+      - name: number
+        type: Int64
+        nullable: true
+        expr: {kind: path, path: [number]}
+      - name: title
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [title]}
+      - name: state
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [state]}
+      - name: html_url
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [html_url]}
+      - name: user_login
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [user, login]}
+      - name: repository_url
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [repository_url]}
+      - name: created_at
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [created_at]}
+      - name: updated_at
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [updated_at]}
+      - name: pull_request
+        type: Json
+        nullable: true
+        expr: {kind: path, path: [pull_request]}
+  - name: search_issues
+    kind: function
+    surface: github-rest
+    operation: search/issues-and-pull-requests
+    columns:
+      - name: id
+        type: Int64
+        nullable: true
+        expr: {kind: path, path: [id]}
+      - name: number
+        type: Int64
+        nullable: true
+        expr: {kind: path, path: [number]}
+      - name: title
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [title]}
+      - name: state
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [state]}
+      - name: html_url
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [html_url]}
+      - name: user_login
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [user, login]}
+      - name: repository_url
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [repository_url]}
+      - name: score
+        type: Float64
+        nullable: true
+        expr: {kind: path, path: [score]}
+      - name: pull_request
+        type: Json
+        nullable: true
+        expr: {kind: path, path: [pull_request]}
+  - name: issue
+    kind: function
+    surface: github-rest
+    operation: issues/get
+    columns:
+      - name: id
+        type: Int64
+        nullable: true
+        expr: {kind: path, path: [id]}
+      - name: number
+        type: Int64
+        nullable: true
+        expr: {kind: path, path: [number]}
+      - name: title
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [title]}
+      - name: state
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [state]}
+      - name: html_url
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [html_url]}
+      - name: user_login
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [user, login]}
+      - name: repository_url
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [repository_url]}
+      - name: created_at
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [created_at]}
+      - name: updated_at
+        type: Utf8
+        nullable: true
+        expr: {kind: path, path: [updated_at]}
+      - name: pull_request
+        type: Json
+        nullable: true
+        expr: {kind: path, path: [pull_request]}
