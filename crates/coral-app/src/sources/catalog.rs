@@ -151,6 +151,21 @@ mod tests {
     }
 
     #[test]
+    fn slack_manifest_documents_required_files_scope() {
+        let slack = SourceName::parse("slack").expect("source");
+        let manifest = load_bundled_source(&slack).expect("slack bundled source");
+
+        assert!(
+            manifest.manifest_yaml.contains("files:read"),
+            "Slack manifest hint should mention files:read"
+        );
+        assert!(
+            manifest.manifest_yaml.contains("files%3Aread"),
+            "prefilled Slack app link should request files:read"
+        );
+    }
+
+    #[test]
     fn describe_manifest_extracts_declared_inputs() {
         let source = describe_manifest(
             r#"
