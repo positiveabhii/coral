@@ -1,11 +1,13 @@
+RUST_CHECK_FEATURE_FLAGS ?= --no-default-features --features coral-cli/cli-test-server
+
 install:
 	cargo install --path crates/coral-cli --locked
 
 rust-checks:
 	cargo fmt --all -- --check
-	cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-	cargo test --workspace --all-targets --all-features --locked
-	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
+	cargo clippy --workspace --all-targets $(RUST_CHECK_FEATURE_FLAGS) --locked -- -D warnings
+	cargo test --workspace --all-targets $(RUST_CHECK_FEATURE_FLAGS) --locked
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace $(RUST_CHECK_FEATURE_FLAGS) --no-deps --locked
 
 # ----------------------------------------------------------------------------
 # Dependency license scan

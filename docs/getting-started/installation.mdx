@@ -25,9 +25,10 @@ Coral ships as a single local CLI. Once installed, the same binary is used for s
   </Tab>
 
   <Tab title="Build from source">
-    Requires [Rust and Cargo](https://www.rust-lang.org/tools/install) installed.
+    Requires [Rust and Cargo](https://www.rust-lang.org/tools/install) plus Node.js/npm for the embedded UI.
 
     ```shellscript
+    npm ci --prefix ui
     cargo install --path crates/coral-cli --locked
     coral --help
     ```

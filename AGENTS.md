@@ -19,6 +19,9 @@
 ## Rules
 
 - Run `make rust-checks` before submitting PRs that include changes to Rust code.
+- `make rust-checks` intentionally compiles with `embedded-ui` disabled so PR
+  Rust checks do not require Node.js or UI assets; default branch and release
+  builds still compile the default `embedded-ui` feature.
 - Keep adapters thin. If CLI or MCP behavior gets complex, move it inward.
 - Keep transport contract concerns in `coral-api`, source-spec concerns in
   `coral-spec`, app/state concerns in `coral-app`, and query/runtime

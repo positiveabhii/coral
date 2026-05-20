@@ -333,7 +333,7 @@ pub async fn run_from_env() -> Result<(), CliError> {
             result
         }
         RequiredRuntime::None => {
-            coral_app::run_with_context(&ctx, Box::pin(run_no_runtime_command(command))).await
+            coral_app::run_with_context(&ctx, run_no_runtime_command(command)).await
         }
     }
 }
@@ -399,25 +399,31 @@ pub async fn run(app: AppClient, ctx: coral_app::RunContext) -> Result<(), CliEr
             coral_app::run_with_context(&ctx, Box::pin(run_app_command(app, command, None))).await
         }
         RequiredRuntime::None => {
-            coral_app::run_with_context(&ctx, Box::pin(run_no_runtime_command(command))).await
+            coral_app::run_with_context(&ctx, run_no_runtime_command(command)).await
         }
     }
 }
 
-async fn run_no_runtime_command(command: Command) -> Result<(), CliError> {
+type CliFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), CliError>>>>;
+
+fn run_no_runtime_command(command: Command) -> CliFuture {
     match command {
         Command::Completion(args) => {
-            let mut cmd = Cli::command();
-            let bin_name = cmd.get_name().to_string();
-            generate(args.shell, &mut cmd, bin_name, &mut std::io::stdout());
-            Ok(())
+            run_completion(&args);
+            Box::pin(std::future::ready(Ok(())))
         }
         #[cfg(feature = "embedded-ui")]
-        Command::Ui(args) => run_ui(args).await.map_err(Into::into),
+        Command::Ui(args) => Box::pin(async move { run_ui(args).await.map_err(Into::into) }),
         Command::Sql(_) | Command::Source(_) | Command::Onboard | Command::McpStdio(_) => {
             unreachable!("app client commands are routed through app runtime startup")
         }
     }
+}
+
+fn run_completion(args: &CompletionArgs) {
+    let mut cmd = Cli::command();
+    let bin_name = cmd.get_name().to_string();
+    generate(args.shell, &mut cmd, bin_name, &mut std::io::stdout());
 }
 
 async fn run_app_command(
