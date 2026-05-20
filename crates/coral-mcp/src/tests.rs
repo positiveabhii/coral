@@ -280,6 +280,59 @@ fn assert_matches_output_schema(tool: &Tool, value: &Value) {
     }
 }
 
+fn assert_property_schemas_are_objects(tool: &Tool) {
+    let Some(output_schema) = &tool.output_schema else {
+        return;
+    };
+    let schema = Value::Object(output_schema.as_ref().clone());
+    assert_property_schemas_are_objects_at(tool.name.as_ref(), "$", &schema);
+}
+
+fn assert_property_schemas_are_objects_at(tool_name: &str, path: &str, schema: &Value) {
+    let Value::Object(object) = schema else {
+        return;
+    };
+
+    if let Some(Value::Object(properties)) = object.get("properties") {
+        for (property_name, property_schema) in properties {
+            assert!(
+                property_schema.is_object(),
+                "tool '{tool_name}' output schema property {path}.properties.{property_name} must be an object schema for strict MCP clients"
+            );
+            assert_property_schemas_are_objects_at(
+                tool_name,
+                &format!("{path}.properties.{property_name}"),
+                property_schema,
+            );
+        }
+    }
+
+    for keyword in [
+        "items",
+        "additionalItems",
+        "contains",
+        "not",
+        "if",
+        "then",
+        "else",
+    ] {
+        if let Some(child) = object.get(keyword) {
+            assert_property_schemas_are_objects_at(tool_name, &format!("{path}.{keyword}"), child);
+        }
+    }
+    for keyword in ["allOf", "anyOf", "oneOf"] {
+        if let Some(Value::Array(children)) = object.get(keyword) {
+            for (index, child) in children.iter().enumerate() {
+                assert_property_schemas_are_objects_at(
+                    tool_name,
+                    &format!("{path}.{keyword}[{index}]"),
+                    child,
+                );
+            }
+        }
+    }
+}
+
 #[tokio::test]
 #[expect(
     clippy::too_many_lines,
@@ -323,6 +376,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             "tool '{}' output schema root type should be object",
             tool.name
         );
+        assert_property_schemas_are_objects(tool);
     }
     let initial_resources = client
         .list_all_resources()
@@ -1099,6 +1153,9 @@ async fn assert_code_mode_tool_surface(client: &RunningService<RoleClient, ()>) 
     assert!(tool_names.contains(&"exec"));
     assert!(tool_names.contains(&"wait"));
     assert_code_mode_annotations(&tools, true);
+    for tool in &tools {
+        assert_property_schemas_are_objects(tool);
+    }
     let exec_tool = tool_by_name(&tools, "exec");
     let exec_description = exec_tool.description.as_deref().expect("exec description");
     assert!(exec_description.starts_with("Coral SQL-first guidance"));

@@ -653,7 +653,9 @@ fn code_mode_output_schema() -> Arc<Map<String, Value>> {
             "cell_id": {
                 "type": "string"
             },
-            "result": true,
+            "result": {
+                "description": "JSON-serializable value returned by the Code Mode cell."
+            },
             "error": {
                 "type": "object",
                 "required": ["message"],
