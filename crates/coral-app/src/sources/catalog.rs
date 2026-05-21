@@ -120,7 +120,7 @@ mod tests {
 
     use std::collections::BTreeSet;
 
-    use coral_spec::ManifestInputKind;
+    use coral_spec::{ManifestInputKind, parse_source_manifest_yaml};
 
     use super::{describe_manifest, list_bundled_sources, load_bundled_source};
     use crate::sources::SourceName;
@@ -165,6 +165,19 @@ mod tests {
         assert!(
             !manifest.manifest_yaml.contains(ENCODED_FILES_SCOPE),
             "prefilled Slack app link should stay on the baseline scopes"
+        );
+    }
+
+    #[test]
+    fn slack_manifest_uses_workspace_agnostic_test_queries() {
+        let slack = SourceName::parse("slack").expect("source");
+        let manifest = load_bundled_source(&slack).expect("slack bundled source");
+        let parsed =
+            parse_source_manifest_yaml(&manifest.manifest_yaml).expect("parse slack manifest");
+
+        assert_eq!(
+            parsed.test_queries(),
+            &["SELECT * FROM slack.channels LIMIT 1"]
         );
     }
 

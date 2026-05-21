@@ -35,28 +35,6 @@ auth:
       template: Bearer {{input.SLACK_TOKEN}}
 test_queries:
   - SELECT * FROM slack.channels LIMIT 1
-  - >
-    SELECT ts, thread_ts, text, files, attachments, blocks, file_id,
-    file_name, file_title, file_mimetype, file_filetype, file_url_private,
-    file_url_private_download, file_thumb_360, file_thumb_720, file_ids,
-    attachment_image_urls, block_types
-    FROM slack.messages
-    WHERE channel = 'C0AFMHJTMK8'
-      AND thread_ts = '1777984891.794389'
-      AND ts = CAST('2026-05-06T09:13:30.599469Z' AS TIMESTAMP)
-  - >
-    SELECT ts, text, files, attachments, blocks, file_id, file_name,
-    file_title, file_mimetype, file_filetype, file_url_private,
-    file_url_private_download, file_thumb_360, file_thumb_720, file_ids,
-    attachment_image_urls, block_image_urls
-    FROM slack.thread_replies
-    WHERE channel = 'C061S50CQN6'
-      AND thread_ts = '1778134793.636129'
-      AND ts IN (
-        CAST('2026-05-07T09:13:40.100149Z' AS TIMESTAMP),
-        CAST('2026-05-07T09:20:23.517609Z' AS TIMESTAMP),
-        CAST('2026-05-07T11:26:51.125419Z' AS TIMESTAMP)
-      )
 tables:
   - name: channels
     description: Slack channels with topic, purpose, and member count
