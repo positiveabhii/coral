@@ -95,10 +95,11 @@ fn build_embedded_ui(ui_dir: &Path) {
         ));
     }
 
+    let npm = npm_command();
     require_tool("node", "Node.js");
-    require_tool("npm", "npm");
+    require_tool(npm, "npm");
 
-    let status = Command::new("npm")
+    let status = Command::new(npm)
         .args(["run", "build"])
         .current_dir(ui_dir)
         .status()
@@ -116,6 +117,10 @@ fn build_embedded_ui(ui_dir: &Path) {
              To compile without the UI, pass `--no-default-features`.",
         );
     }
+}
+
+fn npm_command() -> &'static str {
+    if cfg!(windows) { "npm.cmd" } else { "npm" }
 }
 
 fn require_tool(command: &str, display_name: &str) {

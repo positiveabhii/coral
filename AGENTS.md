@@ -19,9 +19,13 @@
 ## Rules
 
 - Run `make rust-checks` before submitting PRs that include changes to Rust code.
-- `make rust-checks` intentionally compiles with `embedded-ui` disabled so PR
-  Rust checks do not require Node.js or UI assets; default branch and release
-  builds still compile the default `embedded-ui` feature.
+- `make rust-checks` is the local Rust gate. It disables the default
+  `embedded-ui` feature, so contributors can run it without Node.js or built UI
+  files.
+- CI still checks the production CLI build. The `cli-default-check` job installs
+  Node.js/npm and runs `cargo check -p coral-cli --all-targets --locked
+  --features cli-test-server`, which keeps default features enabled. Release
+  builds also keep `embedded-ui` enabled.
 - Keep adapters thin. If CLI or MCP behavior gets complex, move it inward.
 - Keep transport contract concerns in `coral-api`, source-spec concerns in
   `coral-spec`, app/state concerns in `coral-app`, and query/runtime

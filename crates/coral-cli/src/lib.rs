@@ -408,10 +408,10 @@ type CliFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), C
 
 fn run_no_runtime_command(command: Command) -> CliFuture {
     match command {
-        Command::Completion(args) => {
+        Command::Completion(args) => Box::pin(async move {
             run_completion(&args);
-            Box::pin(std::future::ready(Ok(())))
-        }
+            Ok(())
+        }),
         #[cfg(feature = "embedded-ui")]
         Command::Ui(args) => Box::pin(async move { run_ui(args).await.map_err(Into::into) }),
         Command::Sql(_) | Command::Source(_) | Command::Onboard | Command::McpStdio(_) => {
