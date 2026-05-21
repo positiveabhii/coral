@@ -338,7 +338,7 @@ jobs:
 
   validate:
     runs-on: ubuntu-latest
-    needs: [ changes, rust-checks, ui-build, ui-tests, proto-lint, gha-security-audit, source-lint, docs-freshness, license-check ]
+    needs: [ changes, rust-checks, cli-default-check, ui-build, ui-tests, proto-lint, gha-security-audit, source-lint, docs-freshness, license-check ]
     # Run even when upstream jobs fail or are conditionally skipped so this
     # job can act as the single required status check for the workflow.
     if: ${{ always() }}
@@ -347,6 +347,7 @@ jobs:
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           RUST_CHECKS_RESULT: ${{ needs.rust-checks.result }}
+          CLI_DEFAULT_CHECK_RESULT: ${{ needs.cli-default-check.result }}
           UI_BUILD_RESULT: ${{ needs.ui-build.result }}
           UI_TESTS_RESULT: ${{ needs.ui-tests.result }}
           PROTO_LINT_RESULT: ${{ needs.proto-lint.result }}
@@ -358,6 +359,7 @@ jobs:
           jobs=(
             "changes:$CHANGES_RESULT"
             "rust-checks:$RUST_CHECKS_RESULT"
+            "cli-default-check:$CLI_DEFAULT_CHECK_RESULT"
             "ui-build:$UI_BUILD_RESULT"
             "ui-tests:$UI_TESTS_RESULT"
             "proto-lint:$PROTO_LINT_RESULT"
