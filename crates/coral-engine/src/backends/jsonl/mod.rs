@@ -23,6 +23,7 @@ use crate::backends::{
     registered_columns_from_specs, required_filter_names, schema_from_columns,
 };
 use crate::{CoreError, QueryRuntimeContext};
+use coral_spec::SourceBackend;
 use coral_spec::backends::file::{FileTableSpec, JsonlSourceManifest};
 
 /// Maximum directory recursion depth to prevent stack overflow from symlink
@@ -281,8 +282,8 @@ impl CompiledBackendSource for JsonlCompiledSource {
         &self.manifest.common.name
     }
 
-    fn backend_kind(&self) -> &'static str {
-        "jsonl"
+    fn backend_kind(&self) -> SourceBackend {
+        SourceBackend::Jsonl
     }
 
     fn has_bindable_filters(&self) -> bool {

@@ -66,7 +66,56 @@ async fn sql_join_fetches_when_http_dependent_table_is_projected() {
 }
 
 #[tokio::test]
-async fn duplicate_resolver_rows_for_one_binding_emit_one_joined_batch() {
+async fn dpp_and_naive_paths_agree_on_duplicate_and_null_join_rows() {
+    assert_dpp_and_naive_rows_agree(
+        "
+        SELECT i.title AS issue_title, pr.state AS pr_state
+        FROM issues.items AS i
+        JOIN github.pull_requests AS pr
+          ON pr.owner = i.github_owner
+         AND pr.repo = i.github_repo
+         AND pr.number = i.github_pr_number
+        ",
+        RowComparison::Unordered,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn dpp_and_naive_paths_agree_with_order_by() {
+    assert_dpp_and_naive_rows_agree(
+        "
+        SELECT i.title AS issue_title, pr.state AS pr_state
+        FROM issues.items AS i
+        JOIN github.pull_requests AS pr
+          ON pr.owner = i.github_owner
+         AND pr.repo = i.github_repo
+         AND pr.number = i.github_pr_number
+        ORDER BY pr.state, i.title
+        ",
+        RowComparison::Exact,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn dpp_and_naive_paths_agree_on_join_aggregation() {
+    assert_dpp_and_naive_rows_agree(
+        "
+        SELECT COUNT(*) AS row_count
+        FROM issues.items AS i
+        JOIN github.pull_requests AS pr
+          ON pr.owner = i.github_owner
+         AND pr.repo = i.github_repo
+         AND pr.number = i.github_pr_number
+        ",
+        RowComparison::Exact,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn duplicate_resolver_rows_for_one_binding_emit_distinct_join_batches() {
     let temp = TempDir::new().expect("temp dir");
     write_jsonl_file(
         temp.path(),
@@ -110,7 +159,7 @@ async fn duplicate_resolver_rows_for_one_binding_emit_one_joined_batch() {
     .await
     .expect("query should succeed");
 
-    assert_eq!(execution.batches().len(), 1);
+    assert_eq!(execution.batches().len(), 2);
     assert_eq!(
         execution_to_rows(&execution),
         vec![
@@ -496,7 +545,20 @@ async fn too_many_distinct_bindings_returns_cap_error() {
 
     assert_error_contains(
         &error,
-        "dependent join into 'github.pull_requests' produced 501 binding tuples, which exceeds cap 500",
+        "Your query produced 501 distinct combinations of join-key values for github.pull_requests",
+    );
+    assert_dependent_join_limit_error(
+        &error,
+        "DEPENDENT_JOIN_BINDING_LIMIT_EXCEEDED",
+        "501",
+        "500",
+    );
+    let CoreError::QueryFailure(query_error) = &error else {
+        panic!("expected structured query failure, got {error:?}");
+    };
+    assert_eq!(
+        query_error.metadata().get("binding_filters").unwrap(),
+        "owner,repo,number"
     );
     assert_eq!(error.status_code(), StatusCode::FailedPrecondition);
 }
@@ -510,9 +572,11 @@ async fn too_many_resolver_rows_for_one_binding_returns_cap_error() {
     write_jsonl_file(temp.path(), "issues.jsonl", &issues);
 
     let server = MockServer::start().await;
+    // The 1001 JSONL rows above are resolver-side rows for one binding tuple.
+    // Overflow must be detected before dispatching any dependent HTTP fetch.
     Mock::given(method("GET"))
         .and(path("/repos/withcoral/coral/pulls/123"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
+        .respond_with(ResponseTemplate::new(500).set_body_string("unreachable dependent fetch"))
         .expect(0)
         .mount(&server)
         .await;
@@ -530,7 +594,7 @@ async fn too_many_resolver_rows_for_one_binding_returns_cap_error() {
 
     assert_error_contains(
         &error,
-        "dependent join resolver for 'github.pull_requests' produced 1001 rows for one binding, which exceeds max_resolver_rows_per_binding=1000",
+        "One join-key combination for github.pull_requests matched 1001 rows",
     );
     assert_eq!(error.status_code(), StatusCode::FailedPrecondition);
 }
@@ -576,7 +640,7 @@ async fn single_fetch_too_many_rows_returns_cap_error() {
 
     assert_error_contains(
         &error,
-        "dependent join fetch for 'github.pull_requests' returned 1001 rows for one binding, which exceeds max_rows_per_binding=1000",
+        "The upstream API for github.pull_requests returned 1001 rows for one join-key combination",
     );
     assert_eq!(error.status_code(), StatusCode::FailedPrecondition);
 }
@@ -669,7 +733,7 @@ async fn rows_per_binding_cap_stops_paginated_fetch_after_overflow_is_known() {
 
     assert_error_contains(
         &error,
-        "dependent join fetch for 'github.pull_requests' returned 1001 rows for one binding, which exceeds max_rows_per_binding=1000",
+        "The upstream API for github.pull_requests returned 1001 rows for one join-key combination",
     );
     assert_eq!(error.status_code(), StatusCode::FailedPrecondition);
 }
@@ -1028,6 +1092,12 @@ async fn explain_analyze_reports_dependent_join_metrics() {
             issue_row("First", "withcoral", "coral", 123),
             issue_row("Duplicate tuple", "withcoral", "coral", 123),
             issue_row("Second", "apache", "arrow-datafusion", 42),
+            json!({
+                "title": "Null owner",
+                "github_owner": null,
+                "github_repo": "coral",
+                "github_pr_number": 123
+            }),
         ],
     );
 
@@ -1081,7 +1151,11 @@ async fn explain_analyze_reports_dependent_join_metrics() {
     assert!(explain.contains("DependentJoinExec"));
     assert!(explain.contains("binding_count=2"), "{explain}");
     assert!(explain.contains("fetch_count=2"), "{explain}");
-    assert!(explain.contains("resolver_rows=3"), "{explain}");
+    assert!(explain.contains("resolver_rows=4"), "{explain}");
+    assert!(
+        explain.contains("resolver_null_binding_rows=1"),
+        "{explain}"
+    );
     assert!(explain.contains("dependent_rows_returned=1"), "{explain}");
 }
 
@@ -1696,6 +1770,150 @@ async fn assert_dependent_join_query(sql: &str) {
     );
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RowComparison {
+    Exact,
+    Unordered,
+}
+
+async fn assert_dpp_and_naive_rows_agree(sql: &str, comparison: RowComparison) {
+    let dpp_rows = execute_differential_join(sql, true).await;
+    let naive_rows = execute_differential_join(sql, false).await;
+
+    match comparison {
+        RowComparison::Exact => assert_eq!(dpp_rows, naive_rows),
+        RowComparison::Unordered => {
+            assert_eq!(sort_rows(dpp_rows), sort_rows(naive_rows));
+        }
+    }
+}
+
+async fn execute_differential_join(sql: &str, bindable: bool) -> Vec<Value> {
+    let temp = TempDir::new().expect("temp dir");
+    write_jsonl_file(temp.path(), "issues.jsonl", &differential_issue_rows());
+
+    let server = MockServer::start().await;
+    mount_differential_github_mocks(&server, bindable).await;
+
+    let execution = CoralQuery::execute_sql(
+        &[
+            build_source(issues_manifest(temp.path())),
+            build_source(github_broad_query_manifest_with_bindable(
+                &server.uri(),
+                bindable,
+            )),
+        ],
+        test_runtime(),
+        sql,
+    )
+    .await
+    .expect("query should succeed");
+
+    execution_to_rows(&execution)
+}
+
+async fn mount_differential_github_mocks(server: &MockServer, bindable: bool) {
+    let pull_rows = differential_pull_rows();
+    if bindable {
+        mount_filtered_pull_response(server, &pull_rows, "withcoral", "coral", 123).await;
+        mount_filtered_pull_response(server, &pull_rows, "apache", "arrow-datafusion", 42).await;
+        mount_filtered_pull_response(server, &pull_rows, "ghost", "missing", 404).await;
+    } else {
+        Mock::given(method("GET"))
+            .and(path("/pulls"))
+            .and(query_param_is_missing("owner"))
+            .and(query_param_is_missing("repo"))
+            .and(query_param_is_missing("number"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": pull_rows })))
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+}
+
+async fn mount_filtered_pull_response(
+    server: &MockServer,
+    pull_rows: &[Value],
+    owner: &str,
+    repo: &str,
+    number: i64,
+) {
+    let rows = pull_rows
+        .iter()
+        .filter(|row| {
+            row.get("owner").and_then(Value::as_str) == Some(owner)
+                && row.get("repo").and_then(Value::as_str) == Some(repo)
+                && row.get("number").and_then(Value::as_i64) == Some(number)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    Mock::given(method("GET"))
+        .and(path("/pulls"))
+        .and(query_param("owner", owner))
+        .and(query_param("repo", repo))
+        .and(query_param("number", number.to_string()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": rows })))
+        .expect(1)
+        .mount(server)
+        .await;
+}
+
+fn differential_issue_rows() -> Vec<Value> {
+    vec![
+        issue_row("First", "withcoral", "coral", 123),
+        issue_row("Duplicate tuple", "withcoral", "coral", 123),
+        issue_row("Second", "apache", "arrow-datafusion", 42),
+        issue_row("No match", "ghost", "missing", 404),
+        json!({
+            "title": "Null owner",
+            "github_owner": null,
+            "github_repo": "coral",
+            "github_pr_number": 123
+        }),
+    ]
+}
+
+fn differential_pull_rows() -> Vec<Value> {
+    vec![
+        json!({
+            "owner": "withcoral",
+            "repo": "coral",
+            "number": 123,
+            "state": "open"
+        }),
+        json!({
+            "owner": "withcoral",
+            "repo": "coral",
+            "number": 123,
+            "state": "review"
+        }),
+        json!({
+            "owner": "apache",
+            "repo": "arrow-datafusion",
+            "number": 42,
+            "state": "merged"
+        }),
+        json!({
+            "owner": null,
+            "repo": "coral",
+            "number": 123,
+            "state": "null-owner"
+        }),
+        json!({
+            "owner": "orphan",
+            "repo": "unused",
+            "number": 7,
+            "state": "orphan"
+        }),
+    ]
+}
+
+fn sort_rows(mut rows: Vec<Value>) -> Vec<Value> {
+    rows.sort_by_key(std::string::ToString::to_string);
+    rows
+}
+
 fn dependent_join_sql() -> &'static str {
     "
     SELECT i.title AS issue_title, pr.state AS pr_state
@@ -1722,6 +1940,35 @@ fn assert_error_contains(error: &CoreError, expected: &str) {
     assert!(
         rendered.contains(expected),
         "expected error to contain {expected:?}, got {rendered:?}"
+    );
+}
+
+fn assert_dependent_join_limit_error(
+    error: &CoreError,
+    expected_reason: &str,
+    expected_observed: &str,
+    expected_limit: &str,
+) {
+    let CoreError::QueryFailure(query_error) = error else {
+        panic!("expected structured query failure, got {error:?}");
+    };
+
+    assert_eq!(query_error.reason(), expected_reason);
+    assert_eq!(
+        query_error.metadata().get("source").map(String::as_str),
+        Some("github")
+    );
+    assert_eq!(
+        query_error.metadata().get("table").map(String::as_str),
+        Some("pull_requests")
+    );
+    assert_eq!(
+        query_error.metadata().get("observed").map(String::as_str),
+        Some(expected_observed)
+    );
+    assert_eq!(
+        query_error.metadata().get("limit").map(String::as_str),
+        Some(expected_limit)
     );
 }
 
@@ -2090,6 +2337,10 @@ fn github_broad_manifest(base_url: &str) -> Value {
 }
 
 fn github_broad_query_manifest(base_url: &str) -> Value {
+    github_broad_query_manifest_with_bindable(base_url, true)
+}
+
+fn github_broad_query_manifest_with_bindable(base_url: &str, bindable: bool) -> Value {
     json!({
         "name": "github",
         "version": "0.1.0",
@@ -2100,9 +2351,9 @@ fn github_broad_query_manifest(base_url: &str) -> Value {
             "name": "pull_requests",
             "description": "Pull requests",
             "filters": [
-                { "name": "owner", "bindable": true },
-                { "name": "repo", "bindable": true },
-                { "name": "number", "bindable": true }
+                { "name": "owner", "bindable": bindable },
+                { "name": "repo", "bindable": bindable },
+                { "name": "number", "bindable": bindable }
             ],
             "request": {
                 "method": "GET",

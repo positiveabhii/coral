@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use coral_spec::SourceBackend;
 use datafusion::error::{DataFusionError, Result as DataFusionResult};
 use datafusion::prelude::SessionContext;
 
@@ -207,15 +208,32 @@ async fn register_source(
 }
 
 fn validate_bindable_backend_support(source: &dyn CompiledBackendSource) -> DataFusionResult<()> {
-    if source.has_bindable_filters() && source.backend_kind() != "http" {
+    if !source.has_bindable_filters() {
+        return Ok(());
+    }
+
+    let supported = match source.backend_kind() {
+        SourceBackend::Http => true,
+        SourceBackend::Jsonl | SourceBackend::Parquet => false,
+    };
+
+    if !supported {
         return Err(DataFusionError::Execution(format!(
             "source '{}': bindable filters are not supported by the current engine for backend '{}' in V1",
             source.source_name(),
-            source.backend_kind()
+            backend_kind_label(source.backend_kind())
         )));
     }
 
     Ok(())
+}
+
+fn backend_kind_label(kind: SourceBackend) -> &'static str {
+    match kind {
+        SourceBackend::Http => "http",
+        SourceBackend::Jsonl => "jsonl",
+        SourceBackend::Parquet => "parquet",
+    }
 }
 
 fn push_source_failure(
