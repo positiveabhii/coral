@@ -241,7 +241,7 @@ tables:
     }
 
     #[test]
-    fn http_rate_limit_max_concurrency_zero_rejects() {
+    fn http_rate_limit_max_concurrency_is_not_manifest_metadata() {
         let error = parse_source_manifest_yaml(
             r"
 name: demo
@@ -250,7 +250,7 @@ dsl_version: 3
 backend: http
 base_url: https://example.com
 rate_limit:
-  max_concurrency: 0
+  max_concurrency: 8
 tables:
   - name: messages
     description: Demo messages
@@ -261,7 +261,7 @@ tables:
         type: Utf8
 ",
         )
-        .expect_err("zero concurrency should fail schema validation");
+        .expect_err("manifest-owned concurrency should fail schema validation");
 
         assert!(error.to_string().contains("max_concurrency"));
     }

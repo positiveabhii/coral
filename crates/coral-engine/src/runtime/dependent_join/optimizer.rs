@@ -13,21 +13,19 @@ use datafusion::logical_expr::{
 };
 use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
 
+use crate::DependentJoinConfig;
 use crate::backends::http::HttpSourceTableProvider;
 use crate::backends::http::filter_usage::request_filter_names;
 use crate::backends::shared::filter_expr::literal_to_string;
 use crate::runtime::dependent_join::logical::{BindingKey, DependentJoinNode};
 
-const DEFAULT_MAX_BINDINGS: usize = 500;
-const DEFAULT_MAX_RESOLVER_ROWS: usize = 10_000;
-const DEFAULT_MAX_ROWS_PER_BINDING: usize = 1_000;
-const DEFAULT_MAX_RESOLVER_ROWS_PER_BINDING: usize = 1_000;
-const DEFAULT_BINDING_CONCURRENCY: usize = 8;
 const BINDING_COLUMN_PREFIX: &str = "__coral_dj_bind_";
 
 /// Optimizer rule for dependent predicate pushdown.
-#[derive(Default)]
-pub(crate) struct DependentJoinOptimizerRule;
+#[derive(Clone)]
+pub(crate) struct DependentJoinOptimizerRule {
+    config: DependentJoinConfig,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[expect(
@@ -91,7 +89,6 @@ struct PeeledDependentScan {
     table: Arc<HttpTableSpec>,
     literal_filters: BTreeMap<String, String>,
     dependent_projection: Vec<usize>,
-    max_concurrency: Option<usize>,
 }
 
 enum PeelOutcome {
@@ -127,7 +124,7 @@ impl OptimizerRule for DependentJoinOptimizerRule {
         }
 
         if let LogicalPlan::Join(join) = &plan
-            && let Some(rewritten) = rewrite_join(join)
+            && let Some(rewritten) = rewrite_join(join, &self.config)
         {
             return Ok(Transformed::yes(rewritten));
         }
@@ -136,8 +133,8 @@ impl OptimizerRule for DependentJoinOptimizerRule {
     }
 }
 
-pub(crate) fn rule() -> DependentJoinOptimizerRule {
-    DependentJoinOptimizerRule
+pub(crate) fn rule(config: DependentJoinConfig) -> DependentJoinOptimizerRule {
+    DependentJoinOptimizerRule { config }
 }
 
 fn analyze_join(join: &Join) -> DependentJoinAnalysis {
@@ -293,7 +290,7 @@ fn analyze_dependent_bindings(
     })
 }
 
-fn rewrite_join(join: &Join) -> Option<LogicalPlan> {
+fn rewrite_join(join: &Join, config: &DependentJoinConfig) -> Option<LogicalPlan> {
     let candidate = match analyze_join(join) {
         DependentJoinAnalysis::Candidate(candidate) => candidate,
         DependentJoinAnalysis::Fallback(reason) => {
@@ -329,6 +326,17 @@ fn rewrite_join(join: &Join) -> Option<LogicalPlan> {
     let PeelOutcome::Match(dependent) = peel_dependent_side(dependent_plan) else {
         return None;
     };
+    let effective_config = config.for_source(&dependent.source_name);
+    if !effective_config.enabled {
+        tracing::debug!(
+            target = "coral_engine::dependent_join",
+            source = %dependent.source_name,
+            table = %candidate.table_name,
+            reason = "source_disabled",
+            "skipping dependent join rewrite candidate",
+        );
+        return None;
+    }
 
     let (resolver, binding_keys, resolver_projection_len) =
         resolver_with_binding_columns(resolver_plan, &dependent, resolver_schema, &join.on)?;
@@ -342,13 +350,11 @@ fn rewrite_join(join: &Join) -> Option<LogicalPlan> {
         resolver_projection_len,
         dependent_first,
         schema: join.schema.clone(),
-        max_bindings: DEFAULT_MAX_BINDINGS,
-        max_resolver_rows: DEFAULT_MAX_RESOLVER_ROWS,
-        max_rows_per_binding: DEFAULT_MAX_ROWS_PER_BINDING,
-        max_resolver_rows_per_binding: DEFAULT_MAX_RESOLVER_ROWS_PER_BINDING,
-        max_concurrency: dependent
-            .max_concurrency
-            .unwrap_or(DEFAULT_BINDING_CONCURRENCY),
+        max_bindings: effective_config.max_bindings,
+        max_resolver_rows: effective_config.max_resolver_rows,
+        max_rows_per_binding: effective_config.max_rows_per_binding,
+        max_resolver_rows_per_binding: effective_config.max_resolver_rows_per_binding,
+        max_concurrency: effective_config.max_concurrency,
         page_hint: None,
     };
 
@@ -527,7 +533,6 @@ fn peel_dependent_side(plan: &LogicalPlan) -> PeelOutcome {
                     .projection
                     .clone()
                     .unwrap_or_else(|| (0..provider.table_spec().columns().len()).collect()),
-                max_concurrency: provider.client().max_concurrency(),
             })
         }
         LogicalPlan::Filter(filter) => match peel_dependent_side(filter.input.as_ref()) {
