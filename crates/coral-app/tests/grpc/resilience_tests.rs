@@ -48,7 +48,7 @@ async fn broken_source_does_not_block_healthy_sources() {
     )
     .expect("remove broken source secret file");
 
-    let tables = harness.list_tables().await;
+    let tables = harness.list_relations().await;
     assert!(
         tables
             .iter()

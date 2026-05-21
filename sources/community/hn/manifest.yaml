@@ -1,13 +1,13 @@
 name: hn
 version: 0.1.1
-dsl_version: 3
+dsl_version: 4
 backend: http
 description: Hacker News search and item lookup via the public Algolia HN API (no auth).
 base_url: https://hn.algolia.com/api/v1
 test_queries:
   - SELECT * FROM hn.search_by_date WHERE query = 'rust' AND tags = 'story' LIMIT 1
   - SELECT * FROM hn.users WHERE username = 'pg' LIMIT 1
-tables:
+relations:
   - name: search
     description: |
       Hacker News full-text search ranked by relevance. Pass `query` for keywords,

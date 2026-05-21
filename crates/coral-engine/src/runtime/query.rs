@@ -2,14 +2,19 @@
 
 use std::sync::Arc;
 
+use arrow::array::{Array, Int64Array, UInt64Array};
+use coral_spec::WriteEffect;
 use datafusion::dataframe::DataFrame;
+use datafusion::datasource::DefaultTableSource;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::physical_plan::displayable;
+use datafusion::logical_expr::{LogicalPlan, Projection, TableScan};
+use datafusion::physical_plan::{collect as collect_physical_plan, displayable};
 use datafusion::prelude::{SQLOptions, SessionConfig, SessionContext};
 use datafusion_tracing::{InstrumentationOptions, RuleInstrumentationOptions};
 
 use crate::backends::compile_query_source;
+use crate::backends::http::function::HttpSourceFunctionCallTableProvider;
 use crate::runtime::catalog;
 use crate::runtime::error::{
     datafusion_to_core, datafusion_to_core_with_sql, query_result_observer_error_to_core,
@@ -22,12 +27,12 @@ use crate::runtime::registry::{
 use crate::runtime::source_functions::SourceFunctionRegistry;
 use crate::{
     CoreError, QueryExecution, QueryPlan, QueryResultObserver, QueryResultObserverError,
-    QueryRuntimeConfig, QuerySource, TableInfo,
+    QueryRuntimeConfig, QuerySource, RelationInfo, SqlExecutionSummary,
 };
 
 pub(crate) struct QueryRuntimeAdapter {
     ctx: Arc<SessionContext>,
-    tables: Vec<TableInfo>,
+    tables: Vec<RelationInfo>,
     failures: Vec<SourceRegistrationFailure>,
     query_result_observers: Vec<Arc<dyn QueryResultObserver>>,
 }
@@ -123,15 +128,15 @@ pub(crate) async fn build_runtime(
 }
 
 impl QueryRuntimeAdapter {
-    pub(crate) fn list_tables(
+    pub(crate) fn list_relations(
         &self,
         source_filter: Option<&str>,
-        table_filter: Option<&str>,
-    ) -> Vec<TableInfo> {
+        relation_filter: Option<&str>,
+    ) -> Vec<RelationInfo> {
         self.tables
             .iter()
-            .filter(|table| source_filter.is_none_or(|value| table.schema_name == value))
-            .filter(|table| table_filter.is_none_or(|value| table.table_name == value))
+            .filter(|relation| source_filter.is_none_or(|value| relation.schema_name == value))
+            .filter(|relation| relation_filter.is_none_or(|value| relation.relation_name == value))
             .cloned()
             .collect()
     }
@@ -147,13 +152,30 @@ impl QueryRuntimeAdapter {
 
     pub(crate) async fn execute_sql(&self, sql: &str) -> Result<QueryExecution, CoreError> {
         let df = self.sql_dataframe(sql).await?;
-        let arrow_schema = Arc::new(df.schema().as_arrow().clone());
-        let batches = df
-            .collect()
+        let (session_state, logical_plan) = df.into_parts();
+        validate_coral_sql_plan(&logical_plan)
+            .map_err(|err| datafusion_to_core(&err, &self.tables))?;
+        validate_effectful_function_plan(&logical_plan)
+            .map_err(|err| datafusion_to_core(&err, &self.tables))?;
+        let optimized_logical_plan = session_state
+            .optimize(&logical_plan)
+            .map_err(|err| datafusion_to_core(&err, &self.tables))?;
+        validate_coral_sql_plan(&optimized_logical_plan)
+            .map_err(|err| datafusion_to_core(&err, &self.tables))?;
+        validate_effectful_function_plan(&optimized_logical_plan)
+            .map_err(|err| datafusion_to_core(&err, &self.tables))?;
+        let arrow_schema = Arc::new(optimized_logical_plan.schema().as_arrow().clone());
+        let physical_plan = session_state
+            .query_planner()
+            .create_physical_plan(&optimized_logical_plan, &session_state)
             .await
             .map_err(|err| datafusion_to_core(&err, &self.tables))?;
+        let batches = collect_physical_plan(physical_plan, session_state.task_ctx())
+            .await
+            .map_err(|err| datafusion_to_core(&err, &self.tables))?;
+        let summary = sql_execution_summary(sql, &batches);
         self.observe_query_result(sql, arrow_schema.as_ref(), &batches)?;
-        Ok(QueryExecution::new(arrow_schema, batches))
+        Ok(QueryExecution::new(arrow_schema, batches, summary))
     }
 
     fn observe_query_result(
@@ -172,10 +194,18 @@ impl QueryRuntimeAdapter {
 
     pub(crate) async fn explain_sql(&self, sql: &str) -> Result<QueryPlan, CoreError> {
         let df = self.sql_dataframe(sql).await?;
+        validate_coral_sql_plan(df.logical_plan())
+            .map_err(|err| datafusion_to_core(&err, &self.tables))?;
+        validate_effectful_function_plan(df.logical_plan())
+            .map_err(|err| datafusion_to_core(&err, &self.tables))?;
         let unoptimized_logical_plan = df.logical_plan().display_indent_schema().to_string();
         let (session_state, logical_plan) = df.into_parts();
         let optimized_logical_plan = session_state
             .optimize(&logical_plan)
+            .map_err(|err| datafusion_to_core(&err, &self.tables))?;
+        validate_coral_sql_plan(&optimized_logical_plan)
+            .map_err(|err| datafusion_to_core(&err, &self.tables))?;
+        validate_effectful_function_plan(&optimized_logical_plan)
             .map_err(|err| datafusion_to_core(&err, &self.tables))?;
         let optimized_logical_plan_display =
             optimized_logical_plan.display_indent_schema().to_string();
@@ -198,17 +228,151 @@ impl QueryRuntimeAdapter {
 
     async fn sql_dataframe(&self, sql: &str) -> Result<DataFrame, CoreError> {
         self.ctx
-            .sql_with_options(sql, read_only_sql_options())
+            .sql_with_options(sql, coral_sql_options())
             .await
             .map_err(|err| datafusion_to_core_with_sql(&err, &self.tables, Some(sql)))
     }
 }
 
-fn read_only_sql_options() -> SQLOptions {
+fn coral_sql_options() -> SQLOptions {
     SQLOptions::new()
         .with_allow_ddl(false)
-        .with_allow_dml(false)
+        .with_allow_dml(true)
         .with_allow_statements(false)
+}
+
+fn validate_coral_sql_plan(plan: &LogicalPlan) -> datafusion::error::Result<()> {
+    if matches!(plan, LogicalPlan::Copy(_)) {
+        return Err(datafusion::error::DataFusionError::Plan(
+            "COPY is not supported by Coral SQL".to_string(),
+        ));
+    }
+    for input in plan.inputs() {
+        validate_coral_sql_plan(input)?;
+    }
+    Ok(())
+}
+
+fn validate_effectful_function_plan(plan: &LogicalPlan) -> datafusion::error::Result<()> {
+    let mut scans = Vec::new();
+    collect_effectful_function_scans(plan, &mut scans);
+    match scans.len() {
+        0 => Ok(()),
+        1 if is_allowed_effectful_function_shape(plan) => Ok(()),
+        1 => Err(datafusion::error::DataFusionError::Plan(format!(
+            "effectful SQL function {} must be called as a top-level simple SELECT; joins, filters, limits, subqueries, CTE reuse, and nested use are not supported",
+            scans.first().expect("length checked above")
+        ))),
+        _ => Err(datafusion::error::DataFusionError::Plan(format!(
+            "effectful SQL functions must execute exactly once; found {} effectful function scans: {}",
+            scans.len(),
+            scans.join(", ")
+        ))),
+    }
+}
+
+fn collect_effectful_function_scans(plan: &LogicalPlan, scans: &mut Vec<String>) {
+    if let Some(provider) = effectful_function_scan(plan) {
+        scans.push(format!(
+            "{} ({}, {})",
+            provider.qualified_name(),
+            provider.effect().as_str(),
+            provider.idempotency().as_str()
+        ));
+    }
+    for input in plan.inputs() {
+        collect_effectful_function_scans(input, scans);
+    }
+}
+
+fn is_allowed_effectful_function_shape(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Projection(Projection { input, .. }) => {
+            simple_effectful_function_leaf(input.as_ref())
+        }
+        other => simple_effectful_function_leaf(other),
+    }
+}
+
+fn simple_effectful_function_leaf(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::TableScan(scan) => effectful_function_table_scan(scan).is_some(),
+        LogicalPlan::SubqueryAlias(alias) => simple_effectful_function_leaf(alias.input.as_ref()),
+        _ => false,
+    }
+}
+
+fn effectful_function_scan(plan: &LogicalPlan) -> Option<&HttpSourceFunctionCallTableProvider> {
+    match plan {
+        LogicalPlan::TableScan(scan) => effectful_function_table_provider(scan),
+        _ => None,
+    }
+}
+
+fn effectful_function_table_scan(scan: &TableScan) -> Option<&HttpSourceFunctionCallTableProvider> {
+    let provider = effectful_function_table_provider(scan)?;
+    (scan.filters.is_empty() && scan.fetch.is_none()).then_some(provider)
+}
+
+fn effectful_function_table_provider(
+    scan: &TableScan,
+) -> Option<&HttpSourceFunctionCallTableProvider> {
+    let table_source = scan.source.as_any().downcast_ref::<DefaultTableSource>()?;
+    let provider = table_source
+        .table_provider
+        .as_any()
+        .downcast_ref::<HttpSourceFunctionCallTableProvider>()?;
+    (provider.effect() != WriteEffect::Read).then_some(provider)
+}
+
+fn sql_execution_summary(
+    sql: &str,
+    batches: &[arrow::record_batch::RecordBatch],
+) -> SqlExecutionSummary {
+    let statement_kind = first_sql_keyword(sql).unwrap_or("unknown");
+    let effect = match statement_kind {
+        "insert" | "update" => "write",
+        "delete" | "truncate" => "destructive",
+        _ => "read",
+    };
+    let affected_row_count =
+        if matches!(statement_kind, "insert" | "update" | "delete" | "truncate") {
+            first_count_value(batches).unwrap_or(0)
+        } else {
+            0
+        };
+    SqlExecutionSummary::new(statement_kind, effect, affected_row_count)
+}
+
+fn first_sql_keyword(sql: &str) -> Option<&'static str> {
+    let keyword = sql
+        .trim_start()
+        .split(|ch: char| ch.is_whitespace() || ch == '(')
+        .next()?
+        .to_ascii_lowercase();
+    match keyword.as_str() {
+        "select" => Some("select"),
+        "insert" => Some("insert"),
+        "update" => Some("update"),
+        "delete" => Some("delete"),
+        "truncate" => Some("truncate"),
+        "explain" => Some("explain"),
+        _ => Some("unknown"),
+    }
+}
+
+fn first_count_value(batches: &[arrow::record_batch::RecordBatch]) -> Option<u64> {
+    let batch = batches.first()?;
+    let column = batch.columns().first()?;
+    if let Some(values) = column.as_any().downcast_ref::<UInt64Array>() {
+        return (!values.is_empty() && !values.is_null(0)).then(|| values.value(0));
+    }
+    if let Some(values) = column.as_any().downcast_ref::<Int64Array>() {
+        return (!values.is_empty() && !values.is_null(0))
+            .then(|| u64::try_from(values.value(0)).ok())
+            .flatten();
+    }
+    None
 }
 
 fn query_result_observer_error(name: &str, error: &QueryResultObserverError) -> CoreError {

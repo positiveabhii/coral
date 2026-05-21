@@ -1,4 +1,4 @@
-dsl_version: 3
+dsl_version: 4
 name: incident_io
 version: 1.0.0
 description: >-
@@ -21,7 +21,7 @@ auth:
       template: Bearer {{input.INCIDENT_IO_API_KEY}}
 test_queries:
   - SELECT * FROM incident_io.actions LIMIT 1
-tables:
+relations:
   - name: actions
     description: List
     guide: >-

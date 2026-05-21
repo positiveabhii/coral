@@ -19,10 +19,10 @@ export JIRA_API_TOKEN="YOUR_JIRA_API_TOKEN"
 ```bash
 coral source add jira
 coral source test jira
-coral sql "SELECT table_name FROM coral.tables WHERE schema_name = 'jira' ORDER BY table_name"
+coral sql "SELECT relation_name FROM coral.relations WHERE schema_name = 'jira' ORDER BY relation_name"
 ```
 
-## Tables
+## Relations
 
 | Table | Notes |
 |---|---|

@@ -158,8 +158,8 @@ impl QueryTestResult {
 /// Structured report for validating one source and its optional test queries.
 #[derive(Debug, Clone)]
 pub struct SourceValidationReport {
-    /// Tables exposed by the validated source.
-    pub tables: Vec<super::TableInfo>,
+    /// Relations exposed by the validated source.
+    pub relations: Vec<super::RelationInfo>,
     /// One result per declared validation query, in manifest order.
     pub query_tests: Vec<QueryTestResult>,
 }
@@ -167,9 +167,9 @@ pub struct SourceValidationReport {
 impl SourceValidationReport {
     #[must_use]
     /// Builds one structured source-validation report.
-    pub fn new(tables: Vec<super::TableInfo>, query_tests: Vec<QueryTestResult>) -> Self {
+    pub fn new(relations: Vec<super::RelationInfo>, query_tests: Vec<QueryTestResult>) -> Self {
         Self {
-            tables,
+            relations,
             query_tests,
         }
     }
@@ -251,12 +251,59 @@ pub struct QueryExecution {
     arrow_schema: Arc<Schema>,
     batches: Vec<RecordBatch>,
     row_count: usize,
+    summary: SqlExecutionSummary,
+}
+
+/// Effect metadata for one executed SQL statement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SqlExecutionSummary {
+    statement_kind: String,
+    effect: String,
+    affected_row_count: u64,
+}
+
+impl SqlExecutionSummary {
+    #[must_use]
+    /// Builds a SQL execution summary.
+    pub fn new(
+        statement_kind: impl Into<String>,
+        effect: impl Into<String>,
+        affected_row_count: u64,
+    ) -> Self {
+        Self {
+            statement_kind: statement_kind.into(),
+            effect: effect.into(),
+            affected_row_count,
+        }
+    }
+
+    #[must_use]
+    /// Returns the normalized statement kind.
+    pub fn statement_kind(&self) -> &str {
+        &self.statement_kind
+    }
+
+    #[must_use]
+    /// Returns the statement effect class.
+    pub fn effect(&self) -> &str {
+        &self.effect
+    }
+
+    #[must_use]
+    /// Returns provider rows affected by DML, or zero for reads.
+    pub fn affected_row_count(&self) -> u64 {
+        self.affected_row_count
+    }
 }
 
 impl QueryExecution {
     #[must_use]
     /// Builds a validated fully materialized query result.
-    pub fn new(arrow_schema: Arc<Schema>, batches: Vec<RecordBatch>) -> Self {
+    pub fn new(
+        arrow_schema: Arc<Schema>,
+        batches: Vec<RecordBatch>,
+        summary: SqlExecutionSummary,
+    ) -> Self {
         let schema = arrow_schema
             .fields()
             .iter()
@@ -267,6 +314,7 @@ impl QueryExecution {
                 nullable: field.is_nullable(),
                 is_virtual: false,
                 is_required_filter: false,
+                write_behavior: super::ColumnWriteBehavior::default(),
                 description: String::new(),
                 ordinal_position: u32::try_from(position).unwrap_or(u32::MAX),
             })
@@ -277,6 +325,7 @@ impl QueryExecution {
             arrow_schema,
             batches,
             row_count,
+            summary,
         }
     }
 
@@ -302,5 +351,11 @@ impl QueryExecution {
     /// Returns the total number of rows across all batches.
     pub fn row_count(&self) -> usize {
         self.row_count
+    }
+
+    #[must_use]
+    /// Returns effect metadata for the executed statement.
+    pub fn summary(&self) -> &SqlExecutionSummary {
+        &self.summary
     }
 }

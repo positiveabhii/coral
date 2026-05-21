@@ -15,8 +15,8 @@ use axum::body::Body as AxumBody;
 use axum::extract::Request as AxumRequest;
 use axum::response::Response as AxumResponse;
 use coral_api::v1::feedback_service_server::FeedbackServiceServer;
-use coral_api::v1::query_service_server::QueryServiceServer;
 use coral_api::v1::source_service_server::SourceServiceServer;
+use coral_api::v1::sql_service_server::SqlServiceServer;
 use coral_api::v1::trace_service_server::TraceServiceServer;
 use coral_api::{
     HTTP2_MAX_HEADER_LIST_SIZE, QUERY_RESPONSE_MAX_MESSAGE_SIZE, TRACE_RESPONSE_MAX_MESSAGE_SIZE,
@@ -41,7 +41,7 @@ use crate::feedback::publisher::{
 };
 use crate::feedback::service::FeedbackService;
 use crate::query::manager::QueryManager;
-use crate::query::service::QueryService;
+use crate::query::service::SqlService;
 use crate::sources::manager::SourceManager;
 use crate::sources::service::SourceService;
 use crate::state::{AppStateLayout, ConfigStore, SecretStore};
@@ -363,7 +363,7 @@ async fn start_server(
     mode: ServerMode,
 ) -> Result<RunningServer, AppError> {
     let source_service = SourceService::new(source_manager, query_manager.clone());
-    let query_service = QueryService::new(query_manager);
+    let sql_service = SqlService::new(query_manager);
     let feedback_service = FeedbackService::new(feedback_manager);
     let mut routes = Routes::default()
         .add_service(GrpcMethodAnnotatedService::new(SourceServiceServer::new(
@@ -373,7 +373,7 @@ async fn start_server(
             feedback_service,
         )))
         .add_service(GrpcMethodAnnotatedService::new(
-            QueryServiceServer::new(query_service)
+            SqlServiceServer::new(sql_service)
                 .max_encoding_message_size(QUERY_RESPONSE_MAX_MESSAGE_SIZE),
         ));
     if let Some(trace_service) = trace_service {
@@ -600,8 +600,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use coral_api::v1::query_service_client::QueryServiceClient;
     use coral_api::v1::source_service_client::SourceServiceClient;
+    use coral_api::v1::sql_service_client::SqlServiceClient;
     use coral_api::v1::trace_service_client::TraceServiceClient;
     use coral_api::v1::{
         ExecuteSqlRequest, ImportSourceRequest, ListSourcesRequest, ListTracesRequest, Workspace,
@@ -987,7 +987,7 @@ enabled = false
             .await
             .expect("connect");
         let mut source_client = SourceServiceClient::new(channel.clone());
-        let mut query_client = QueryServiceClient::new(channel)
+        let mut query_client = SqlServiceClient::new(channel)
             .max_decoding_message_size(QUERY_RESPONSE_MAX_MESSAGE_SIZE);
 
         source_client
@@ -996,9 +996,9 @@ enabled = false
                 manifest_yaml: r#"
 name: tilde_demo
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: jsonl
-tables:
+relations:
   - name: messages
     description: Fixture messages
     source:
@@ -1069,7 +1069,7 @@ tables:
             .connect()
             .await
             .expect("connect");
-        let mut query_client = QueryServiceClient::new(channel)
+        let mut query_client = SqlServiceClient::new(channel)
             .max_decoding_message_size(QUERY_RESPONSE_MAX_MESSAGE_SIZE);
 
         // No underscore separator — DataFusion's SQL parser is conservative
@@ -1121,9 +1121,9 @@ tables:
         let mut manifest = String::new();
         manifest.push_str("name: wide_demo\n");
         manifest.push_str("version: 0.1.0\n");
-        manifest.push_str("dsl_version: 3\n");
+        manifest.push_str("dsl_version: 4\n");
         manifest.push_str("backend: jsonl\n");
-        manifest.push_str("tables:\n");
+        manifest.push_str("relations:\n");
         manifest.push_str("  - name: wide\n");
         manifest.push_str("    description: Wide fixture\n");
         manifest.push_str("    source:\n");
@@ -1165,7 +1165,7 @@ tables:
             .await
             .expect("connect");
         let mut source_client = SourceServiceClient::new(channel.clone());
-        let mut query_client = QueryServiceClient::new(channel)
+        let mut query_client = SqlServiceClient::new(channel)
             .max_decoding_message_size(QUERY_RESPONSE_MAX_MESSAGE_SIZE);
 
         source_client

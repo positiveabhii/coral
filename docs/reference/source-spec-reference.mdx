@@ -17,7 +17,7 @@ Every source spec starts with:
 ```yaml
 name: my_source
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 test_queries:
   - SELECT * FROM my_source.messages LIMIT 1
@@ -27,14 +27,14 @@ test_queries:
 | ------------- | -------------------------------------------------- |
 | `name`        | Source name, also used as the SQL schema name      |
 | `version`     | Source spec version string                         |
-| `dsl_version` | Coral source spec DSL version (currently `3`)      |
+| `dsl_version` | Coral source spec DSL version (currently `4`)      |
 | `backend`     | How data is fetched: `http`, `jsonl`, or `parquet` |
 | `test_queries` | Optional read-only SQL checks Coral runs during `coral source test` |
 
 ## Test queries
 
 Use the optional top-level `test_queries` field when you want Coral to run one
-or more read-only SQL checks after the source validates and its tables become
+or more read-only SQL checks after the source validates and its relations become
 queryable.
 
 ```yaml
@@ -91,7 +91,7 @@ Do not rewrite these names with dots such as `assignee.name` or `repository.owne
 ```sql
 SELECT column_name, description
 FROM coral.columns
-WHERE schema_name = 'github' AND table_name = 'issues'
+WHERE schema_name = 'github' AND relation_name = 'issues'
 ORDER BY ordinal_position
 ```
 
@@ -245,16 +245,16 @@ Column-expression templates do not support `secret`, `variable`, or `state` name
 | `template` | string | —       | Parsed Coral template string using `{{expr.*}}` and `{{filter.*}}` |
 | `values`   | object | —       | Named sub-expressions referenced from `{{expr.name}}` tokens       |
 
-## File-backed tables
+## File-backed Relations
 
-For `jsonl` and `parquet`, each table points at a file location:
+For `jsonl` and `parquet`, each relation points at a file location:
 
 ```yaml
 name: local_messages
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: jsonl
-tables:
+relations:
   - name: messages
     description: Demo messages
     source:
@@ -275,14 +275,14 @@ Notes:
 - `parquet` supports `file://` and `s3://` locations
 - if you omit `glob`, Coral uses a backend-specific default
 
-## HTTP-backed tables
+## HTTP-backed Relations
 
 For `http`, the source spec declares request and response behavior.
 
 ```yaml
 name: demo_api
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 inputs:
   API_BASE:
@@ -297,7 +297,7 @@ auth:
     - name: Authorization
       from: template
       template: Bearer {{input.API_TOKEN}}
-tables:
+relations:
   - name: messages
     description: Messages from the demo API
     request:
@@ -313,12 +313,75 @@ tables:
 
 In this minimal example:
 
-- `response: {}` means "use the default response rules" for an HTTP table
+- `response: {}` means "use the default response rules" for an HTTP relation
 - with the default response rules, Coral treats the selected response value directly as rows unless you configure a different `row_strategy`
 - `inputs` declares the install-time variables and secrets for this source in stable authored order. At install time, `coral source add` reads each key from an environment variable of the same name (or prompts for them when run with `--interactive`). At runtime, installed inputs are surfaced through `coral.inputs`.
 - `{{input.API_TOKEN}}` is resolved from the store implied by the declared input kind
 
-### HTTP table functions
+### HTTP Relation Writes
+
+HTTP relations can declare write operations alongside the optional `read` shape.
+Writes execute through SQL DML and are only sent when the physical plan runs,
+so `EXPLAIN` remains side-effect free.
+
+```yaml
+relations:
+  - name: issues
+    description: Writable issues
+    columns:
+      - name: owner
+        type: Utf8
+        nullable: false
+      - name: repo
+        type: Utf8
+        nullable: false
+      - name: number
+        type: Int64
+      - name: title
+        type: Utf8
+      - name: state
+        type: Utf8
+    insert:
+      input:
+        columns:
+          - name: owner
+            type: Utf8
+            nullable: false
+          - name: repo
+            type: Utf8
+            nullable: false
+          - name: title
+            type: Utf8
+            nullable: false
+      request:
+        method: POST
+        path: /repos/{{input.owner}}/{{input.repo}}/issues
+    update:
+      input:
+        columns:
+          - name: title
+            type: Utf8
+          - name: state
+            type: Utf8
+      request:
+        method: PATCH
+        path: /repos/{{key.owner}}/{{key.repo}}/issues/{{key.number}}
+    delete:
+      request:
+        method: DELETE
+        path: /repos/{{key.owner}}/{{key.repo}}/issues/{{key.number}}
+```
+
+Notes:
+
+- `insert`, `update`, `delete`, and `truncate` are optional per relation.
+- `{{input.*}}` reads values supplied by `INSERT` or `UPDATE`.
+- `{{key.*}}` marks direct key filters required by `UPDATE` and `DELETE`; Coral derives the key columns from those templates.
+- `UPDATE` and `DELETE` currently require direct equality filters for every derived key column.
+- `INSERT` and `UPDATE` send a default JSON body from writable input columns unless the operation declares an explicit request body.
+- Query `coral.relations`, `coral.columns`, and `coral.functions` to inspect read/write capability metadata.
+
+### HTTP Table Functions
 
 HTTP sources can declare source-scoped table functions for provider-native
 operations that return rows, such as search endpoints. A function adds

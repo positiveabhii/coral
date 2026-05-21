@@ -38,10 +38,10 @@ fn lint_accepts_valid_manifest() {
         r"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 base_url: https://example.com
-tables:
+relations:
   - name: messages
     description: Demo messages
     request:
@@ -67,9 +67,9 @@ fn lint_rejects_schema_violation() {
         r"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 base_url: https://example.com
-tables:
+relations:
   - name: messages
     description: Demo messages
     request:
@@ -92,10 +92,10 @@ fn lint_rejects_semantic_violation() {
         r"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 base_url: https://example.com
-tables:
+relations:
   - name: messages
     description: Demo messages
     request:

@@ -148,6 +148,9 @@ fn validate_value(value: &Value, is_root: bool, declared: &BTreeSet<String>) -> 
                 if is_root && key == "inputs" {
                     continue;
                 }
+                if matches!(key.as_str(), "insert" | "update" | "delete" | "truncate") {
+                    continue;
+                }
                 validate_value(nested, false, declared)?;
             }
         }
@@ -222,7 +225,7 @@ mod tests {
         let manifest = r#"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 inputs:
   GITHUB_API_BASE:
@@ -239,7 +242,7 @@ auth:
     - name: Authorization
       from: template
       template: Bearer {{input.GITHUB_TOKEN}}
-tables: []
+relations: []
 "#;
 
         let inputs = collect(manifest).expect("inputs");
@@ -269,7 +272,7 @@ tables: []
         let manifest = r"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 inputs:
   GITHUB_TOKEN:
@@ -280,7 +283,7 @@ auth:
     - name: Authorization
       from: input
       key: GITHUB_TOKEN
-tables: []
+relations: []
 ";
         let inputs = collect(manifest).expect("inputs");
         let [input] = inputs.as_slice() else {
@@ -294,10 +297,10 @@ tables: []
         let manifest = r"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 base_url: https://api.github.com
-tables: []
+relations: []
 ";
         let inputs = collect(manifest).expect("no inputs is fine");
         assert!(inputs.is_empty());
@@ -308,10 +311,10 @@ tables: []
         let manifest = r#"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 base_url: "{{input.GITHUB_API_BASE}}"
-tables: []
+relations: []
 "#;
         let error = collect(manifest).expect_err("undeclared reference");
         assert!(
@@ -327,13 +330,13 @@ tables: []
         let manifest = r#"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 inputs:
   GITHUB_TOKEN:
     kind: secret
 base_url: "{{input.GITHUB_API_BASE}}"
-tables: []
+relations: []
 "#;
         let error = collect(manifest).expect_err("undeclared input");
         assert!(
@@ -348,14 +351,14 @@ tables: []
         let manifest = r#"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 inputs:
   GITHUB_API_BASE:
     kind: variable
     default: https://api.github.com
 base_url: "{{input.GITHUB_API_BASE|https://other.example.com}}"
-tables: []
+relations: []
 "#;
         let error = collect(manifest).expect_err("inline default");
         assert!(
@@ -370,13 +373,13 @@ tables: []
         let manifest = r"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 inputs:
   GITHUB_TOKEN:
     kind: secret
     default: abc123
-tables: []
+relations: []
 ";
         let error = collect(manifest).expect_err("secret default");
         assert!(error.to_string().contains("must not declare a default"));

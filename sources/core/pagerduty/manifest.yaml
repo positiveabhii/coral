@@ -1,4 +1,4 @@
-dsl_version: 3
+dsl_version: 4
 name: pagerduty
 version: 2.0.0
 description: >-
@@ -24,7 +24,7 @@ auth:
       template: Token token={{input.PAGERDUTY_API_TOKEN}}
 test_queries:
   - SELECT * FROM pagerduty.abilities LIMIT 1
-tables:
+relations:
   - name: abilities
     description: List abilities
     guide: |

@@ -12,11 +12,14 @@ use datafusion::prelude::SessionContext;
 use crate::RequestAuthenticator;
 use crate::backends::{
     BackendCompileRequest, BackendRegistration, CompiledBackendSource, RegisteredSource,
-    RegisteredTable, SourceTableFunctions, build_registered_inputs, build_registered_table,
-    build_registered_table_function, internal_table_function_name, registered_columns_from_specs,
+    RegisteredTable, RegisteredTableCapabilities, SourceTableFunctions, build_registered_inputs,
+    build_registered_table_function, build_registered_table_with_capabilities,
+    internal_table_function_name, registered_columns_from_specs_with_write_metadata,
     required_filter_names,
 };
-use coral_spec::backends::http::{HttpSourceManifest, HttpTableSpec};
+use crate::contracts::RelationOperation;
+use coral_spec::backends::http::{HttpRelationSpec, HttpSourceManifest};
+use coral_spec::{ColumnSpec, WriteEffect};
 pub(crate) mod auth;
 pub(crate) mod client;
 pub(crate) mod error;
@@ -24,6 +27,7 @@ pub(crate) mod function;
 pub(crate) mod provider;
 mod rate_limit;
 pub(crate) mod target;
+pub(crate) mod write_exec;
 
 pub(crate) use client::HttpSourceClient;
 pub(crate) use error::ProviderQueryError;
@@ -81,9 +85,9 @@ impl CompiledBackendSource for HttpCompiledSource {
             &self.request_authenticators,
         )?;
         let mut tables: HashMap<String, Arc<dyn TableProvider>> = HashMap::new();
-        let mut table_infos = Vec::with_capacity(self.manifest.tables.len());
+        let mut table_infos = Vec::with_capacity(self.manifest.relations.len());
 
-        for table in &self.manifest.tables {
+        for table in &self.manifest.relations {
             let provider: Arc<dyn TableProvider> = Arc::new(HttpSourceTableProvider::new(
                 backend.clone(),
                 self.manifest.common.name.clone(),
@@ -132,10 +136,102 @@ impl CompiledBackendSource for HttpCompiledSource {
     }
 }
 
-fn registered_table(table: &HttpTableSpec) -> RegisteredTable {
+fn registered_table(table: &HttpRelationSpec) -> RegisteredTable {
     let required_filters = required_filter_names(table.filters());
-    let columns = registered_columns_from_specs(table.columns(), &required_filters);
-    build_registered_table(&table.common, columns, required_filters)
+    let key_columns = relation_key_columns(table);
+    let writable_columns = relation_writable_columns(table);
+    let required_insert_columns = table
+        .insert
+        .as_ref()
+        .map(|insert| required_write_columns(&insert.input_columns))
+        .unwrap_or_default();
+    let columns = registered_columns_from_specs_with_write_metadata(
+        table.columns(),
+        &required_filters,
+        &key_columns,
+        &writable_columns,
+        &required_insert_columns,
+    );
+    build_registered_table_with_capabilities(
+        &table.common,
+        columns,
+        required_filters,
+        RegisteredTableCapabilities {
+            operations: relation_operations(table),
+            derived_key_columns: key_columns,
+            effect: relation_effect(table),
+        },
+    )
+}
+
+fn relation_operations(table: &HttpRelationSpec) -> Vec<RelationOperation> {
+    let mut operations = Vec::new();
+    if table.read.is_some() {
+        operations.push(RelationOperation::Read);
+    }
+    if table.insert.is_some() {
+        operations.push(RelationOperation::Insert);
+    }
+    if table.update.is_some() {
+        operations.push(RelationOperation::Update);
+    }
+    if table.delete.is_some() {
+        operations.push(RelationOperation::Delete);
+    }
+    if table.truncate.is_some() {
+        operations.push(RelationOperation::Truncate);
+    }
+    operations
+}
+
+fn relation_key_columns(table: &HttpRelationSpec) -> Vec<String> {
+    let mut keys = std::collections::BTreeSet::new();
+    for operation in [
+        table.insert.as_ref(),
+        table.update.as_ref(),
+        table.delete.as_ref(),
+        table.truncate.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        keys.extend(operation.key_columns.iter().cloned());
+    }
+    keys.into_iter().collect()
+}
+
+fn relation_writable_columns(table: &HttpRelationSpec) -> Vec<String> {
+    let mut columns = std::collections::BTreeSet::new();
+    for operation in [table.insert.as_ref(), table.update.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        columns.extend(
+            operation
+                .input_columns
+                .iter()
+                .map(|column| column.name.clone()),
+        );
+    }
+    columns.into_iter().collect()
+}
+
+fn required_write_columns(columns: &[ColumnSpec]) -> Vec<String> {
+    columns
+        .iter()
+        .filter(|column| !column.nullable)
+        .map(|column| column.name.clone())
+        .collect()
+}
+
+fn relation_effect(table: &HttpRelationSpec) -> WriteEffect {
+    if table.delete.is_some() || table.truncate.is_some() {
+        WriteEffect::Destructive
+    } else if table.insert.is_some() || table.update.is_some() {
+        WriteEffect::Write
+    } else {
+        WriteEffect::Read
+    }
 }
 
 #[cfg(test)]
@@ -148,7 +244,7 @@ mod tests {
     #[test]
     fn required_secret_names_come_from_declared_secret_inputs() {
         let manifest = parse_source_manifest_value(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "github",
             "version": "1.0.0",
             "backend": "http",
@@ -164,7 +260,7 @@ mod tests {
                     "template": "Bearer {{input.GITHUB_TOKEN}}"
                 }]
             },
-            "tables": [{
+            "relations": [{
                 "name": "repos",
                 "description": "Repositories",
                 "request": { "path": "/user/repos" },
@@ -182,7 +278,7 @@ mod tests {
     #[test]
     fn required_secret_names_exclude_variable_inputs() {
         let manifest = parse_source_manifest_value(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "alpha",
             "version": "0.1.0",
             "backend": "http",
@@ -190,7 +286,7 @@ mod tests {
             "inputs": {
                 "API_BASE": { "kind": "variable", "default": "https://api.example.com" }
             },
-            "tables": [{
+            "relations": [{
                 "name": "items",
                 "description": "Items",
                 "request": { "path": "/items" },

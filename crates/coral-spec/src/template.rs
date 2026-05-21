@@ -172,6 +172,8 @@ pub enum TemplateNamespace {
     Filter,
     /// A source-scoped table function request argument token.
     Arg,
+    /// A target key extracted directly from a write predicate.
+    Key,
     /// A row-expression sub-expression token.
     Expr,
     /// A runtime pagination or request state token.
@@ -186,6 +188,7 @@ impl TemplateNamespace {
             "input" => Self::Input,
             "filter" => Self::Filter,
             "arg" => Self::Arg,
+            "key" => Self::Key,
             "expr" => Self::Expr,
             "state" => Self::State,
             other => Self::Other(other.to_string()),

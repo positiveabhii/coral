@@ -1,6 +1,6 @@
 name: datadog
 version: 2.1.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 description: >-
   Query monitors, events, incidents, dashboards, hosts, services, APM
@@ -597,7 +597,7 @@ functions:
           kind: path
           path:
             - value
-tables:
+relations:
   - name: monitors
     description: Datadog monitors with status and alert configuration.
     guide: >

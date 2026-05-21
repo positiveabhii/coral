@@ -1,4 +1,4 @@
-dsl_version: 3
+dsl_version: 4
 name: gitlab
 version: v4
 description: >-
@@ -29,7 +29,7 @@ auth:
       template: '{{input.GITLAB_TOKEN}}'
 test_queries:
   - SELECT * FROM gitlab.all_projects LIMIT 1
-tables:
+relations:
   - name: access_requests
     description: Gets a list of access requests for a group.
     guide: >-

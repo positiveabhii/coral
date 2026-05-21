@@ -1,6 +1,6 @@
 name: notion
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 description: >-
   Query pages, data sources, databases, blocks, users, templates, and
@@ -34,7 +34,7 @@ request_headers:
     value: "2026-03-11"
 test_queries:
   - SELECT * FROM notion.search LIMIT 1
-tables:
+relations:
   - name: search
     description: Pages and data sources shared with the integration
     guide: |

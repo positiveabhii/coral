@@ -23,8 +23,8 @@ This release is intended for single-user local use:
   server binds to loopback, and the MCP server uses stdio transport.
 
 Coral reduces data exposure by keeping execution local and by exposing a narrow
-MCP surface: `sql`, `list_tables`, `search_tables`, `describe_table`,
-`list_columns`, `coral://guide`, and `coral://tables`.
+MCP surface: `sql`, `list_relations`, `search_relations`, `describe_relation`,
+`list_columns`, `coral://guide`, and `coral://relations`.
 Secret values are not returned through `coral.inputs`; secret rows show only
 whether a value is configured.
 
@@ -41,7 +41,7 @@ trust boundary:
 - Source and workspace names are validated before they are used in local state
   paths.
 - MCP clients can query installed sources, but they do not receive raw stored
-  secret values through the discovery tables or resources.
+  secret values through the discovery relations or resources.
 
 ## What you still need to trust
 

@@ -194,12 +194,12 @@ mod tests {
             r"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: jsonl
 test_queries:
   - SELECT 1
   - SELECT 2
-tables:
+relations:
   - name: messages
     description: Demo messages
     source:
@@ -215,14 +215,14 @@ tables:
     }
 
     #[test]
-    fn parse_source_manifest_rejects_duplicate_table_names() {
+    fn parse_source_manifest_rejects_duplicate_relation_names() {
         let error = parse_source_manifest_yaml(
             r"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: jsonl
-tables:
+relations:
   - name: messages
     description: Demo messages
     source:
@@ -239,21 +239,21 @@ tables:
         type: Int64
 ",
         )
-        .expect_err("duplicate table names should fail");
+        .expect_err("duplicate relation names should fail");
 
         assert_eq!(
             error.to_string(),
-            "source 'demo' has duplicate table 'messages'"
+            "source 'demo' has duplicate relation 'messages'"
         );
     }
 
     #[test]
-    fn parse_source_manifest_accepts_http_functions_without_tables() {
+    fn parse_source_manifest_accepts_http_functions_without_relations() {
         let manifest = parse_source_manifest_yaml(
             r"
 name: searchy
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 base_url: https://example.com
 functions:
@@ -278,7 +278,7 @@ functions:
         .expect("function-only HTTP manifest should parse");
 
         let http = manifest.as_http().expect("HTTP manifest");
-        assert!(http.tables.is_empty());
+        assert!(http.relations.is_empty());
         assert_eq!(http.functions.len(), 1);
         let function = http.functions.first().expect("HTTP function");
         assert_eq!(function.name, "search_issues");
@@ -290,11 +290,11 @@ functions:
             r#"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: jsonl
 test_queries:
   - "   "
-tables:
+relations:
   - name: messages
     description: Demo messages
     source:

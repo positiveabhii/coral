@@ -1,6 +1,6 @@
 name: linear
 version: 2.2.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 description: >-
   Query issues, projects, cycles, initiatives, teams, users, comments,
@@ -22,7 +22,7 @@ auth:
       template: "{{input.LINEAR_API_KEY}}"
 test_queries:
   - SELECT * FROM linear.users LIMIT 1
-tables:
+relations:
   - name: teams
     description: Teams in the Linear workspace
     guide: |

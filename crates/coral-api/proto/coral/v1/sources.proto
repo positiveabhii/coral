@@ -37,7 +37,7 @@ message Source {
   Workspace workspace = 1;
   // Canonical installed source identifier, such as `slack`.
   //
-  // This is also the SQL schema name used to qualify the source's tables.
+  // This is also the SQL schema name used to qualify the source's relations.
   string name = 2;
   // Source manifest version string.
   string version = 3;
@@ -224,12 +224,12 @@ message QueryTestResult {
   }
 }
 
-// Returns source details plus the tables exposed during validation.
+// Returns source details plus the relations exposed during validation.
 message ValidateSourceResponse {
   // The validated source resource.
   Source source = 1;
-  // Tables exposed by the validated source.
-  repeated Table tables = 2;
+  // Relations exposed by the validated source.
+  repeated Relation relations = 2;
   // Validation-query results declared by the source spec.
   repeated QueryTestResult query_tests = 3;
 }

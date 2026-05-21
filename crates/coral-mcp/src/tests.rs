@@ -40,9 +40,9 @@ fn write_fixture_manifest(root: &Path) -> PathBuf {
         r#"
 name: local_messages
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: jsonl
-tables:
+relations:
   - name: events
     description: Fixture events
     source:
@@ -220,9 +220,9 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .collect::<Vec<_>>(),
         vec![
             "sql",
-            "list_tables",
-            "search_tables",
-            "describe_table",
+            "list_relations",
+            "search_relations",
+            "describe_relation",
             "list_columns"
         ]
     );
@@ -253,7 +253,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .iter()
             .map(|resource| resource.uri.as_str())
             .collect::<Vec<_>>(),
-        vec!["coral://guide", "coral://tables"]
+        vec!["coral://guide", "coral://relations"]
     );
     assert!(
         initial_resources[0]
@@ -276,29 +276,29 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     add_demo_source(&mut session.source_client, manifest_yaml).await;
 
     let updated_tools = client.list_all_tools().await.expect("updated tools");
-    let list_tables_tool = tool_by_name(&updated_tools, "list_tables");
-    let search_tables_tool = tool_by_name(&updated_tools, "search_tables");
+    let list_relations_tool = tool_by_name(&updated_tools, "list_relations");
+    let search_relations_tool = tool_by_name(&updated_tools, "search_relations");
     let list_columns_tool = tool_by_name(&updated_tools, "list_columns");
     assert!(
         updated_tools[0]
             .description
             .as_deref()
             .expect("sql description")
-            .contains("3 table(s) are currently visible")
+            .contains("3 relation(s) are currently visible")
     );
     assert!(
         updated_tools[1]
             .description
             .as_deref()
-            .expect("tables description")
-            .contains("3 table(s) are currently visible")
+            .expect("relations description")
+            .contains("3 relation(s) are currently visible")
     );
     assert!(
         updated_tools[2]
             .description
             .as_deref()
-            .expect("table search description")
-            .contains("3 table(s) are currently visible")
+            .expect("relation search description")
+            .contains("3 relation(s) are currently visible")
     );
 
     let updated_resources = client
@@ -314,15 +314,15 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     );
 
     let tables_resource = client
-        .read_resource(ReadResourceRequestParams::new("coral://tables"))
+        .read_resource(ReadResourceRequestParams::new("coral://relations"))
         .await
-        .expect("read tables resource");
+        .expect("read relations resource");
     let tables_text = text_content(&tables_resource);
     let tables_json =
-        serde_json::from_str::<serde_json::Value>(tables_text).expect("parse tables resource");
-    assert_eq!(tables_json["tables"][0]["name"], "local_messages.events");
+        serde_json::from_str::<serde_json::Value>(tables_text).expect("parse relations resource");
+    assert_eq!(tables_json["relations"][0]["name"], "local_messages.events");
     assert_eq!(
-        tables_json["tables"][0]["sql_reference"],
+        tables_json["relations"][0]["sql_reference"],
         "local_messages.events"
     );
 
@@ -336,51 +336,51 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     assert!(updated_guide_text.contains("- local_messages"));
     assert!(!updated_guide_text.contains("## Visible SQL Schemas"));
     assert!(updated_guide_text.contains(
-        "FROM coral.columns WHERE schema_name = 'local_messages' AND table_name = 'events'"
+        "FROM coral.columns WHERE schema_name = 'local_messages' AND relation_name = 'events'"
     ));
 
-    let tables = client
-        .call_tool(CallToolRequestParams::new("list_tables"))
+    let relations = client
+        .call_tool(CallToolRequestParams::new("list_relations"))
         .await
-        .expect("list tables");
-    let structured_tables = tables.structured_content.expect("structured content");
+        .expect("list relations");
+    let structured_tables = relations.structured_content.expect("structured content");
     assert_eq!(structured_tables["total"], 3);
     assert_eq!(structured_tables["limit"], 50);
     assert_eq!(structured_tables["offset"], 0);
     assert_eq!(structured_tables["has_more"], false);
     assert_eq!(
-        structured_tables["tables"][0]["name"],
+        structured_tables["relations"][0]["name"],
         "local_messages.events"
     );
     assert_eq!(
-        structured_tables["tables"][0]["sql_reference"],
+        structured_tables["relations"][0]["sql_reference"],
         "local_messages.events"
     );
-    assert!(structured_tables["tables"][0]["columns"].is_null());
-    assert_eq!(tables.is_error, Some(false));
-    assert_matches_output_schema(list_tables_tool, &structured_tables);
+    assert!(structured_tables["relations"][0]["columns"].is_null());
+    assert_eq!(relations.is_error, Some(false));
+    assert_matches_output_schema(list_relations_tool, &structured_tables);
 
     let page = client
         .call_tool(
-            CallToolRequestParams::new("list_tables").with_arguments(json_object(&json!({
+            CallToolRequestParams::new("list_relations").with_arguments(json_object(&json!({
                 "schema": "local_messages",
                 "limit": 2,
                 "offset": 0
             }))),
         )
         .await
-        .expect("list paginated tables");
+        .expect("list paginated relations");
     let page = page.structured_content.expect("structured content");
     assert_eq!(page["total"], 3);
     assert_eq!(page["limit"], 2);
     assert_eq!(page["has_more"], true);
     assert_eq!(page["next_offset"], 2);
-    assert_eq!(page["tables"].as_array().expect("tables").len(), 2);
-    assert_matches_output_schema(list_tables_tool, &page);
+    assert_eq!(page["relations"].as_array().expect("relations").len(), 2);
+    assert_matches_output_schema(list_relations_tool, &page);
 
     let unknown_schema = client
         .call_tool(
-            CallToolRequestParams::new("list_tables").with_arguments(json_object(&json!({
+            CallToolRequestParams::new("list_relations").with_arguments(json_object(&json!({
                 "schema": "missing",
                 "limit": 2,
                 "offset": 0
@@ -393,16 +393,16 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         .expect("structured content");
     assert_eq!(unknown_schema["total"], 0);
     assert!(
-        unknown_schema["tables"]
+        unknown_schema["relations"]
             .as_array()
-            .expect("tables")
+            .expect("relations")
             .is_empty()
     );
-    assert_matches_output_schema(list_tables_tool, &unknown_schema);
+    assert_matches_output_schema(list_relations_tool, &unknown_schema);
 
     client
         .call_tool(
-            CallToolRequestParams::new("list_tables").with_arguments(json_object(&json!({
+            CallToolRequestParams::new("list_relations").with_arguments(json_object(&json!({
                 "limit": 0
             }))),
         )
@@ -411,54 +411,54 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
 
     let search = client
         .call_tool(
-            CallToolRequestParams::new("search_tables").with_arguments(json_object(&json!({
+            CallToolRequestParams::new("search_relations").with_arguments(json_object(&json!({
                 "pattern": "^MESSAGES$",
                 "schema": "local_messages",
                 "ignore_case": true
             }))),
         )
         .await
-        .expect("search tables");
+        .expect("search relations");
     let search = search.structured_content.expect("structured content");
     assert_eq!(search["total"], 1);
-    assert_eq!(search["tables"][0]["name"], "local_messages.messages");
+    assert_eq!(search["relations"][0]["name"], "local_messages.messages");
     assert_eq!(
-        search["tables"][0]["sql_reference"],
+        search["relations"][0]["sql_reference"],
         "local_messages.messages"
     );
     assert!(
-        search["tables"][0]["guide"].is_string(),
+        search["relations"][0]["guide"].is_string(),
         "search results should always expose guide text, even when empty"
     );
     assert!(
-        search["tables"][0]["matched_fields"]
+        search["relations"][0]["matched_fields"]
             .as_array()
             .expect("matched fields")
             .iter()
-            .any(|field| field == "table_name")
+            .any(|field| field == "relation_name")
     );
-    assert_matches_output_schema(search_tables_tool, &search);
+    assert_matches_output_schema(search_relations_tool, &search);
 
     let search_page = client
         .call_tool(
-            CallToolRequestParams::new("search_tables").with_arguments(json_object(&json!({
+            CallToolRequestParams::new("search_relations").with_arguments(json_object(&json!({
                 "pattern": "Fixture",
                 "schema": "local_messages",
                 "limit": 2
             }))),
         )
         .await
-        .expect("search table page");
+        .expect("search relation page");
     let search_page = search_page.structured_content.expect("structured content");
     assert_eq!(search_page["total"], 3);
     assert_eq!(search_page["limit"], 2);
     assert_eq!(search_page["has_more"], true);
     assert_eq!(search_page["next_offset"], 2);
-    assert_matches_output_schema(search_tables_tool, &search_page);
+    assert_matches_output_schema(search_relations_tool, &search_page);
 
     client
         .call_tool(
-            CallToolRequestParams::new("search_tables").with_arguments(json_object(&json!({
+            CallToolRequestParams::new("search_relations").with_arguments(json_object(&json!({
                 "pattern": "["
             }))),
         )
@@ -467,13 +467,13 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
 
     let described = client
         .call_tool(
-            CallToolRequestParams::new("describe_table").with_arguments(json_object(&json!({
+            CallToolRequestParams::new("describe_relation").with_arguments(json_object(&json!({
                 "schema": "local_messages",
-                "table": "messages"
+                "relation": "messages"
             }))),
         )
         .await
-        .expect("describe table");
+        .expect("describe relation");
     let described = described.structured_content.expect("structured content");
     assert_eq!(described["found"], true);
     assert_eq!(described["name"], "local_messages.messages");
@@ -483,25 +483,28 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
 
     let missing_table = client
         .call_tool(
-            CallToolRequestParams::new("describe_table").with_arguments(json_object(&json!({
+            CallToolRequestParams::new("describe_relation").with_arguments(json_object(&json!({
                 "schema": "local_messages",
-                "table": "missing"
+                "relation": "missing"
             }))),
         )
         .await
-        .expect("describe missing table");
+        .expect("describe missing relation");
     assert_eq!(missing_table.is_error, Some(false));
     let missing_table = missing_table
         .structured_content
         .expect("structured content");
     assert_eq!(missing_table["found"], false);
     assert_eq!(missing_table["requested"]["schema"], "local_messages");
-    assert_eq!(missing_table["requested"]["table"], "missing");
+    assert_eq!(missing_table["requested"]["relation"], "missing");
     assert_eq!(
-        missing_table["same_schema_tables"][0]["name"],
+        missing_table["same_schema_relations"][0]["name"],
         "local_messages.events"
     );
-    assert_eq!(missing_table["suggested_calls"][0]["tool"], "search_tables");
+    assert_eq!(
+        missing_table["suggested_calls"][0]["tool"],
+        "search_relations"
+    );
     assert_eq!(
         missing_table["suggested_calls"][0]["arguments"]["pattern"],
         "missing"
@@ -513,9 +516,9 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
 
     let missing_schema = client
         .call_tool(
-            CallToolRequestParams::new("describe_table").with_arguments(json_object(&json!({
+            CallToolRequestParams::new("describe_relation").with_arguments(json_object(&json!({
                 "schema": "local_mesages",
-                "table": "missing["
+                "relation": "missing["
             }))),
         )
         .await
@@ -536,19 +539,19 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
 
     client
         .call_tool(
-            CallToolRequestParams::new("describe_table").with_arguments(json_object(&json!({
+            CallToolRequestParams::new("describe_relation").with_arguments(json_object(&json!({
                 "schema": "local_messages",
-                "table": " "
+                "relation": " "
             }))),
         )
         .await
-        .expect_err("blank table should fail");
+        .expect_err("blank relation should fail");
 
     let columns = client
         .call_tool(
             CallToolRequestParams::new("list_columns").with_arguments(json_object(&json!({
                 "schema": "local_messages",
-                "table": "messages",
+                "relation": "messages",
                 "limit": 2
             }))),
         )
@@ -556,7 +559,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         .expect("list columns");
     let columns = columns.structured_content.expect("structured content");
     assert_eq!(columns["schema_name"], "local_messages");
-    assert_eq!(columns["table_name"], "messages");
+    assert_eq!(columns["relation_name"], "messages");
     assert_eq!(columns["total"], 3);
     assert_eq!(columns["limit"], 2);
     assert_eq!(columns["has_more"], true);
@@ -569,7 +572,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         .call_tool(
             CallToolRequestParams::new("list_columns").with_arguments(json_object(&json!({
                 "schema": "local_messages",
-                "table": "sessions",
+                "relation": "sessions",
                 "required_only": true
             }))),
         )
@@ -587,7 +590,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         .call_tool(
             CallToolRequestParams::new("list_columns").with_arguments(json_object(&json!({
                 "schema": "local_messages",
-                "table": "messages",
+                "relation": "messages",
                 "pattern": "SESSION"
             }))),
         )
@@ -611,7 +614,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         .call_tool(
             CallToolRequestParams::new("list_columns").with_arguments(json_object(&json!({
                 "schema": "local_messages",
-                "table": "messages",
+                "relation": "messages",
                 "pattern": "does-not-match"
             }))),
         )
@@ -622,7 +625,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         .expect("structured content");
     assert!(empty_column_filter["found"].is_null());
     assert_eq!(empty_column_filter["schema_name"], "local_messages");
-    assert_eq!(empty_column_filter["table_name"], "messages");
+    assert_eq!(empty_column_filter["relation_name"], "messages");
     assert_eq!(empty_column_filter["total"], 0);
     assert!(
         empty_column_filter["columns"]
@@ -636,19 +639,19 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         .call_tool(
             CallToolRequestParams::new("list_columns").with_arguments(json_object(&json!({
                 "schema": "local_messages",
-                "table": "missing"
+                "relation": "missing"
             }))),
         )
         .await
-        .expect("list columns for missing table");
+        .expect("list columns for missing relation");
     let missing_columns = missing_columns
         .structured_content
         .expect("structured content");
     assert_eq!(missing_columns["found"], false);
     assert_eq!(missing_columns["requested"]["schema"], "local_messages");
-    assert_eq!(missing_columns["requested"]["table"], "missing");
+    assert_eq!(missing_columns["requested"]["relation"], "missing");
     assert_eq!(
-        missing_columns["same_schema_tables"][0]["name"],
+        missing_columns["same_schema_relations"][0]["name"],
         "local_messages.events"
     );
     assert_eq!(
@@ -661,7 +664,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         .call_tool(
             CallToolRequestParams::new("list_columns").with_arguments(json_object(&json!({
                 "schema": "local_messages",
-                "table": "messages",
+                "relation": "messages",
                 "pattern": ""
             }))),
         )
@@ -692,9 +695,9 @@ async fn mcp_feedback_tool_persists_blocked_agent_report() {
             .collect::<Vec<_>>(),
         vec![
             "sql",
-            "list_tables",
-            "search_tables",
-            "describe_table",
+            "list_relations",
+            "search_relations",
+            "describe_relation",
             "list_columns",
             "feedback"
         ]
@@ -830,7 +833,7 @@ async fn mcp_tool_error_does_not_end_session() {
     let invalid_sql = client
         .call_tool(
             CallToolRequestParams::new("sql").with_arguments(json_object(&json!({
-                "sql": "DELETE FROM local_messages.messages"
+                "sql": "DROP TABLE local_messages.messages"
             }))),
         )
         .await
@@ -849,18 +852,18 @@ async fn mcp_tool_error_does_not_end_session() {
     );
 
     let tables_after_error = client
-        .call_tool(CallToolRequestParams::new("list_tables"))
+        .call_tool(CallToolRequestParams::new("list_relations"))
         .await
-        .expect("list tables after error");
+        .expect("list relations after error");
     let structured_tables_after_error = tables_after_error
         .structured_content
         .expect("structured content");
     assert_eq!(
-        structured_tables_after_error["tables"][0]["name"],
+        structured_tables_after_error["relations"][0]["name"],
         "local_messages.events"
     );
     assert_eq!(
-        structured_tables_after_error["tables"][0]["sql_reference"],
+        structured_tables_after_error["relations"][0]["sql_reference"],
         "local_messages.events"
     );
     assert_eq!(tables_after_error.is_error, Some(false));

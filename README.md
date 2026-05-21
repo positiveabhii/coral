@@ -8,7 +8,7 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/withcoral/coral)
 
 Coral gives agents a local-first SQL runtime over APIs, files, and other data
-sources. Query it from the CLI, inspect schemas and tables, or expose the same
+sources. Query it from the CLI, inspect schemas and relations, or expose the same
 runtime over MCP so agents can use it without bespoke tool glue.
 
 You can ask your agents complex questions about your data:
@@ -59,9 +59,9 @@ graph LR
     Coral -->|Result rows| Agent
 
     subgraph Sources["Installed sources"]
-        GH["github source<br/>(github.* tables)"]
-        LN["linear source<br/>(linear.* tables)"]
-        FS["file source<br/>(your_files.* tables)"]
+        GH["github source<br/>(github.* relations)"]
+        LN["linear source<br/>(linear.* relations)"]
+        FS["file source<br/>(your_files.* relations)"]
     end
 
     Coral --> GH
@@ -80,15 +80,15 @@ graph LR
 ```
 
 **Sources.** A _source spec_ is a YAML file that declares how to reach an API
-or local dataset and which tables and columns it exposes. A _source_ is that
+or local dataset and which relations and columns it exposes. A _source_ is that
 spec plus the credentials and variables you configured for it. When you run
 `coral source add github`, Coral installs the `github` source and exposes it
-at query time as the `github` SQL schema, so tables like `github.issues` and
+at query time as the `github` SQL schema, so relations like `github.issues` and
 `github.pulls` become queryable. Start with the
 [bundled sources](https://withcoral.com/docs/reference/bundled-sources) or
 [write your own](https://withcoral.com/docs/guides/write-a-custom-source).
 
-**Joins across sources.** Because every source appears as SQL tables, you can
+**Joins across sources.** Because every source appears as SQL relations, you can
 `JOIN` across them in one statement, and Coral executes the join locally
 after fetching each side from its backing API or files. For example, to see
 which Linear issues are tracking open GitHub pull requests:
@@ -165,15 +165,15 @@ coral source add --interactive github
 Coral prompts for any required variables or secrets. For scripted setup, omit
 `--interactive` and provide each input as an environment variable of the same
 name, such as `GITHUB_TOKEN=ghp_... coral source add github`. Once connected,
-the source's data is available as SQL tables. To update a source's credentials
+the source's data is available as SQL relations. To update a source's credentials
 later, run the same command again.
 
 ### 4. Query your data
 
-Use `coral.tables` to see all available tables:
+Use `coral.relations` to see all available relations:
 
 ```bash
-coral sql "SELECT schema_name, table_name FROM coral.tables ORDER BY 1, 2"
+coral sql "SELECT schema_name, relation_name FROM coral.relations ORDER BY 1, 2"
 ```
 
 Assuming you've connected GitHub, try listing open issues for a repo:
@@ -211,14 +211,14 @@ For Cursor, VS Code, Claude Desktop, OpenCode, and manual config examples,
 see [Use Coral over MCP](https://withcoral.com/docs/guides/use-coral-over-mcp).
 
 Coral also publishes a set of skills that teach your agent the
-discovery-first SQL workflow (`coral.tables`, `coral.columns`, etc.):
+discovery-first SQL workflow (`coral.relations`, `coral.columns`, etc.):
 
 ```bash
 npx skills add withcoral/skills
 ```
 
-Once connected, ask your agent to "list the tables available in Coral" or to
-run a small query — it'll call `list_tables` or `coral.tables` and see your
+Once connected, ask your agent to "list the relations available in Coral" or to
+run a small query — it'll call `list_relations` or `coral.relations` and see your
 installed sources.
 
 ## Local state

@@ -2,8 +2,8 @@
 
 use coral_api::v1::Workspace;
 use coral_api::v1::feedback_service_client::FeedbackServiceClient;
-use coral_api::v1::query_service_client::QueryServiceClient;
 use coral_api::v1::source_service_client::SourceServiceClient;
+use coral_api::v1::sql_service_client::SqlServiceClient;
 use coral_api::{HTTP2_MAX_HEADER_LIST_SIZE, QUERY_RESPONSE_MAX_MESSAGE_SIZE};
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::{Channel, Endpoint};
@@ -30,7 +30,7 @@ type GrpcService = InstrumentedGrpcService<RawGrpcService>;
 pub type SourceClient = SourceServiceClient<GrpcService>;
 
 /// Public SQL query gRPC client.
-pub type QueryClient = QueryServiceClient<GrpcService>;
+pub type QueryClient = SqlServiceClient<GrpcService>;
 
 /// Public feedback-submission gRPC client.
 pub type FeedbackClient = FeedbackServiceClient<GrpcService>;

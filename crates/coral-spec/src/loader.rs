@@ -130,9 +130,9 @@ mod tests {
             r#"
 name: otel_metrics
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: parquet
-tables:
+relations:
   - name: metrics
     description: Metrics exported as parquet
     source:
@@ -164,9 +164,9 @@ tables:
             r#"
 name: claude
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: jsonl
-tables:
+relations:
   - name: messages
     description: Claude Code conversation messages
     source:
@@ -202,9 +202,9 @@ tables:
             r#"
 name: good_plugin
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: parquet
-tables:
+relations:
   - name: data
     description: Some data
     source:
@@ -224,7 +224,7 @@ tables:
 name: bad_plugin
 version: 0.1.0
 backend: http
-tables:
+relations:
   - name: stuff
     columns: []
 ",
@@ -249,9 +249,9 @@ tables:
             r#"
 name: my_plugin
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: parquet
-tables:
+relations:
   - name: data
     description: Some data
     source:
@@ -283,9 +283,9 @@ tables:
                 r#"
 name: dual
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: parquet
-tables:
+relations:
   - name: data
     description: Some data
     source:

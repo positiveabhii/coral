@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use coral_engine::{ColumnInfo, CoralQuery, QuerySource, TableInfo};
+use coral_engine::{ColumnInfo, CoralQuery, QuerySource, RelationInfo};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -19,9 +19,9 @@ fn users_manifest(dir: &std::path::Path) -> Value {
     json!({
         "name": "alpha",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "jsonl",
-        "tables": [{
+        "relations": [{
             "name": "users",
             "description": "Alpha users",
             "source": {
@@ -41,9 +41,9 @@ fn teams_manifest(dir: &std::path::Path) -> Value {
     json!({
         "name": "beta",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "jsonl",
-        "tables": [{
+        "relations": [{
             "name": "teams",
             "description": "Beta teams",
             "source": {
@@ -88,14 +88,14 @@ fn build_catalog_sources() -> (TempDir, Vec<QuerySource>) {
 }
 
 #[tokio::test]
-async fn coral_tables_lists_installed_sources() {
+async fn coral_relations_lists_installed_sources() {
     let (_temp, sources) = build_catalog_sources();
 
     let rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &sources,
             test_runtime(),
-            "SELECT schema_name, table_name FROM coral.tables ORDER BY schema_name, table_name",
+            "SELECT schema_name, relation_name FROM coral.relations ORDER BY schema_name, relation_name",
         )
         .await
         .expect("catalog query should succeed"),
@@ -104,8 +104,8 @@ async fn coral_tables_lists_installed_sources() {
     assert_eq!(
         rows,
         vec![
-            json!({"schema_name": "alpha", "table_name": "users"}),
-            json!({"schema_name": "beta", "table_name": "teams"}),
+            json!({"schema_name": "alpha", "relation_name": "users"}),
+            json!({"schema_name": "beta", "relation_name": "teams"}),
         ]
     );
 }
@@ -119,7 +119,7 @@ async fn coral_columns_returns_metadata() {
             &sources,
             test_runtime(),
             "SELECT column_name, data_type, is_nullable, is_virtual, is_required_filter \
-             FROM coral.columns WHERE schema_name = 'alpha' AND table_name = 'users' \
+             FROM coral.columns WHERE schema_name = 'alpha' AND relation_name = 'users' \
              ORDER BY ordinal_position",
         )
         .await
@@ -145,7 +145,7 @@ async fn coral_columns_default_row_order_matches_ordinal_position() {
             &sources,
             test_runtime(),
             "SELECT column_name, ordinal_position \
-             FROM coral.columns WHERE schema_name = 'alpha' AND table_name = 'users'",
+             FROM coral.columns WHERE schema_name = 'alpha' AND relation_name = 'users'",
         )
         .await
         .expect("catalog query should succeed"),
@@ -162,17 +162,17 @@ async fn coral_columns_default_row_order_matches_ordinal_position() {
 }
 
 #[tokio::test]
-async fn list_tables_matches_catalog() {
+async fn list_relations_matches_catalog() {
     let (_temp, sources) = build_catalog_sources();
 
-    let listed = CoralQuery::list_tables(&sources, test_runtime(), None, None)
+    let listed = CoralQuery::list_relations(&sources, test_runtime(), None, None)
         .await
-        .expect("list_tables should succeed");
+        .expect("list_relations should succeed");
     let catalog_rows = execution_to_rows(
         &CoralQuery::execute_sql(
             &sources,
             test_runtime(),
-            "SELECT schema_name, table_name, description FROM coral.tables ORDER BY schema_name, table_name",
+            "SELECT schema_name, relation_name, description FROM coral.relations ORDER BY schema_name, relation_name",
         )
         .await
         .expect("catalog query should succeed"),
@@ -185,7 +185,7 @@ async fn list_tables_matches_catalog() {
             .map(|row| {
                 (
                     row["schema_name"].as_str().expect("schema").to_string(),
-                    row["table_name"].as_str().expect("table").to_string(),
+                    row["relation_name"].as_str().expect("relation").to_string(),
                     row["description"]
                         .as_str()
                         .expect("description")
@@ -197,8 +197,8 @@ async fn list_tables_matches_catalog() {
 }
 
 #[tokio::test]
-async fn list_tables_empty_when_no_sources() {
-    let tables = CoralQuery::list_tables(&[], test_runtime(), None, None)
+async fn list_relations_empty_when_no_sources() {
+    let tables = CoralQuery::list_relations(&[], test_runtime(), None, None)
         .await
         .expect("empty source list should succeed");
 
@@ -243,10 +243,10 @@ async fn query_nonexistent_schema_returns_error() {
     assert_table_not_found(error, "missing", "users");
 }
 
-fn table_summary(table: &TableInfo) -> (String, String, String) {
+fn table_summary(table: &RelationInfo) -> (String, String, String) {
     (
         table.schema_name.clone(),
-        table.table_name.clone(),
+        table.relation_name.clone(),
         table.description.clone(),
     )
 }
@@ -255,7 +255,7 @@ fn table_summary(table: &TableInfo) -> (String, String, String) {
     dead_code,
     reason = "Reserved for targeted schema assertions as this suite grows."
 )]
-fn table_column_names(table: &TableInfo) -> Vec<String> {
+fn table_column_names(table: &RelationInfo) -> Vec<String> {
     table
         .columns
         .iter()
@@ -267,7 +267,7 @@ fn http_manifest_with_inputs() -> Value {
     json!({
         "name": "demo",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
         "inputs": {
             "DD_SITE": {
@@ -285,7 +285,7 @@ fn http_manifest_with_inputs() -> Value {
             }
         },
         "base_url": "https://api.{{input.DD_SITE}}",
-        "tables": [{
+        "relations": [{
             "name": "items",
             "description": "Example items",
             "request": {
@@ -306,10 +306,10 @@ fn http_manifest_with_function() -> Value {
     json!({
         "name": "searchy",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
         "base_url": "https://example.com",
-        "tables": [{
+        "relations": [{
             "name": "placeholder",
             "description": "Placeholder table",
             "request": {
@@ -372,7 +372,7 @@ fn jsonl_manifest_with_inputs(dir: &std::path::Path) -> Value {
     json!({
         "name": "jsonl_inputs",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "jsonl",
         "inputs": {
             "DATASET": {
@@ -385,7 +385,7 @@ fn jsonl_manifest_with_inputs(dir: &std::path::Path) -> Value {
                 "hint": "Local file source token"
             }
         },
-        "tables": [{
+        "relations": [{
             "name": "events",
             "description": "Input metadata regression fixture",
             "source": {
@@ -400,7 +400,7 @@ fn jsonl_manifest_with_inputs(dir: &std::path::Path) -> Value {
 }
 
 #[tokio::test]
-async fn coral_table_functions_lists_source_functions() {
+async fn coral_functions_lists_source_functions() {
     let sources = vec![build_source(http_manifest_with_function())];
 
     let rows = execution_to_rows(
@@ -408,7 +408,7 @@ async fn coral_table_functions_lists_source_functions() {
             &sources,
             test_runtime(),
             "SELECT schema_name, function_name, description, arguments_json, result_columns_json \
-             FROM coral.table_functions WHERE schema_name = 'searchy'",
+             FROM coral.functions WHERE schema_name = 'searchy'",
         )
         .await
         .expect("table function catalog query should succeed"),

@@ -13,9 +13,9 @@ fn parquet_manifest(name: &str, dir: &Path) -> Value {
     json!({
         "name": name,
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "parquet",
-        "tables": [{
+        "relations": [{
             "name": "users",
             "description": "Users fixture",
             "source": {
@@ -154,13 +154,13 @@ async fn parquet_manifest_with_declared_secret_inputs_registers_and_queries() {
     let manifest = json!({
         "name": "warehouse",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "parquet",
         "inputs": {
             "api_token": { "kind": "secret" },
             "signing_key": { "kind": "secret" },
         },
-        "tables": [{
+        "relations": [{
             "name": "users",
             "description": "Warehouse users",
             "source": {
@@ -195,12 +195,12 @@ async fn parquet_manifest_with_declared_secret_inputs_registers_and_queries() {
     let manifest2 = json!({
         "name": "warehouse2",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "parquet",
         "inputs": {
             "api_token": { "kind": "secret" },
         },
-        "tables": [{
+        "relations": [{
             "name": "users",
             "description": "Warehouse users",
             "source": {

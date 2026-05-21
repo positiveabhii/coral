@@ -9,16 +9,28 @@ import "coral/v1/resources.proto";
 message ExecuteSqlRequest {
   // Workspace that scopes the queryable source set.
   Workspace workspace = 1;
-  // One read-only SQL statement.
+  // One SQL statement.
   string sql = 2;
+}
+
+// Effect summary for one executed SQL statement.
+message SqlExecutionSummary {
+  // Statement kind such as select, insert, update, delete, truncate, or explain.
+  string statement_kind = 1;
+  // Effect class: read, write, or destructive.
+  string effect = 2;
+  // Provider rows affected by DML. Zero for read statements.
+  uint64 affected_row_count = 3;
 }
 
 // Fully materialized query result encoded as Arrow IPC bytes.
 message ExecuteSqlResponse {
   // Arrow IPC stream bytes containing zero or more record batches plus schema.
   bytes arrow_ipc_stream = 1;
-  // Total row count returned by the query.
+  // Rows returned by the result stream.
   int64 row_count = 2;
+  // Execution effect metadata for the statement.
+  SqlExecutionSummary summary = 3;
 }
 
 // Explains one SQL statement by producing query-engine plan renderings without
@@ -26,7 +38,7 @@ message ExecuteSqlResponse {
 message ExplainSqlRequest {
   // Workspace that scopes the queryable source set.
   Workspace workspace = 1;
-  // One read-only SQL statement.
+  // One SQL statement.
   string sql = 2;
 }
 
@@ -68,36 +80,36 @@ message PaginationResponse {
   uint32 next_offset = 5;
 }
 
-// Lists all query-visible tables in one workspace.
-message ListTablesRequest {
-  // Workspace whose current query-visible tables should be listed.
+// Lists all query-visible relations in one workspace.
+message ListRelationsRequest {
+  // Workspace whose current query-visible relations should be listed.
   Workspace workspace = 1;
   // Optional exact schema/source name.
   string schema_name = 2;
-  // Optional page request. Missing or zero limit keeps the legacy unbounded behavior.
+  // Optional page request. Missing or zero limit keeps the unbounded behavior.
   PaginationRequest pagination = 3;
-  // Whether table columns should be omitted from the response.
+  // Whether relation columns should be omitted from the response.
   bool omit_columns = 4;
-  // Optional exact table name. If set without `schema_name`, matches across all schemas.
-  string table_name = 5;
+  // Optional exact relation name. If set without `schema_name`, matches across all schemas.
+  string relation_name = 5;
 }
 
-// Returns the query-visible tables in one workspace.
-message ListTablesResponse {
-  // Full query-visible tables for legacy callers.
-  repeated Table tables = 1;
-  // Page metadata for the table list.
+// Returns the query-visible relations in one workspace.
+message ListRelationsResponse {
+  // Full query-visible relations.
+  repeated Relation relations = 1;
+  // Page metadata for the relation list.
   PaginationResponse pagination = 2;
-  // Query-visible table summaries for callers that do not need columns.
-  repeated TableSummary table_summaries = 3;
+  // Query-visible relation summaries for callers that do not need columns.
+  repeated RelationSummary relation_summaries = 3;
 }
 
-// SQL query execution APIs.
-service QueryService {
-  // Lists query-visible tables for one workspace.
-  rpc ListTables(ListTablesRequest) returns (ListTablesResponse);
-  // Executes one read-only SQL statement and returns the full result set.
+// SQL execution APIs.
+service SqlService {
+  // Lists query-visible relations for one workspace.
+  rpc ListRelations(ListRelationsRequest) returns (ListRelationsResponse);
+  // Executes one SQL statement and returns the full result set.
   rpc ExecuteSql(ExecuteSqlRequest) returns (ExecuteSqlResponse);
-  // Explains one read-only SQL statement without executing it.
+  // Explains one SQL statement without executing it.
   rpc ExplainSql(ExplainSqlRequest) returns (ExplainSqlResponse);
 }

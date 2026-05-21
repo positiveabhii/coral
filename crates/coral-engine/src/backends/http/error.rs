@@ -15,11 +15,11 @@ const FORBIDDEN: u16 = HttpStatus::FORBIDDEN.as_u16();
 const NOT_FOUND: u16 = HttpStatus::NOT_FOUND.as_u16();
 const TOO_MANY_REQUESTS: u16 = HttpStatus::TOO_MANY_REQUESTS.as_u16();
 
-/// Structured query-time failures for HTTP-backed tables.
+/// Structured query-time failures for HTTP-backed relations.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ProviderQueryError {
     #[error(
-        "{schema}.{table} table requires a constant equality filter: WHERE {column} = <constant>"
+        "{schema}.{table} relation requires a constant equality filter: WHERE {column} = <constant>"
     )]
     MissingRequiredFilter {
         schema: String,
@@ -91,7 +91,7 @@ impl ProviderQueryError {
             } => {
                 let mut metadata = HashMap::new();
                 metadata.insert("schema".to_string(), schema.clone());
-                metadata.insert("table".to_string(), table.clone());
+                metadata.insert("relation".to_string(), table.clone());
                 metadata.insert("column".to_string(), column.clone());
                 StructuredQueryError::new(
                     "MISSING_REQUIRED_FILTER",
@@ -99,7 +99,7 @@ impl ProviderQueryError {
                     format!("{schema}.{table} requires a constant equality filter on {column}"),
                     Some(format!(
                         "Add a constant equality filter on `{column}` or inspect \
-                         `coral.columns` / `coral.tables` first."
+                         `coral.columns` / `coral.relations` first."
                     )),
                     false,
                     StatusCode::FailedPrecondition,
@@ -269,7 +269,7 @@ fn http_request_to_structured(
 
     let mut metadata = HashMap::new();
     metadata.insert("source".to_string(), source.to_string());
-    metadata.insert("table".to_string(), table.to_string());
+    metadata.insert("relation".to_string(), table.to_string());
     if let Some(s) = http_status {
         metadata.insert("http_status".to_string(), s.to_string());
     }
@@ -295,7 +295,8 @@ fn http_request_to_structured(
 }
 
 fn bad_request_hint(source: &str, table: &str, filters: &HashMap<String, String>) -> String {
-    let generic = "Adjust the query filters or shape to match the target table's supported inputs.";
+    let generic =
+        "Adjust the query filters or shape to match the target relation's supported inputs.";
     match (source, table) {
         ("datadog", "events") => format!(
             "{generic} Sent filters: {}. `datadog.events` requires `start` and `end` as Unix epoch seconds, for example 1777593600.",
@@ -323,7 +324,7 @@ fn render_filter_values(filters: &HashMap<String, String>) -> String {
 
 struct ProviderStageFailure<'a> {
     source: &'a str,
-    table: &'a str,
+    relation: &'a str,
     stage: &'a str,
     summary: &'a str,
     detail: &'a str,
@@ -345,7 +346,7 @@ fn provider_request_failure<'a>(
 ) -> ProviderStageFailure<'a> {
     ProviderStageFailure {
         source,
-        table,
+        relation: table,
         stage: "request",
         summary: if timed_out {
             "Source request timed out"
@@ -373,7 +374,7 @@ fn provider_decode_failure<'a>(
 ) -> ProviderStageFailure<'a> {
     ProviderStageFailure {
         source,
-        table,
+        relation: table,
         stage: "decode",
         summary: "Source response decode failed",
         detail,
@@ -398,7 +399,7 @@ fn provider_pagination_failure<'a>(
 ) -> ProviderStageFailure<'a> {
     ProviderStageFailure {
         source,
-        table,
+        relation: table,
         stage: "pagination",
         summary: "Source pagination failed",
         detail,
@@ -420,7 +421,7 @@ fn provider_stage_failure_to_structured(failure: ProviderStageFailure<'_>) -> St
 
     let mut metadata = HashMap::new();
     metadata.insert("source".to_string(), failure.source.to_string());
-    metadata.insert("table".to_string(), failure.table.to_string());
+    metadata.insert("relation".to_string(), failure.relation.to_string());
     metadata.insert(
         "provider_failure_stage".to_string(),
         failure.stage.to_string(),
@@ -518,7 +519,7 @@ mod tests {
         .to_structured();
         assert_eq!(error.reason(), "MISSING_REQUIRED_FILTER");
         assert_eq!(error.metadata().get("schema").unwrap(), "github");
-        assert_eq!(error.metadata().get("table").unwrap(), "issues");
+        assert_eq!(error.metadata().get("relation").unwrap(), "issues");
         assert_eq!(error.metadata().get("column").unwrap(), "repo");
         assert!(error.summary().contains("repo"));
         assert!(error.hint().is_some());

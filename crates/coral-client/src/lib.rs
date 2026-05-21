@@ -163,7 +163,7 @@ mod tests {
     use arrow::array::{Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::record_batch::RecordBatch;
-    use coral_api::v1::ExecuteSqlResponse;
+    use coral_api::v1::{ExecuteSqlResponse, SqlExecutionSummary};
     use serde_json::Value;
 
     use super::{
@@ -188,6 +188,11 @@ mod tests {
         ExecuteSqlResponse {
             arrow_ipc_stream: encode_arrow_ipc_stream(&schema, &[batch]).expect("encode"),
             row_count: 2,
+            summary: Some(SqlExecutionSummary {
+                statement_kind: "select".to_string(),
+                effect: "read".to_string(),
+                affected_row_count: 0,
+            }),
         }
     }
 
@@ -222,6 +227,11 @@ mod tests {
         let response = ExecuteSqlResponse {
             arrow_ipc_stream: encode_arrow_ipc_stream(&schema, &[]).expect("encode"),
             row_count: 0,
+            summary: Some(SqlExecutionSummary {
+                statement_kind: "select".to_string(),
+                effect: "read".to_string(),
+                affected_row_count: 0,
+            }),
         };
         let decoded = decode_execute_sql_response(&response).expect("decode");
         assert_eq!(decoded.row_count(), 0);

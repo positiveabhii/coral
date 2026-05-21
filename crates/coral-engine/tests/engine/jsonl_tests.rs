@@ -19,9 +19,9 @@ fn jsonl_manifest(name: &str, dir: &Path, glob: &str) -> Value {
     json!({
         "name": name,
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "jsonl",
-        "tables": [{
+        "relations": [{
             "name": "users",
             "description": "Users fixture",
             "source": {
@@ -98,7 +98,7 @@ fn assert_quoted_fully_qualified_table_reference_hint(error: CoreError) {
             );
             assert!(
                 hint.contains("`github.pulls`"),
-                "hint should suggest the list_tables sql_reference form, got: {hint}"
+                "hint should suggest the catalog sql_reference form, got: {hint}"
             );
             assert!(
                 hint.contains("`\"github\".\"pulls\"`"),
@@ -137,9 +137,9 @@ fn github_pulls_source(dir: &Path) -> coral_engine::QuerySource {
     build_source(json!({
         "name": "github",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "jsonl",
-        "tables": [{
+        "relations": [{
             "name": "pulls",
             "description": "Pull requests fixture",
             "source": {

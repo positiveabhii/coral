@@ -4,12 +4,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write;
 use std::sync::Arc;
 
+use crate::contracts::RelationOperation;
 use crate::{QueryRuntimeContext, RequestAuthenticator};
 use async_trait::async_trait;
 use coral_spec::backends::file::PartitionColumnSpec;
 use coral_spec::{
-    ColumnSpec, FilterSpec, ManifestDataType, ManifestInputKind, ManifestInputSpec,
-    SourceTableFunctionSpec, TableCommon,
+    ColumnSpec, FilterSpec, IdempotencyClass, ManifestDataType, ManifestInputKind,
+    ManifestInputSpec, SourceTableFunctionSpec, TableCommon, WriteEffect,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::TableFunctionImpl;
@@ -26,7 +27,15 @@ pub(crate) struct RegisteredColumn {
     pub(crate) nullable: bool,
     pub(crate) is_virtual: bool,
     pub(crate) is_required_filter: bool,
+    pub(crate) write_behavior: RegisteredColumnWriteBehavior,
     pub(crate) description: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RegisteredColumnWriteBehavior {
+    pub(crate) is_key: bool,
+    pub(crate) is_writable: bool,
+    pub(crate) required_on_insert: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +45,9 @@ pub(crate) struct RegisteredTable {
     pub(crate) guide: String,
     pub(crate) columns: Vec<RegisteredColumn>,
     pub(crate) required_filters: Vec<String>,
+    pub(crate) operations: Vec<RelationOperation>,
+    pub(crate) derived_key_columns: Vec<String>,
+    pub(crate) effect: WriteEffect,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +59,9 @@ pub(crate) struct RegisteredTableFunction {
     pub(crate) arguments_json: String,
     pub(crate) result_columns_json: String,
     pub(crate) arg_names: Vec<String>,
+    pub(crate) effect: WriteEffect,
+    pub(crate) idempotency: IdempotencyClass,
+    pub(crate) supports_top_level_call_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +144,16 @@ pub(crate) fn registered_columns_from_specs(
     columns: &[ColumnSpec],
     required_filters: &[String],
 ) -> Vec<RegisteredColumn> {
+    registered_columns_from_specs_with_write_metadata(columns, required_filters, &[], &[], &[])
+}
+
+pub(crate) fn registered_columns_from_specs_with_write_metadata(
+    columns: &[ColumnSpec],
+    required_filters: &[String],
+    key_columns: &[String],
+    writable_columns: &[String],
+    required_insert_columns: &[String],
+) -> Vec<RegisteredColumn> {
     columns
         .iter()
         .map(|column| RegisteredColumn {
@@ -137,6 +162,15 @@ pub(crate) fn registered_columns_from_specs(
             nullable: column.nullable,
             is_virtual: column.r#virtual,
             is_required_filter: required_filters.iter().any(|filter| filter == &column.name),
+            write_behavior: RegisteredColumnWriteBehavior {
+                is_key: key_columns.iter().any(|key| key == &column.name),
+                is_writable: writable_columns
+                    .iter()
+                    .any(|writable| writable == &column.name),
+                required_on_insert: required_insert_columns
+                    .iter()
+                    .any(|required| required == &column.name),
+            },
             description: column.description.clone(),
         })
         .collect()
@@ -155,6 +189,11 @@ pub(crate) fn registered_columns_from_schema(
             nullable: field.is_nullable(),
             is_virtual: false,
             is_required_filter: required_filters.iter().any(|filter| filter == field.name()),
+            write_behavior: RegisteredColumnWriteBehavior {
+                is_key: false,
+                is_writable: false,
+                required_on_insert: false,
+            },
             description: String::new(),
         })
         .collect()
@@ -213,12 +252,46 @@ pub(crate) fn build_registered_table(
     columns: Vec<RegisteredColumn>,
     required_filters: Vec<String>,
 ) -> RegisteredTable {
+    build_registered_table_with_capabilities(
+        common,
+        columns,
+        required_filters,
+        RegisteredTableCapabilities::read_only(),
+    )
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RegisteredTableCapabilities {
+    pub(crate) operations: Vec<RelationOperation>,
+    pub(crate) derived_key_columns: Vec<String>,
+    pub(crate) effect: WriteEffect,
+}
+
+impl RegisteredTableCapabilities {
+    pub(crate) fn read_only() -> Self {
+        Self {
+            operations: vec![RelationOperation::Read],
+            derived_key_columns: Vec::new(),
+            effect: WriteEffect::Read,
+        }
+    }
+}
+
+pub(crate) fn build_registered_table_with_capabilities(
+    common: &TableCommon,
+    columns: Vec<RegisteredColumn>,
+    required_filters: Vec<String>,
+    capabilities: RegisteredTableCapabilities,
+) -> RegisteredTable {
     RegisteredTable {
         table_name: common.name.clone(),
         description: common.description.clone(),
         guide: common.guide.clone(),
         columns,
         required_filters,
+        operations: capabilities.operations,
+        derived_key_columns: capabilities.derived_key_columns,
+        effect: capabilities.effect,
     }
 }
 
@@ -258,6 +331,9 @@ pub(crate) fn build_registered_table_function(
         arguments_json: serde_json::to_string(&arguments).expect("arguments json"),
         result_columns_json: serde_json::to_string(&result_columns).expect("result columns json"),
         arg_names: function.args.iter().map(|arg| arg.name.clone()).collect(),
+        effect: function.effect,
+        idempotency: function.idempotency,
+        supports_top_level_call_only: function.effect != WriteEffect::Read,
     }
 }
 

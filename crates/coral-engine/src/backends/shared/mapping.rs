@@ -299,6 +299,7 @@ fn eval_template(
                 }
                 TemplateNamespace::Input
                 | TemplateNamespace::Arg
+                | TemplateNamespace::Key
                 | TemplateNamespace::State
                 | TemplateNamespace::Other(_) => return None,
             },
@@ -422,12 +423,12 @@ mod tests {
 
     fn table_with_expr(name: &str, data_type: &str, expr: &ExprSpec) -> HttpTableSpec {
         let source_manifest = parse_source_manifest_value(serde_json::json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "test",
             "version": "0.1.0",
             "backend": "http",
             "base_url": "https://api.example.com",
-            "tables": [{
+            "relations": [{
                 "name": "t",
                 "description": "test",
                 "request": request_json(&RequestSpec::default()),
@@ -440,7 +441,7 @@ mod tests {
         }))
         .expect("manifest should parse");
         let manifest = source_manifest.as_http().expect("http manifest");
-        manifest.tables.first().expect("HTTP table").clone()
+        manifest.relations.first().expect("HTTP relation").clone()
     }
 
     fn request_json(request: &RequestSpec) -> Value {

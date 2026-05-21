@@ -316,14 +316,14 @@ user_repos / org_repos / search_repositories(...)
 coral source add github
 coral server stop && coral server start
 
-# Discover tables
-coral sql "SELECT * FROM coral.tables WHERE schema_name = 'github'"
+# Discover relations
+coral sql "SELECT * FROM coral.relations WHERE schema_name = 'github'"
 
 # Find required filters
 coral sql \
-  "SELECT table_name, column_name FROM coral.columns \
+  "SELECT relation_name, column_name FROM coral.columns \
    WHERE schema_name = 'github' AND is_required_filter = true \
-   ORDER BY table_name"
+   ORDER BY relation_name"
 
 # Query examples
 coral sql \

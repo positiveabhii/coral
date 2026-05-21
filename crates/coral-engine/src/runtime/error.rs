@@ -8,15 +8,15 @@ use datafusion::sql::sqlparser::parser::Parser;
 
 use crate::backends::http::ProviderQueryError;
 use crate::contracts::{ColumnParts, StructuredQueryError, TableRefParts};
-use crate::{CoreError, QueryResultObserverError, SourceDecoratorError, TableInfo};
+use crate::{CoreError, QueryResultObserverError, RelationInfo, SourceDecoratorError};
 
-pub(crate) fn datafusion_to_core(error: &DataFusionError, tables: &[TableInfo]) -> CoreError {
+pub(crate) fn datafusion_to_core(error: &DataFusionError, tables: &[RelationInfo]) -> CoreError {
     datafusion_to_core_with_sql(error, tables, None)
 }
 
 pub(crate) fn datafusion_to_core_with_sql(
     error: &DataFusionError,
-    tables: &[TableInfo],
+    tables: &[RelationInfo],
     sql: Option<&str>,
 ) -> CoreError {
     // Unwrap Context/Shared/Diagnostic wrappers so wrapped schema errors
@@ -66,7 +66,7 @@ pub(crate) fn query_result_observer_error_to_core(error: &QueryResultObserverErr
 fn plan_error_to_core(
     detail: &str,
     error: &DataFusionError,
-    tables: &[TableInfo],
+    tables: &[RelationInfo],
     sql: Option<&str>,
 ) -> CoreError {
     if let Some(table_ref) = table_not_found_ref(error, detail, sql) {

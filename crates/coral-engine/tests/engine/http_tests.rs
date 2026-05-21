@@ -26,10 +26,10 @@ fn base_http_manifest(name: &str, base_url: &str) -> Value {
     json!({
         "name": name,
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
         "base_url": base_url,
-        "tables": [{
+        "relations": [{
             "name": "users",
             "description": "HTTP users",
             "request": {
@@ -52,10 +52,10 @@ fn search_function_manifest(name: &str, base_url: &str) -> Value {
     json!({
         "name": name,
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
         "base_url": base_url,
-        "tables": [{
+        "relations": [{
             "name": "placeholder",
             "description": "Placeholder table",
             "request": {
@@ -96,6 +96,58 @@ fn search_function_manifest(name: &str, base_url: &str) -> Value {
                 { "name": "title", "type": "Utf8" },
                 { "name": "score", "type": "Float64" }
             ]
+        }]
+    })
+}
+
+fn writable_issues_manifest(name: &str, base_url: &str) -> Value {
+    json!({
+        "name": name,
+        "version": "0.1.0",
+        "dsl_version": 4,
+        "backend": "http",
+        "base_url": base_url,
+        "relations": [{
+            "name": "issues",
+            "description": "Writable issues",
+            "columns": [
+                { "name": "owner", "type": "Utf8", "nullable": false },
+                { "name": "repo", "type": "Utf8", "nullable": false },
+                { "name": "number", "type": "Int64" },
+                { "name": "title", "type": "Utf8" },
+                { "name": "state", "type": "Utf8" }
+            ],
+            "insert": {
+                "input": {
+                    "columns": [
+                        { "name": "owner", "type": "Utf8", "nullable": false },
+                        { "name": "repo", "type": "Utf8", "nullable": false },
+                        { "name": "title", "type": "Utf8", "nullable": false }
+                    ]
+                },
+                "request": {
+                    "method": "POST",
+                    "path": "/repos/{{input.owner}}/{{input.repo}}/issues"
+                }
+            },
+            "update": {
+                "input": {
+                    "columns": [
+                        { "name": "title", "type": "Utf8" },
+                        { "name": "state", "type": "Utf8" }
+                    ]
+                },
+                "request": {
+                    "method": "PATCH",
+                    "path": "/repos/{{key.owner}}/{{key.repo}}/issues/{{key.number}}"
+                }
+            },
+            "delete": {
+                "request": {
+                    "method": "DELETE",
+                    "path": "/repos/{{key.owner}}/{{key.repo}}/issues/{{key.number}}"
+                }
+            }
         }]
     })
 }
@@ -166,6 +218,132 @@ fn test_auth_runtime() -> QueryRuntimeConfig {
         Arc::new(TestRequestAuthenticator),
     );
     QueryRuntimeConfig::new(QueryRuntimeContext::default(), extensions)
+}
+
+#[tokio::test]
+async fn insert_into_http_relation_executes_declared_write_request() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/repos/withcoral/coral/issues"))
+        .and(body_json(json!({
+            "owner": "withcoral",
+            "repo": "coral",
+            "title": "Fix OAuth callback"
+        })))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let source = build_source(writable_issues_manifest("writable", &server.uri()));
+    let execution = CoralQuery::execute_sql(
+        &[source],
+        test_runtime(),
+        "INSERT INTO writable.issues (owner, repo, title) \
+         VALUES ('withcoral', 'coral', 'Fix OAuth callback')",
+    )
+    .await
+    .expect("insert should execute once");
+
+    assert_eq!(execution_to_rows(&execution), vec![json!({ "count": 1 })]);
+    assert_eq!(execution.summary().statement_kind(), "insert");
+    assert_eq!(execution.summary().effect(), "write");
+    assert_eq!(execution.summary().affected_row_count(), 1);
+}
+
+#[tokio::test]
+async fn update_http_relation_requires_direct_key_filters() {
+    let server = MockServer::start().await;
+    let source = build_source(writable_issues_manifest("writable", &server.uri()));
+
+    let error = CoralQuery::execute_sql(
+        &[source],
+        test_runtime(),
+        "UPDATE writable.issues SET state = 'closed' WHERE owner = 'withcoral'",
+    )
+    .await
+    .expect_err("missing key predicates should fail before HTTP");
+
+    assert!(
+        error
+            .to_string()
+            .contains("missing required key filter 'number'"),
+        "unexpected error: {error}"
+    );
+}
+
+#[tokio::test]
+async fn update_http_relation_executes_patch_with_assignment_body() {
+    let server = MockServer::start().await;
+    Mock::given(method("PATCH"))
+        .and(path("/repos/withcoral/coral/issues/42"))
+        .and(body_json(json!({ "state": "closed" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "ok": true })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let source = build_source(writable_issues_manifest("writable", &server.uri()));
+    let execution = CoralQuery::execute_sql(
+        &[source],
+        test_runtime(),
+        "UPDATE writable.issues SET state = 'closed' \
+         WHERE owner = 'withcoral' AND repo = 'coral' AND number = 42",
+    )
+    .await
+    .expect("update should execute once");
+
+    assert_eq!(execution_to_rows(&execution), vec![json!({ "count": 1 })]);
+    assert_eq!(execution.summary().statement_kind(), "update");
+    assert_eq!(execution.summary().effect(), "write");
+    assert_eq!(execution.summary().affected_row_count(), 1);
+}
+
+#[tokio::test]
+async fn delete_http_relation_executes_delete_with_key_filters() {
+    let server = MockServer::start().await;
+    Mock::given(method("DELETE"))
+        .and(path("/repos/withcoral/coral/issues/42"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let source = build_source(writable_issues_manifest("writable", &server.uri()));
+    let execution = CoralQuery::execute_sql(
+        &[source],
+        test_runtime(),
+        "DELETE FROM writable.issues \
+         WHERE owner = 'withcoral' AND repo = 'coral' AND number = 42",
+    )
+    .await
+    .expect("delete should execute once");
+
+    assert_eq!(execution_to_rows(&execution), vec![json!({ "count": 1 })]);
+    assert_eq!(execution.summary().statement_kind(), "delete");
+    assert_eq!(execution.summary().effect(), "destructive");
+    assert_eq!(execution.summary().affected_row_count(), 1);
+}
+
+#[tokio::test]
+async fn explain_update_http_relation_does_not_execute_http_request() {
+    let server = MockServer::start().await;
+    let source = build_source(writable_issues_manifest("writable", &server.uri()));
+
+    let plan = CoralQuery::explain_sql(
+        &[source],
+        test_runtime(),
+        "UPDATE writable.issues SET state = 'closed' \
+         WHERE owner = 'withcoral' AND repo = 'coral' AND number = 42",
+    )
+    .await
+    .expect("explain should plan update without executing it");
+
+    assert!(
+        plan.physical_plan().contains("HttpWriteExec"),
+        "physical plan:\n{}",
+        plan.physical_plan()
+    );
 }
 
 #[tokio::test]
@@ -293,7 +471,7 @@ async fn select_with_where_filter_pushdown() {
         .await;
 
     let mut manifest = base_http_manifest("http_filter", &server.uri());
-    let table = &mut manifest["tables"][0];
+    let table = &mut manifest["relations"][0];
     table["filters"] = json!([{ "name": "id" }]);
     table["request"]["query"] = json!([
         { "name": "id", "from": "filter", "key": "id" }
@@ -623,8 +801,8 @@ async fn table_request_headers_do_not_resolve_args_from_filters() {
         "from": "template",
         "template": "{{arg.id}}"
     }]);
-    manifest["tables"][0]["filters"] = json!([{ "name": "id" }]);
-    manifest["tables"][0]["request"]["query"] = json!([
+    manifest["relations"][0]["filters"] = json!([{ "name": "id" }]);
+    manifest["relations"][0]["request"]["query"] = json!([
         { "name": "id", "from": "filter", "key": "id" }
     ]);
 
@@ -683,7 +861,7 @@ async fn boolean_filter_bool_is_predicate_sends_json_bool_body() {
         .await;
 
     let mut manifest = base_http_manifest("http_bool_filter", &server.uri());
-    let table = &mut manifest["tables"][0];
+    let table = &mut manifest["relations"][0];
     table["filters"] = json!([{ "name": "include_archived" }]);
     table["request"] = json!({
         "method": "POST",
@@ -766,7 +944,7 @@ async fn pagination_page_mode() {
         .await;
 
     let mut manifest = base_http_manifest("http_page", &server.uri());
-    manifest["tables"][0]["pagination"] = json!({
+    manifest["relations"][0]["pagination"] = json!({
         "mode": "page",
         "page_param": "page",
         "page_start": 1
@@ -810,7 +988,7 @@ async fn pagination_offset_mode() {
         .await;
 
     let mut manifest = base_http_manifest("http_offset", &server.uri());
-    manifest["tables"][0]["pagination"] = json!({
+    manifest["relations"][0]["pagination"] = json!({
         "mode": "offset",
         "offset_param": "offset",
         "offset_step": 2
@@ -852,7 +1030,7 @@ async fn pagination_link_header() {
         .await;
 
     let mut manifest = base_http_manifest("http_link", &server.uri());
-    manifest["tables"][0]["pagination"] = json!({
+    manifest["relations"][0]["pagination"] = json!({
         "mode": "link_header"
     });
     let source = build_source(manifest);
@@ -991,7 +1169,7 @@ async fn api_returns_500_with_bad_link_header_still_reports_api_failure() {
         .await;
 
     let mut manifest = base_http_manifest("http_500_bad_link", &server.uri());
-    manifest["tables"][0]["pagination"] = json!({
+    manifest["relations"][0]["pagination"] = json!({
         "mode": "link_header"
     });
     let source = build_source(manifest);
@@ -1051,10 +1229,10 @@ fn slack_messages_manifest(base_url: &str) -> Value {
     json!({
         "name": "slack_ts",
         "version": "2.0.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
         "base_url": base_url,
-        "tables": [{
+        "relations": [{
             "name": "messages",
             "description": "Slack messages",
             "request": {
@@ -1179,7 +1357,7 @@ async fn missing_required_filter_surfaces_structured_error() {
         .await;
 
     let mut manifest = base_http_manifest("http_required", &server.uri());
-    let table = &mut manifest["tables"][0];
+    let table = &mut manifest["relations"][0];
     table["filters"] = json!([{ "name": "id", "required": true }]);
     table["request"]["query"] = json!([
         { "name": "id", "from": "filter", "key": "id" }
@@ -1200,7 +1378,7 @@ async fn missing_required_filter_surfaces_structured_error() {
             assert_eq!(sqe.reason(), "MISSING_REQUIRED_FILTER");
             assert!(!sqe.retryable());
             assert_eq!(sqe.metadata().get("schema").unwrap(), "http_required");
-            assert_eq!(sqe.metadata().get("table").unwrap(), "users");
+            assert_eq!(sqe.metadata().get("relation").unwrap(), "users");
             assert_eq!(sqe.metadata().get("column").unwrap(), "id");
             assert!(sqe.summary().contains("WHERE id"));
             assert!(sqe.hint().unwrap().contains("coral.columns"));
@@ -1236,7 +1414,7 @@ async fn api_returns_malformed_json() {
             assert_eq!(sqe.summary(), "Source response decode failed");
             assert!(!sqe.retryable());
             assert_eq!(sqe.metadata().get("source").unwrap(), "http_bad_json");
-            assert_eq!(sqe.metadata().get("table").unwrap(), "users");
+            assert_eq!(sqe.metadata().get("relation").unwrap(), "users");
             assert_eq!(
                 sqe.metadata().get("provider_failure_stage").unwrap(),
                 "decode"
@@ -1265,7 +1443,7 @@ async fn pagination_link_header_cross_origin_surfaces_structured_error() {
         .await;
 
     let mut manifest = base_http_manifest("http_bad_pagination", &server.uri());
-    manifest["tables"][0]["pagination"] = json!({
+    manifest["relations"][0]["pagination"] = json!({
         "mode": "link_header"
     });
     let source = build_source(manifest);
@@ -1285,7 +1463,7 @@ async fn pagination_link_header_cross_origin_surfaces_structured_error() {
             assert_eq!(sqe.summary(), "Source pagination failed");
             assert!(!sqe.retryable());
             assert_eq!(sqe.metadata().get("source").unwrap(), "http_bad_pagination");
-            assert_eq!(sqe.metadata().get("table").unwrap(), "users");
+            assert_eq!(sqe.metadata().get("relation").unwrap(), "users");
             assert_eq!(
                 sqe.metadata().get("provider_failure_stage").unwrap(),
                 "pagination"
@@ -1318,10 +1496,10 @@ async fn text_body_sends_raw_sql_with_default_content_type() {
     let manifest = json!({
         "name": "http_text_body",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
         "base_url": &server.uri(),
-        "tables": [{
+        "relations": [{
             "name": "users",
             "description": "users via SQL",
             "request": {
@@ -1379,10 +1557,10 @@ async fn text_body_respects_explicit_content_type_override() {
     let manifest = json!({
         "name": "http_ct_override",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
         "base_url": &server.uri(),
-        "tables": [{
+        "relations": [{
             "name": "items",
             "description": "items via SQL",
             "request": {
@@ -1434,10 +1612,10 @@ async fn text_body_omits_absent_optional_content() {
     let manifest = json!({
         "name": "http_optional_text_body",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
         "base_url": &server.uri(),
-        "tables": [{
+        "relations": [{
             "name": "items",
             "description": "items via optional SQL",
             "filters": [{ "name": "sql" }],
@@ -1486,10 +1664,10 @@ async fn json_each_row_response_parses_newline_delimited_rows() {
     let manifest = json!({
         "name": "http_ndjson",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
         "base_url": &server.uri(),
-        "tables": [{
+        "relations": [{
             "name": "logs",
             "description": "newline-delimited logs",
             "request": { "method": "GET", "path": "/logs" },
@@ -1539,10 +1717,10 @@ async fn legacy_json_body_array_form_still_works() {
     let manifest = json!({
         "name": "http_legacy_body",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
         "base_url": &server.uri(),
-        "tables": [{
+        "relations": [{
             "name": "users",
             "description": "graphql users",
             "request": {

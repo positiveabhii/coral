@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
-use coral_spec::SourceTableFunctionSpec;
+use coral_spec::{IdempotencyClass, SourceTableFunctionSpec, WriteEffect};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
@@ -35,6 +35,8 @@ struct HttpSourceFunctionState {
     backend: HttpSourceClient,
     source_schema: String,
     function_name: String,
+    effect: WriteEffect,
+    idempotency: IdempotencyClass,
     target: Arc<HttpFetchTarget>,
     schema: SchemaRef,
 }
@@ -64,12 +66,16 @@ impl HttpSourceTableFunction {
         let schema = schema_from_columns(&function.columns, &source_schema, &function.name)?;
         let target = HttpFetchTarget::from_function(&function);
         let function_name = function.name.clone();
+        let effect = function.effect;
+        let idempotency = function.idempotency;
         Ok(Self {
             spec: Arc::new(function),
             state: Arc::new(HttpSourceFunctionState {
                 backend,
                 source_schema,
                 function_name,
+                effect,
+                idempotency,
                 target: Arc::new(target),
                 schema,
             }),
@@ -89,9 +95,26 @@ impl TableFunctionImpl for HttpSourceTableFunction {
 
 /// Concrete table provider returned for one function call, with SQL arguments
 /// already bound into HTTP request values.
-struct HttpSourceFunctionCallTableProvider {
+pub(crate) struct HttpSourceFunctionCallTableProvider {
     state: Arc<HttpSourceFunctionState>,
     arg_values: HashMap<String, String>,
+}
+
+impl HttpSourceFunctionCallTableProvider {
+    #[must_use]
+    pub(crate) fn effect(&self) -> WriteEffect {
+        self.state.effect
+    }
+
+    #[must_use]
+    pub(crate) fn idempotency(&self) -> IdempotencyClass {
+        self.state.idempotency
+    }
+
+    #[must_use]
+    pub(crate) fn qualified_name(&self) -> String {
+        format!("{}.{}", self.state.source_schema, self.state.function_name)
+    }
 }
 
 impl fmt::Debug for HttpSourceFunctionCallTableProvider {

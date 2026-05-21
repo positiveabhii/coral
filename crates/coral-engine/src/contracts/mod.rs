@@ -5,11 +5,14 @@ mod error;
 mod query;
 mod query_error;
 
-pub use catalog::{ColumnInfo, TableInfo};
+pub use catalog::{
+    ColumnInfo, ColumnWriteBehavior, RelationCapabilities, RelationInfo, RelationOperation,
+};
 pub use error::{CoreError, StatusCode, StructuredQueryError};
 pub use query::{
     QueryExecution, QueryPlan, QueryRuntimeConfig, QueryRuntimeContext, QuerySource,
     QueryTestFailure, QueryTestResult, QueryTestSuccess, SourceValidationReport,
+    SqlExecutionSummary,
 };
 pub(crate) use query_error::{ColumnParts, TableRefParts};
 

@@ -16,9 +16,9 @@ fn jsonl_manifest(name: &str, dir: &Path, glob: &str) -> Value {
     json!({
         "name": name,
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "jsonl",
-        "tables": [{
+        "relations": [{
             "name": "users",
             "description": "Users fixture",
             "source": {
@@ -50,7 +50,7 @@ async fn test_source_lists_registered_tables() {
 
     assert_eq!(tables.len(), 1);
     assert_eq!(tables[0].schema_name, "jsonl_test_source");
-    assert_eq!(tables[0].table_name, "users");
+    assert_eq!(tables[0].relation_name, "users");
 }
 
 #[tokio::test]
@@ -123,7 +123,7 @@ async fn validate_source_reports_passing_and_failing_queries() {
         .await
         .expect("validate_source should succeed");
 
-    assert_eq!(report.tables.len(), 1);
+    assert_eq!(report.relations.len(), 1);
     assert_eq!(report.query_tests.len(), 2);
     assert!(report.query_tests[0].passed());
     assert_eq!(report.query_tests[0].row_count(), Some(3));

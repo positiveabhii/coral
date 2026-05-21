@@ -1,4 +1,4 @@
-dsl_version: 3
+dsl_version: 4
 name: openobserve
 version: 0.1.0
 backend: http
@@ -33,7 +33,7 @@ auth:
 
 test_queries:
   - SELECT * FROM openobserve.streams LIMIT 1
-tables:
+relations:
   - name: streams
     description: List available OpenObserve streams.
     guide: >

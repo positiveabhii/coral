@@ -290,9 +290,9 @@ impl CompiledBackendSource for JsonlCompiledSource {
 
         for compiled_table in &self.tables {
             let provider = JsonlTableProvider::try_new(compiled_table.clone())?;
-            let table_name = compiled_table.table.name().to_string();
+            let relation_name = compiled_table.table.name().to_string();
             let metadata = registered_table(&compiled_table.table);
-            tables.insert(table_name, Arc::new(provider));
+            tables.insert(relation_name, Arc::new(provider));
             table_infos.push(metadata);
         }
 
@@ -433,7 +433,7 @@ impl JsonlTableProvider {
         for required in self.table.filters().iter().filter(|f| f.required) {
             if !filter_values.contains_key(&required.name) {
                 return Err(DataFusionError::Execution(format!(
-                    "{}.{} table requires a constant equality filter: WHERE {} = <constant>",
+                    "{}.{} relation requires a constant equality filter: WHERE {} = <constant>",
                     self.source_schema,
                     self.table.name(),
                     required.name
@@ -515,11 +515,11 @@ mod tests {
 
     fn jsonl_manifest(location: &str, columns: &[Value]) -> ValidatedSourceManifest {
         parse_source_manifest_value(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "test_jsonl",
             "version": "0.1.0",
             "backend": "jsonl",
-            "tables": [{
+            "relations": [{
                 "name": "events",
                 "description": "test",
                 "source": {
@@ -628,7 +628,7 @@ mod tests {
             .sql(
                 "SELECT column_name, data_type \
                  FROM coral.columns \
-                 WHERE schema_name = 'test_jsonl' AND table_name = 'events' \
+                 WHERE schema_name = 'test_jsonl' AND relation_name = 'events' \
                  ORDER BY column_name",
             )
             .await
@@ -711,11 +711,11 @@ mod tests {
 
         let ctx = SessionContext::new();
         let manifest = parse_source_manifest_value(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "test_default_glob",
             "version": "0.1.0",
             "backend": "jsonl",
-            "tables": [{
+            "relations": [{
                 "name": "events",
                 "description": "test",
                 "source": {
@@ -768,11 +768,11 @@ mod tests {
     #[test]
     fn try_new_rejects_empty_columns() {
         let error = parse_source_manifest_value(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "test_jsonl",
             "version": "0.1.0",
             "backend": "jsonl",
-            "tables": [{
+            "relations": [{
                 "name": "test",
                 "description": "test",
                 "source": {

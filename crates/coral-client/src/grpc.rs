@@ -339,11 +339,11 @@ mod tests {
 
     #[test]
     fn grpc_client_span_metadata_derives_names_from_path() {
-        let metadata = GrpcClientSpanMetadata::from_path("/coral.v1.QueryService/ExecuteSql");
+        let metadata = GrpcClientSpanMetadata::from_path("/coral.v1.SqlService/ExecuteSql");
 
-        assert_eq!(metadata.service, "coral.v1.QueryService");
+        assert_eq!(metadata.service, "coral.v1.SqlService");
         assert_eq!(metadata.method, "ExecuteSql");
-        assert_eq!(metadata.span_name, "coral.v1.QueryService/ExecuteSql");
+        assert_eq!(metadata.span_name, "coral.v1.SqlService/ExecuteSql");
     }
 
     #[test]
@@ -391,7 +391,7 @@ mod tests {
             tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
 
         tracing::subscriber::with_default(subscriber, || {
-            let metadata = GrpcClientSpanMetadata::new("coral.v1.QueryService", "ExecuteSql");
+            let metadata = GrpcClientSpanMetadata::new("coral.v1.SqlService", "ExecuteSql");
             let span = grpc_client_span(&metadata, &GrpcClientEndpoint::default());
             let _entered = span.enter();
             record_missing_grpc_status(&span);
@@ -403,7 +403,7 @@ mod tests {
             .expect("finished spans should be readable");
         let span = spans
             .iter()
-            .find(|span| span.name == "coral.v1.QueryService/ExecuteSql")
+            .find(|span| span.name == "coral.v1.SqlService/ExecuteSql")
             .expect("client span should export");
 
         assert_eq!(i64_attr(&span.attributes, "grpc.status_code"), Some(2));

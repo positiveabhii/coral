@@ -1,4 +1,4 @@
-dsl_version: 3
+dsl_version: 4
 name: cloudwatch_logs
 version: 0.1.0
 backend: http
@@ -43,7 +43,7 @@ request_headers:
     value: application/x-amz-json-1.1
 test_queries:
   - SELECT * FROM cloudwatch_logs.log_groups LIMIT 1
-tables:
+relations:
   - name: log_groups
     description: CloudWatch Logs log groups returned by DescribeLogGroups.
     guide: >

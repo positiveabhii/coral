@@ -560,7 +560,7 @@ mod tests {
         r#"
 name: secured_messages
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 inputs:
   API_BASE:
@@ -575,7 +575,7 @@ auth:
     - name: Authorization
       from: template
       template: Bearer {{input.API_TOKEN}}
-tables:
+relations:
   - name: messages
     description: Secured messages
     request:

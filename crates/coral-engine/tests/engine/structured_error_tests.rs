@@ -16,9 +16,9 @@ fn manifest(name: &str, table: &str, dir: &Path) -> Value {
     json!({
         "name": name,
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "jsonl",
-        "tables": [{
+        "relations": [{
             "name": table,
             "description": "Structured-error fixture",
             "source": {
@@ -86,7 +86,7 @@ async fn unknown_table_missing_schema_points_at_coral_tables_catalog() {
     // The engine layer is transport-neutral: the hint must not assume a
     // particular surface (CLI / MCP / API). SQL catalog queries work
     // uniformly across all of them.
-    assert!(hint.contains("coral.tables"), "got: {hint}");
+    assert!(hint.contains("coral.relations"), "got: {hint}");
     assert!(
         !hint.contains("coral source"),
         "engine hint must not embed a CLI command, got: {hint}"

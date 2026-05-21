@@ -1,5 +1,6 @@
 use coral_api::v1::{
-    Column as ProtoColumn, Table as ProtoTable, TableSummary as ProtoTableSummary,
+    Column as ProtoColumn, Relation as ProtoRelation, RelationOperation,
+    RelationSummary as ProtoRelationSummary,
 };
 use regex::{Regex, RegexBuilder};
 use rmcp::ErrorData;
@@ -29,12 +30,26 @@ pub(crate) struct Page<T> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TableSummary {
+pub(crate) struct RelationSummary {
     pub(crate) schema_name: String,
     pub(crate) table_name: String,
     pub(crate) description: String,
     pub(crate) guide: String,
     pub(crate) required_filters: Vec<String>,
+    pub(crate) capabilities: RelationCapabilitiesSummary,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RelationCapabilitiesSummary {
+    pub(crate) operations: Vec<i32>,
+    pub(crate) derived_key_columns: Vec<String>,
+    pub(crate) effect: String,
+}
+
+impl RelationCapabilitiesSummary {
+    fn supports(&self, operation: RelationOperation) -> bool {
+        self.operations.contains(&(operation as i32))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,23 +58,52 @@ pub(crate) struct ColumnSummary {
     pub(crate) table_name: String,
     pub(crate) column_name: String,
     pub(crate) data_type: String,
-    pub(crate) nullable: bool,
-    pub(crate) is_virtual: bool,
-    pub(crate) is_required_filter: bool,
+    pub(crate) flags: ColumnFlags,
+    pub(crate) write: ColumnWrite,
     pub(crate) description: String,
     pub(crate) ordinal_position: u32,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ColumnFlags {
+    pub(crate) nullable: bool,
+    pub(crate) is_virtual: bool,
+    pub(crate) is_required_filter: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ColumnWrite {
+    pub(crate) is_key: bool,
+    pub(crate) is_writable: bool,
+    pub(crate) write_required_on_insert: bool,
+}
+
 impl ColumnSummary {
-    pub(crate) fn from_proto(table: &ProtoTable, column: &ProtoColumn) -> Self {
+    pub(crate) fn from_proto(table: &ProtoRelation, column: &ProtoColumn) -> Self {
         Self {
             schema_name: table.schema_name.clone(),
             table_name: table.name.clone(),
             column_name: column.name.clone(),
             data_type: column.data_type.clone(),
-            nullable: column.nullable,
-            is_virtual: column.is_virtual,
-            is_required_filter: column.is_required_filter,
+            flags: ColumnFlags {
+                nullable: column.nullable,
+                is_virtual: column.is_virtual,
+                is_required_filter: column.is_required_filter,
+            },
+            write: ColumnWrite {
+                is_key: column
+                    .write_behavior
+                    .as_ref()
+                    .is_some_and(|behavior| behavior.is_key),
+                is_writable: column
+                    .write_behavior
+                    .as_ref()
+                    .is_some_and(|behavior| behavior.is_writable),
+                write_required_on_insert: column
+                    .write_behavior
+                    .as_ref()
+                    .is_some_and(|behavior| behavior.required_on_insert),
+            },
             description: column.description.clone(),
             ordinal_position: column.ordinal_position,
         }
@@ -81,11 +125,17 @@ impl ColumnSummary {
         let mut value = serde_json::Map::from_iter([
             ("column_name".to_string(), json!(self.column_name)),
             ("data_type".to_string(), json!(self.data_type)),
-            ("is_nullable".to_string(), json!(self.nullable)),
-            ("is_virtual".to_string(), json!(self.is_virtual)),
+            ("is_nullable".to_string(), json!(self.flags.nullable)),
+            ("is_virtual".to_string(), json!(self.flags.is_virtual)),
             (
                 "is_required_filter".to_string(),
-                json!(self.is_required_filter),
+                json!(self.flags.is_required_filter),
+            ),
+            ("is_key".to_string(), json!(self.write.is_key)),
+            ("is_writable".to_string(), json!(self.write.is_writable)),
+            (
+                "write_required_on_insert".to_string(),
+                json!(self.write.write_required_on_insert),
             ),
             ("description".to_string(), json!(self.description)),
             ("ordinal_position".to_string(), json!(self.ordinal_position)),
@@ -97,14 +147,27 @@ impl ColumnSummary {
     }
 }
 
-impl TableSummary {
-    pub(crate) fn from_proto(table: &ProtoTableSummary) -> Self {
+impl RelationSummary {
+    pub(crate) fn from_proto(table: &ProtoRelationSummary) -> Self {
+        let capabilities = table.capabilities.as_ref();
         Self {
             schema_name: table.schema_name.clone(),
             table_name: table.name.clone(),
             description: table.description.clone(),
             guide: table.guide.clone(),
             required_filters: table.required_filters.clone(),
+            capabilities: RelationCapabilitiesSummary {
+                operations: capabilities
+                    .map(|capabilities| capabilities.operations.clone())
+                    .unwrap_or_default(),
+                derived_key_columns: capabilities
+                    .map(|capabilities| capabilities.derived_key_columns.clone())
+                    .unwrap_or_default(),
+                effect: capabilities.map_or_else(
+                    || "read".to_string(),
+                    |capabilities| capabilities.effect.clone(),
+                ),
+            },
         }
     }
 
@@ -112,7 +175,7 @@ impl TableSummary {
         let name = format!("{}.{}", self.schema_name, self.table_name);
         let candidates = [
             ("schema_name", self.schema_name.as_str()),
-            ("table_name", self.table_name.as_str()),
+            ("relation_name", self.table_name.as_str()),
             ("name", name.as_str()),
             ("description", self.description.as_str()),
             ("guide", self.guide.as_str()),
@@ -134,12 +197,19 @@ impl TableSummary {
     pub(crate) fn search_result_value(&self, matched_fields: &[&'static str]) -> Value {
         json!({
             "schema_name": self.schema_name,
-            "table_name": self.table_name,
+            "relation_name": self.table_name,
             "name": format!("{}.{}", self.schema_name, self.table_name),
             "sql_reference": format_schema_table_equivalent(&self.schema_name, &self.table_name),
             "description": self.description,
             "guide": self.guide,
             "required_filters": self.required_filters,
+            "supports_read": self.capabilities.supports(RelationOperation::Read),
+            "supports_insert": self.capabilities.supports(RelationOperation::Insert),
+            "supports_update": self.capabilities.supports(RelationOperation::Update),
+            "supports_delete": self.capabilities.supports(RelationOperation::Delete),
+            "supports_truncate": self.capabilities.supports(RelationOperation::Truncate),
+            "derived_key_columns": self.capabilities.derived_key_columns,
+            "effect": self.capabilities.effect,
             "matched_fields": matched_fields,
         })
     }
@@ -147,10 +217,17 @@ impl TableSummary {
     pub(crate) fn summary_value(&self) -> Value {
         json!({
             "schema_name": self.schema_name,
-            "table_name": self.table_name,
+            "relation_name": self.table_name,
             "name": format!("{}.{}", self.schema_name, self.table_name),
             "description": self.description,
             "required_filters": self.required_filters,
+            "supports_read": self.capabilities.supports(RelationOperation::Read),
+            "supports_insert": self.capabilities.supports(RelationOperation::Insert),
+            "supports_update": self.capabilities.supports(RelationOperation::Update),
+            "supports_delete": self.capabilities.supports(RelationOperation::Delete),
+            "supports_truncate": self.capabilities.supports(RelationOperation::Truncate),
+            "derived_key_columns": self.capabilities.derived_key_columns,
+            "effect": self.capabilities.effect,
         })
     }
 }
@@ -275,21 +352,26 @@ mod tests {
 
     use regex::Regex;
 
-    use super::TableSummary;
+    use super::{RelationCapabilitiesSummary, RelationSummary};
 
-    fn table(required_filters: &[&str]) -> TableSummary {
-        TableSummary {
+    fn table(required_filters: &[&str]) -> RelationSummary {
+        RelationSummary {
             schema_name: "github".to_string(),
             table_name: "Pull.Requests".to_string(),
             description: "Pull request table".to_string(),
             guide: "Query pull requests.".to_string(),
             required_filters: required_filters.iter().map(ToString::to_string).collect(),
+            capabilities: RelationCapabilitiesSummary {
+                operations: vec![coral_api::v1::RelationOperation::Read as i32],
+                derived_key_columns: Vec::new(),
+                effect: "read".to_string(),
+            },
         }
     }
 
     #[test]
     fn search_result_includes_sql_reference() {
-        let value = table(&[]).search_result_value(&["table_name"]);
+        let value = table(&[]).search_result_value(&["relation_name"]);
 
         assert_eq!(value["name"], "github.Pull.Requests");
         assert_eq!(value["sql_reference"], "github.\"Pull.Requests\"");

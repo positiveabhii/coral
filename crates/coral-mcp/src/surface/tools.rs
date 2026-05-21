@@ -9,27 +9,27 @@ use serde_json::{Map, Value, json};
 
 use super::{Pagination, parse_pagination, parse_pagination_with_limits};
 
-pub(crate) struct ListTablesArguments {
+pub(crate) struct ListRelationsArguments {
     pub(crate) schema: Option<String>,
     pub(crate) limit: u32,
     pub(crate) offset: u32,
 }
 
-pub(crate) struct SearchTablesArguments {
+pub(crate) struct SearchRelationsArguments {
     pub(crate) pattern: String,
     pub(crate) schema: Option<String>,
     pub(crate) ignore_case: bool,
     pub(crate) pagination: Pagination,
 }
 
-pub(crate) struct DescribeTableArguments {
+pub(crate) struct DescribeRelationArguments {
     pub(crate) schema: String,
-    pub(crate) table: String,
+    pub(crate) relation: String,
 }
 
 pub(crate) struct ListColumnsArguments {
     pub(crate) schema: String,
-    pub(crate) table: String,
+    pub(crate) relation: String,
     pub(crate) pattern: Option<String>,
     pub(crate) ignore_case: bool,
     pub(crate) required_only: bool,
@@ -53,17 +53,17 @@ pub(crate) fn sql_tool(sources: &[Source], visible_table_count: usize) -> Tool {
     )
     .with_annotations(
         ToolAnnotations::with_title("Run SQL")
-            .read_only(true)
-            .destructive(false)
-            .idempotent(true)
+            .read_only(false)
+            .destructive(true)
+            .idempotent(false)
             .open_world(true),
     )
 }
 
-pub(crate) fn list_tables_tool(visible_table_count: usize) -> Tool {
+pub(crate) fn list_relations_tool(visible_relation_count: usize) -> Tool {
     Tool::new(
-        "list_tables",
-        list_tables_description(visible_table_count),
+        "list_relations",
+        list_relations_description(visible_relation_count),
         json_object_schema(&json!({
             "type": "object",
             "properties": {
@@ -73,14 +73,14 @@ pub(crate) fn list_tables_tool(visible_table_count: usize) -> Tool {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum tables to return, from 1 to 200. Defaults to 50.",
+                    "description": "Maximum relations to return, from 1 to 200. Defaults to 50.",
                     "minimum": 1,
                     "maximum": 200,
                     "default": 50
                 },
                 "offset": {
                     "type": "integer",
-                    "description": "Number of matching tables to skip. Defaults to 0.",
+                    "description": "Number of matching relations to skip. Defaults to 0.",
                     "minimum": 0,
                     "maximum": u32::MAX,
                     "default": 0
@@ -88,9 +88,9 @@ pub(crate) fn list_tables_tool(visible_table_count: usize) -> Tool {
             }
         })),
     )
-    .with_raw_output_schema(list_tables_output_schema())
+    .with_raw_output_schema(list_relations_output_schema())
     .with_annotations(
-        ToolAnnotations::with_title("List Tables")
+        ToolAnnotations::with_title("List Relations")
             .read_only(true)
             .destructive(false)
             .idempotent(true)
@@ -98,17 +98,17 @@ pub(crate) fn list_tables_tool(visible_table_count: usize) -> Tool {
     )
 }
 
-pub(crate) fn search_tables_tool(visible_table_count: usize) -> Tool {
+pub(crate) fn search_relations_tool(visible_relation_count: usize) -> Tool {
     Tool::new(
-        "search_tables",
-        search_tables_description(visible_table_count),
+        "search_relations",
+        search_relations_description(visible_relation_count),
         json_object_schema(&json!({
             "type": "object",
             "required": ["pattern"],
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "Rust regex pattern to match table metadata."
+                    "description": "Rust regex pattern to match relation metadata."
                 },
                 "schema": {
                     "type": "string",
@@ -120,14 +120,14 @@ pub(crate) fn search_tables_tool(visible_table_count: usize) -> Tool {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum tables to return, from 1 to 100. Defaults to 20.",
+                    "description": "Maximum relations to return, from 1 to 100. Defaults to 20.",
                     "minimum": 1,
                     "maximum": 100,
                     "default": 20
                 },
                 "offset": {
                     "type": "integer",
-                    "description": "Number of matching tables to skip. Defaults to 0.",
+                    "description": "Number of matching relations to skip. Defaults to 0.",
                     "minimum": 0,
                     "maximum": u32::MAX,
                     "default": 0
@@ -137,7 +137,7 @@ pub(crate) fn search_tables_tool(visible_table_count: usize) -> Tool {
     )
     .with_raw_output_schema(search_tables_output_schema())
     .with_annotations(
-        ToolAnnotations::with_title("Search Tables")
+        ToolAnnotations::with_title("Search Relations")
             .read_only(true)
             .destructive(false)
             .idempotent(true)
@@ -145,27 +145,27 @@ pub(crate) fn search_tables_tool(visible_table_count: usize) -> Tool {
     )
 }
 
-pub(crate) fn describe_table_tool() -> Tool {
+pub(crate) fn describe_relation_tool() -> Tool {
     Tool::new(
-        "describe_table",
-        "Describe one queryable table without returning full column definitions.",
+        "describe_relation",
+        "Describe one queryable relation without returning full column definitions.",
         json_object_schema(&json!({
             "type": "object",
-            "required": ["schema", "table"],
+            "required": ["schema", "relation"],
             "properties": {
                 "schema": {
                     "type": "string",
                     "description": "Exact schema/source name."
                 },
-                "table": {
+                "relation": {
                     "type": "string",
-                    "description": "Exact table name within the schema."
+                    "description": "Exact relation name within the schema."
                 }
             }
         })),
     )
     .with_annotations(
-        ToolAnnotations::with_title("Describe Table")
+        ToolAnnotations::with_title("Describe Relation")
             .read_only(true)
             .destructive(false)
             .idempotent(true)
@@ -176,18 +176,18 @@ pub(crate) fn describe_table_tool() -> Tool {
 pub(crate) fn list_columns_tool() -> Tool {
     Tool::new(
         "list_columns",
-        "List columns for one table with optional regex and required-filter narrowing.",
+        "List columns for one relation with optional regex and required-filter narrowing.",
         json_object_schema(&json!({
             "type": "object",
-            "required": ["schema", "table"],
+            "required": ["schema", "relation"],
             "properties": {
                 "schema": {
                     "type": "string",
                     "description": "Exact schema/source name."
                 },
-                "table": {
+                "relation": {
                     "type": "string",
-                    "description": "Exact table name within the schema."
+                    "description": "Exact relation name within the schema."
                 },
                 "pattern": {
                     "type": "string",
@@ -275,21 +275,21 @@ pub(crate) fn required_string_argument(
     Ok(value.to_string())
 }
 
-pub(crate) fn list_tables_arguments(
+pub(crate) fn list_relations_arguments(
     arguments: Option<&Map<String, Value>>,
-) -> Result<ListTablesArguments, ErrorData> {
+) -> Result<ListRelationsArguments, ErrorData> {
     let pagination = parse_pagination(arguments)?;
-    Ok(ListTablesArguments {
+    Ok(ListRelationsArguments {
         schema: optional_string_argument(arguments, "schema")?,
         limit: pagination.limit,
         offset: pagination.offset,
     })
 }
 
-pub(crate) fn search_tables_arguments(
+pub(crate) fn search_relations_arguments(
     arguments: Option<&Map<String, Value>>,
-) -> Result<SearchTablesArguments, ErrorData> {
-    Ok(SearchTablesArguments {
+) -> Result<SearchRelationsArguments, ErrorData> {
+    Ok(SearchRelationsArguments {
         pattern: required_string_argument(arguments, "pattern")?,
         schema: optional_string_argument(arguments, "schema")?,
         ignore_case: optional_bool_argument(arguments, "ignore_case", true)?,
@@ -297,12 +297,12 @@ pub(crate) fn search_tables_arguments(
     })
 }
 
-pub(crate) fn describe_table_arguments(
+pub(crate) fn describe_relation_arguments(
     arguments: Option<&Map<String, Value>>,
-) -> Result<DescribeTableArguments, ErrorData> {
-    Ok(DescribeTableArguments {
+) -> Result<DescribeRelationArguments, ErrorData> {
+    Ok(DescribeRelationArguments {
         schema: required_string_argument(arguments, "schema")?,
-        table: required_string_argument(arguments, "table")?,
+        relation: required_string_argument(arguments, "relation")?,
     })
 }
 
@@ -311,7 +311,7 @@ pub(crate) fn list_columns_arguments(
 ) -> Result<ListColumnsArguments, ErrorData> {
     Ok(ListColumnsArguments {
         schema: required_string_argument(arguments, "schema")?,
-        table: required_string_argument(arguments, "table")?,
+        relation: required_string_argument(arguments, "relation")?,
         pattern: optional_non_empty_string_argument(arguments, "pattern")?,
         ignore_case: optional_bool_argument(arguments, "ignore_case", true)?,
         required_only: optional_bool_argument(arguments, "required_only", false)?,
@@ -330,73 +330,51 @@ pub(crate) fn build_tool_result(value: Value) -> Result<CallToolResult, ErrorDat
 fn sql_tool_description(sources: &[Source], visible_table_count: usize) -> String {
     if visible_table_count == 0 {
         format!(
-            "Run a SQL query against local Coral sources. {} configured source(s), but no visible SQL tables are currently available.",
+            "Run a SQL statement against local Coral sources. SQL may execute writes when writable relations or effectful functions are installed. {} configured source(s), but no visible SQL relations are currently available.",
             sources.len()
         )
     } else {
         format!(
-            "Run a SQL query against local Coral sources. {visible_table_count} table(s) are currently visible."
+            "Run a SQL statement against local Coral sources. SQL may execute writes when writable relations or effectful functions are installed. {visible_table_count} relation(s) are currently visible."
         )
     }
 }
 
-fn list_tables_description(visible_table_count: usize) -> String {
+fn list_relations_description(visible_relation_count: usize) -> String {
     format!(
-        "List queryable fully qualified tables. {visible_table_count} table(s) are currently visible."
+        "List queryable fully qualified relations. {visible_relation_count} relation(s) are currently visible."
     )
 }
 
-fn search_tables_description(visible_table_count: usize) -> String {
+fn search_relations_description(visible_relation_count: usize) -> String {
     format!(
-        "Search queryable table metadata with a Rust regex. {visible_table_count} table(s) are currently visible."
+        "Search queryable relation metadata with a Rust regex. {visible_relation_count} relation(s) are currently visible."
     )
 }
 
-fn list_tables_output_schema() -> Arc<Map<String, Value>> {
-    paginated_table_output_schema(&json!({
+fn list_relations_output_schema() -> Arc<Map<String, Value>> {
+    paginated_relation_output_schema(&json!({
         "type": "object",
         "required": [
             "schema_name",
-            "table_name",
-            "name",
-            "sql_reference",
-            "description",
-            "guide",
-            "required_filters"
-        ],
-        "additionalProperties": false,
-        "properties": {
-            "schema_name": { "type": "string" },
-            "table_name": { "type": "string" },
-            "name": { "type": "string" },
-            "sql_reference": { "type": "string" },
-            "description": { "type": "string" },
-            "guide": { "type": "string" },
-            "required_filters": {
-                "type": "array",
-                "items": { "type": "string" }
-            }
-        }
-    }))
-}
-
-fn search_tables_output_schema() -> Arc<Map<String, Value>> {
-    paginated_table_output_schema(&json!({
-        "type": "object",
-        "required": [
-            "schema_name",
-            "table_name",
+            "relation_name",
             "name",
             "sql_reference",
             "description",
             "guide",
             "required_filters",
-            "matched_fields"
+            "supports_read",
+            "supports_insert",
+            "supports_update",
+            "supports_delete",
+            "supports_truncate",
+            "derived_key_columns",
+            "effect"
         ],
         "additionalProperties": false,
         "properties": {
             "schema_name": { "type": "string" },
-            "table_name": { "type": "string" },
+            "relation_name": { "type": "string" },
             "name": { "type": "string" },
             "sql_reference": { "type": "string" },
             "description": { "type": "string" },
@@ -405,13 +383,69 @@ fn search_tables_output_schema() -> Arc<Map<String, Value>> {
                 "type": "array",
                 "items": { "type": "string" }
             },
+            "supports_read": { "type": "boolean" },
+            "supports_insert": { "type": "boolean" },
+            "supports_update": { "type": "boolean" },
+            "supports_delete": { "type": "boolean" },
+            "supports_truncate": { "type": "boolean" },
+            "derived_key_columns": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "effect": { "type": "string" }
+        }
+    }))
+}
+
+fn search_tables_output_schema() -> Arc<Map<String, Value>> {
+    paginated_relation_output_schema(&json!({
+        "type": "object",
+        "required": [
+            "schema_name",
+            "relation_name",
+            "name",
+            "sql_reference",
+            "description",
+            "guide",
+            "required_filters",
+            "supports_read",
+            "supports_insert",
+            "supports_update",
+            "supports_delete",
+            "supports_truncate",
+            "derived_key_columns",
+            "effect",
+            "matched_fields"
+        ],
+        "additionalProperties": false,
+        "properties": {
+            "schema_name": { "type": "string" },
+            "relation_name": { "type": "string" },
+            "name": { "type": "string" },
+            "sql_reference": { "type": "string" },
+            "description": { "type": "string" },
+            "guide": { "type": "string" },
+            "required_filters": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "supports_read": { "type": "boolean" },
+            "supports_insert": { "type": "boolean" },
+            "supports_update": { "type": "boolean" },
+            "supports_delete": { "type": "boolean" },
+            "supports_truncate": { "type": "boolean" },
+            "derived_key_columns": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "effect": { "type": "string" },
             "matched_fields": {
                 "type": "array",
                 "items": {
                     "type": "string",
                     "enum": [
                         "schema_name",
-                        "table_name",
+                        "relation_name",
                         "name",
                         "description",
                         "guide",
@@ -428,7 +462,7 @@ fn list_columns_output_schema() -> Arc<Map<String, Value>> {
         "type": "object",
         "oneOf": [
             list_columns_page_output_schema(),
-            missing_table_output_schema()
+            missing_relation_output_schema()
         ]
     }))
 }
@@ -436,11 +470,11 @@ fn list_columns_output_schema() -> Arc<Map<String, Value>> {
 fn list_columns_page_output_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["schema_name", "table_name", "columns", "total", "limit", "offset", "has_more"],
+        "required": ["schema_name", "relation_name", "columns", "total", "limit", "offset", "has_more"],
         "additionalProperties": false,
         "properties": {
             "schema_name": { "type": "string" },
-            "table_name": { "type": "string" },
+            "relation_name": { "type": "string" },
             "columns": {
                 "type": "array",
                 "items": {
@@ -451,6 +485,9 @@ fn list_columns_page_output_schema() -> Value {
                         "is_nullable",
                         "is_virtual",
                         "is_required_filter",
+                        "is_key",
+                        "is_writable",
+                        "write_required_on_insert",
                         "description",
                         "ordinal_position"
                     ],
@@ -461,6 +498,9 @@ fn list_columns_page_output_schema() -> Value {
                         "is_nullable": { "type": "boolean" },
                         "is_virtual": { "type": "boolean" },
                         "is_required_filter": { "type": "boolean" },
+                        "is_key": { "type": "boolean" },
+                        "is_writable": { "type": "boolean" },
+                        "write_required_on_insert": { "type": "boolean" },
                         "description": { "type": "string" },
                         "ordinal_position": {
                             "type": "integer",
@@ -498,29 +538,29 @@ fn list_columns_page_output_schema() -> Value {
     })
 }
 
-fn missing_table_output_schema() -> Value {
+fn missing_relation_output_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["found", "requested", "available_schemas", "same_schema_tables", "suggested_calls"],
+        "required": ["found", "requested", "available_schemas", "same_schema_relations", "suggested_calls"],
         "additionalProperties": false,
         "properties": {
             "found": { "enum": [false] },
             "requested": {
                 "type": "object",
-                "required": ["schema", "table"],
+                "required": ["schema", "relation"],
                 "additionalProperties": false,
                 "properties": {
                     "schema": { "type": "string" },
-                    "table": { "type": "string" }
+                    "relation": { "type": "string" }
                 }
             },
             "available_schemas": {
                 "type": "array",
                 "items": { "type": "string" }
             },
-            "same_schema_tables": {
+            "same_schema_relations": {
                 "type": "array",
-                "items": missing_table_summary_output_schema()
+                "items": missing_relation_summary_output_schema()
             },
             "suggested_calls": {
                 "type": "array",
@@ -531,7 +571,7 @@ fn missing_table_output_schema() -> Value {
                     "properties": {
                         "tool": {
                             "type": "string",
-                            "enum": ["search_tables", "list_tables"]
+                            "enum": ["search_relations", "list_relations"]
                         },
                         "arguments": { "type": "object" }
                     }
@@ -541,33 +581,56 @@ fn missing_table_output_schema() -> Value {
     })
 }
 
-fn missing_table_summary_output_schema() -> Value {
+fn missing_relation_summary_output_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["schema_name", "table_name", "name", "description", "required_filters"],
+        "required": [
+            "schema_name",
+            "relation_name",
+            "name",
+            "description",
+            "required_filters",
+            "supports_read",
+            "supports_insert",
+            "supports_update",
+            "supports_delete",
+            "supports_truncate",
+            "derived_key_columns",
+            "effect"
+        ],
         "additionalProperties": false,
         "properties": {
             "schema_name": { "type": "string" },
-            "table_name": { "type": "string" },
+            "relation_name": { "type": "string" },
             "name": { "type": "string" },
             "description": { "type": "string" },
             "required_filters": {
                 "type": "array",
                 "items": { "type": "string" }
-            }
+            },
+            "supports_read": { "type": "boolean" },
+            "supports_insert": { "type": "boolean" },
+            "supports_update": { "type": "boolean" },
+            "supports_delete": { "type": "boolean" },
+            "supports_truncate": { "type": "boolean" },
+            "derived_key_columns": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "effect": { "type": "string" }
         }
     })
 }
 
-fn paginated_table_output_schema(table_item_schema: &Value) -> Arc<Map<String, Value>> {
+fn paginated_relation_output_schema(relation_item_schema: &Value) -> Arc<Map<String, Value>> {
     json_object_schema(&json!({
         "type": "object",
-        "required": ["tables", "total", "limit", "offset", "has_more"],
+        "required": ["relations", "total", "limit", "offset", "has_more"],
         "additionalProperties": false,
         "properties": {
-            "tables": {
+            "relations": {
                 "type": "array",
-                "items": table_item_schema
+                "items": relation_item_schema
             },
             "total": {
                 "type": "integer",

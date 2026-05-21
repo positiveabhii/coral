@@ -1,4 +1,4 @@
-dsl_version: 3
+dsl_version: 4
 name: wandb
 version: 0.1.0
 backend: http
@@ -34,7 +34,7 @@ request_headers:
     value: application/json
 test_queries:
   - SELECT * FROM wandb.viewer LIMIT 1
-tables:
+relations:
   - name: viewer
     description: Authenticated W&B user (single row)
     guide: |

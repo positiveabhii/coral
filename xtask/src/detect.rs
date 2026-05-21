@@ -676,7 +676,7 @@ mod tests {
     #[test]
     fn extract_plain_scalar() {
         let yaml = "
-tables:
+relations:
   - name: foo
     description: A plain description
 ";
@@ -725,7 +725,7 @@ tables:
     #[test]
     fn extract_multi_line_plain_scalar() {
         let yaml = "
-tables:
+relations:
   - name: foo
     description: A plain description
       that wraps onto a second line
@@ -761,7 +761,7 @@ description: "quoted \"value\""
     #[test]
     fn extract_literal_block_scalar() {
         let yaml = "
-tables:
+relations:
   - name: foo
     description: |
       First line.
@@ -774,7 +774,7 @@ tables:
     #[test]
     fn extract_folded_block_scalar() {
         let yaml = "
-tables:
+relations:
   - name: foo
     description: >-
       Folded

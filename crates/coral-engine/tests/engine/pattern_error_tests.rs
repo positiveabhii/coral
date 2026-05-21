@@ -15,9 +15,9 @@ fn manifest(dir: &Path) -> Value {
     json!({
         "name": "linear",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "jsonl",
-        "tables": [{
+        "relations": [{
             "name": "projects",
             "description": "Pattern validator fixture",
             "source": {

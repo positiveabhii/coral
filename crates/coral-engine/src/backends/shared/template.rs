@@ -16,6 +16,8 @@ pub(crate) static EMPTY_MAP: LazyLock<HashMap<String, String>> = LazyLock::new(H
 pub(crate) struct RenderContext<'a> {
     pub(crate) filters: &'a HashMap<String, String>,
     pub(crate) args: &'a HashMap<String, String>,
+    pub(crate) keys: &'a HashMap<String, String>,
+    pub(crate) write_values: &'a HashMap<String, String>,
     pub(crate) state: &'a HashMap<String, String>,
     pub(crate) resolved_inputs: &'a BTreeMap<String, String>,
 }
@@ -24,19 +26,46 @@ impl<'a> RenderContext<'a> {
     pub(crate) fn new(
         filters: &'a HashMap<String, String>,
         args: &'a HashMap<String, String>,
+        keys: &'a HashMap<String, String>,
         state: &'a HashMap<String, String>,
         resolved_inputs: &'a BTreeMap<String, String>,
     ) -> Self {
         Self {
             filters,
             args,
+            keys,
+            write_values: &EMPTY_MAP,
+            state,
+            resolved_inputs,
+        }
+    }
+
+    pub(crate) fn with_write_values(
+        filters: &'a HashMap<String, String>,
+        args: &'a HashMap<String, String>,
+        keys: &'a HashMap<String, String>,
+        write_values: &'a HashMap<String, String>,
+        state: &'a HashMap<String, String>,
+        resolved_inputs: &'a BTreeMap<String, String>,
+    ) -> Self {
+        Self {
+            filters,
+            args,
+            keys,
+            write_values,
             state,
             resolved_inputs,
         }
     }
 
     pub(crate) fn source_scoped(resolved_inputs: &'a BTreeMap<String, String>) -> Self {
-        Self::new(&EMPTY_MAP, &EMPTY_MAP, &EMPTY_MAP, resolved_inputs)
+        Self::new(
+            &EMPTY_MAP,
+            &EMPTY_MAP,
+            &EMPTY_MAP,
+            &EMPTY_MAP,
+            resolved_inputs,
+        )
     }
 }
 
@@ -197,13 +226,14 @@ fn resolve_template_token(token: &TemplateToken, context: &RenderContext<'_>) ->
 
     if token.namespace() == &TemplateNamespace::Input {
         return context
-            .resolved_inputs
+            .write_values
             .get(token.key())
             .cloned()
+            .or_else(|| context.resolved_inputs.get(token.key()).cloned())
             .or(default)
             .ok_or_else(|| {
                 DataFusionError::Execution(format!(
-                    "missing source input '{}' for template token",
+                    "missing input '{}' for template token",
                     token.key()
                 ))
             });
@@ -228,6 +258,17 @@ fn resolve_template_token(token: &TemplateToken, context: &RenderContext<'_>) ->
             .or(default)
             .ok_or_else(|| {
                 DataFusionError::Execution(format!("missing request argument '{}'", token.key()))
+            });
+    }
+
+    if token.namespace() == &TemplateNamespace::Key {
+        return context
+            .keys
+            .get(token.key())
+            .cloned()
+            .or(default)
+            .ok_or_else(|| {
+                DataFusionError::Execution(format!("missing write key '{}'", token.key()))
             });
     }
 

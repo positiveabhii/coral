@@ -18,12 +18,12 @@ use tonic::Request;
 
 const MAX_TABLES_PER_SCHEMA: usize = 9;
 
-/// How many tables to show per schema when pretty-printing validation results.
+/// How many relations to show per schema when pretty-printing validation results.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum TableDisplayLimit {
-    /// Show every table the source exposes.
+    /// Show every relation the source exposes.
     All,
-    /// Show at most this many tables per schema, with a summary for the rest.
+    /// Show at most this many relations per schema, with a summary for the rest.
     Max(usize),
 }
 
@@ -452,40 +452,40 @@ pub(crate) fn print_validation_pretty(
         style(format!("{} connected successfully", source.name)).bold()
     );
 
-    // Group tables by schema, sorted.
+    // Group relations by schema, sorted.
     let mut by_schema: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for table in &response.tables {
+    for relation in &response.relations {
         by_schema
-            .entry(&table.schema_name)
+            .entry(&relation.schema_name)
             .or_default()
-            .push(&table.name);
+            .push(&relation.name);
     }
-    for tables in by_schema.values_mut() {
-        tables.sort_unstable();
+    for relations in by_schema.values_mut() {
+        relations.sort_unstable();
     }
 
-    for (schema, tables) in &by_schema {
-        let count = tables.len();
+    for (schema, relations) in &by_schema {
+        let count = relations.len();
         println!();
         println!(
             "    {}",
             style(format!(
                 "{schema} ({count} {})",
-                if count == 1 { "table" } else { "tables" }
+                if count == 1 { "relation" } else { "relations" }
             ))
             .bold()
         );
 
         let show_count = match limit {
-            TableDisplayLimit::All => tables.len(),
-            TableDisplayLimit::Max(max) => tables.len().min(max),
+            TableDisplayLimit::All => relations.len(),
+            TableDisplayLimit::Max(max) => relations.len().min(max),
         };
-        let remaining = tables.len() - show_count;
+        let remaining = relations.len() - show_count;
 
-        for (i, table) in tables.iter().take(show_count).enumerate() {
+        for (i, relation) in relations.iter().take(show_count).enumerate() {
             let is_last = i == show_count - 1 && remaining == 0;
             let branch = if is_last { "└─" } else { "├─" };
-            println!("    {} {}", style(branch).dim(), table);
+            println!("    {} {}", style(branch).dim(), relation);
         }
 
         if remaining > 0 {
@@ -811,7 +811,7 @@ mod tests {
     fn validation_follow_up_is_none_when_all_query_tests_pass() {
         let response = ValidateSourceResponse {
             source: None,
-            tables: Vec::new(),
+            relations: Vec::new(),
             query_tests: vec![coral_api::v1::QueryTestResult {
                 sql: "SELECT 1".to_string(),
                 outcome: Some(coral_api::v1::query_test_result::Outcome::Success(
@@ -830,7 +830,7 @@ mod tests {
     fn validation_follow_up_is_error_in_strict_mode() {
         let response = ValidateSourceResponse {
             source: None,
-            tables: Vec::new(),
+            relations: Vec::new(),
             query_tests: vec![
                 coral_api::v1::QueryTestResult {
                     sql: "SELECT 1".to_string(),
@@ -859,7 +859,7 @@ mod tests {
     fn validation_follow_up_is_warning_in_warn_only_mode() {
         let response = ValidateSourceResponse {
             source: None,
-            tables: Vec::new(),
+            relations: Vec::new(),
             query_tests: vec![coral_api::v1::QueryTestResult {
                 sql: "SELECT missing".to_string(),
                 outcome: Some(coral_api::v1::query_test_result::Outcome::Failure(

@@ -11,17 +11,17 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
 use assert_cmd::Command;
-use coral_api::v1::query_service_server::{QueryService, QueryServiceServer};
 use coral_api::v1::source_service_server::{SourceService, SourceServiceServer};
+use coral_api::v1::sql_service_server::{SqlService, SqlServiceServer};
 use coral_api::v1::{
     Column, CreateBundledSourceRequest, CreateBundledSourceResponse, DeleteSourceRequest,
     DeleteSourceResponse, DiscoverSourcesRequest, DiscoverSourcesResponse, ExecuteSqlRequest,
     ExecuteSqlResponse, ExplainSqlRequest, ExplainSqlResponse, GetSourceInfoRequest,
     GetSourceInfoResponse, GetSourceRequest, GetSourceResponse, ImportSourceRequest,
-    ImportSourceResponse, ListSourcesRequest, ListSourcesResponse, ListTablesRequest,
-    ListTablesResponse, PaginationResponse, QueryPlan, Source, SourceInfo, SourceInputKind,
-    SourceInputSpec, SourceOrigin, Table, TableSummary, ValidateSourceRequest,
-    ValidateSourceResponse, Workspace,
+    ImportSourceResponse, ListRelationsRequest, ListRelationsResponse, ListSourcesRequest,
+    ListSourcesResponse, PaginationResponse, QueryPlan, Relation, RelationCapabilities,
+    RelationOperation, RelationSummary, Source, SourceInfo, SourceInputKind, SourceInputSpec,
+    SourceOrigin, SqlExecutionSummary, ValidateSourceRequest, ValidateSourceResponse, Workspace,
 };
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -47,8 +47,8 @@ fn mock_source() -> Source {
     }
 }
 
-fn mock_table(schema_name: &str, name: &str) -> Table {
-    Table {
+fn mock_table(schema_name: &str, name: &str) -> Relation {
+    Relation {
         workspace: Some(workspace()),
         schema_name: schema_name.to_string(),
         name: name.to_string(),
@@ -56,11 +56,12 @@ fn mock_table(schema_name: &str, name: &str) -> Table {
         guide: String::new(),
         columns: Vec::new(),
         required_filters: Vec::new(),
+        capabilities: Some(read_capabilities()),
     }
 }
 
-fn mock_visible_table() -> Table {
-    Table {
+fn mock_visible_table() -> Relation {
+    Relation {
         workspace: Some(workspace()),
         schema_name: "local_messages".to_string(),
         name: "messages".to_string(),
@@ -75,6 +76,7 @@ fn mock_visible_table() -> Table {
                 is_required_filter: true,
                 description: "Repository owner filter".to_string(),
                 ordinal_position: 0,
+                write_behavior: None,
             },
             Column {
                 name: "repo".to_string(),
@@ -84,6 +86,7 @@ fn mock_visible_table() -> Table {
                 is_required_filter: true,
                 description: "Repository name filter".to_string(),
                 ordinal_position: 1,
+                write_behavior: None,
             },
             Column {
                 name: "text".to_string(),
@@ -93,13 +96,15 @@ fn mock_visible_table() -> Table {
                 is_required_filter: false,
                 description: "Message text".to_string(),
                 ordinal_position: 2,
+                write_behavior: None,
             },
         ],
         required_filters: vec!["owner".to_string(), "repo".to_string()],
+        capabilities: Some(read_capabilities()),
     }
 }
 
-fn mock_visible_tables() -> Vec<Table> {
+fn mock_visible_tables() -> Vec<Relation> {
     let messages = mock_visible_table();
     let mut sessions = mock_visible_table();
     sessions.name = "sessions".to_string();
@@ -112,20 +117,29 @@ fn mock_visible_tables() -> Vec<Table> {
     vec![events, messages, sessions]
 }
 
-fn table_summary(table: &Table) -> TableSummary {
-    TableSummary {
+fn table_summary(table: &Relation) -> RelationSummary {
+    RelationSummary {
         workspace: table.workspace.clone(),
         schema_name: table.schema_name.clone(),
         name: table.name.clone(),
         description: table.description.clone(),
         required_filters: table.required_filters.clone(),
         guide: table.guide.clone(),
+        capabilities: table.capabilities.clone(),
+    }
+}
+
+fn read_capabilities() -> RelationCapabilities {
+    RelationCapabilities {
+        operations: vec![RelationOperation::Read as i32],
+        derived_key_columns: Vec::new(),
+        effect: "read".to_string(),
     }
 }
 
 fn mock_sql_response(sql: &str) -> ExecuteSqlResponse {
-    if sql.contains("FROM coral.tables") {
-        return mock_coral_tables_response();
+    if sql.contains("FROM coral.relations") {
+        return mock_coral_relations_response();
     }
 
     let (schema, batch, row_count) = if sql.contains("local_messages.messages") {
@@ -149,13 +163,18 @@ fn mock_sql_response(sql: &str) -> ExecuteSqlResponse {
     ExecuteSqlResponse {
         arrow_ipc_stream: encode_arrow_ipc_stream(&schema, &[batch]).expect("encode arrow ipc"),
         row_count,
+        summary: Some(SqlExecutionSummary {
+            statement_kind: "select".to_string(),
+            effect: "read".to_string(),
+            affected_row_count: 0,
+        }),
     }
 }
 
-fn mock_coral_tables_response() -> ExecuteSqlResponse {
+fn mock_coral_relations_response() -> ExecuteSqlResponse {
     let schema = Schema::new(vec![
         Field::new("schema_name", DataType::Utf8, false),
-        Field::new("table_name", DataType::Utf8, false),
+        Field::new("relation_name", DataType::Utf8, false),
         Field::new("description", DataType::Utf8, false),
         Field::new("guide", DataType::Utf8, false),
         Field::new("required_filters", DataType::Utf8, false),
@@ -182,11 +201,16 @@ fn mock_coral_tables_response() -> ExecuteSqlResponse {
             Arc::new(StringArray::from(vec!["", "owner,repo", ""])),
         ],
     )
-    .expect("build coral.tables batch");
+    .expect("build coral.relations batch");
 
     ExecuteSqlResponse {
         arrow_ipc_stream: encode_arrow_ipc_stream(&schema, &[batch]).expect("encode arrow ipc"),
         row_count: 3,
+        summary: Some(SqlExecutionSummary {
+            statement_kind: "select".to_string(),
+            effect: "read".to_string(),
+            affected_row_count: 0,
+        }),
     }
 }
 
@@ -222,7 +246,7 @@ fn mock_discover_response() -> DiscoverSourcesResponse {
 fn mock_validate_response() -> ValidateSourceResponse {
     ValidateSourceResponse {
         source: Some(mock_source()),
-        tables: vec![
+        relations: vec![
             mock_table("github", "issues"),
             mock_table("github", "pull_requests"),
         ],
@@ -390,7 +414,7 @@ impl MockServerConfig {
 #[derive(Default)]
 struct Captured {
     execute_sql: Mutex<Vec<ExecuteSqlRequest>>,
-    list_tables: Mutex<Vec<ListTablesRequest>>,
+    list_relations: Mutex<Vec<ListRelationsRequest>>,
     discover_sources: Mutex<Vec<DiscoverSourcesRequest>>,
     list_sources: Mutex<Vec<ListSourcesRequest>>,
     get_source: Mutex<Vec<GetSourceRequest>>,
@@ -417,29 +441,29 @@ pub(crate) fn encode_arrow_ipc_stream(
 }
 
 #[derive(Clone)]
-struct MockQueryService {
+struct MockSqlService {
     config: Arc<MockServerConfig>,
     captured: Arc<Captured>,
 }
 
 #[tonic::async_trait]
-impl QueryService for MockQueryService {
-    async fn list_tables(
+impl SqlService for MockSqlService {
+    async fn list_relations(
         &self,
-        request: Request<ListTablesRequest>,
-    ) -> Result<Response<ListTablesResponse>, Status> {
+        request: Request<ListRelationsRequest>,
+    ) -> Result<Response<ListRelationsResponse>, Status> {
         let request = request.into_inner();
         self.captured
-            .list_tables
+            .list_relations
             .lock()
-            .expect("list_tables capture")
+            .expect("list_relations capture")
             .push(request.clone());
         let mut tables = mock_visible_tables()
             .into_iter()
             .filter(|table| {
                 request.schema_name.is_empty() || table.schema_name == request.schema_name
             })
-            .filter(|table| request.table_name.is_empty() || table.name == request.table_name)
+            .filter(|table| request.relation_name.is_empty() || table.name == request.relation_name)
             .collect::<Vec<_>>();
         let total = u32::try_from(tables.len()).unwrap_or(u32::MAX);
         let pagination = request.pagination.unwrap_or_default();
@@ -470,9 +494,9 @@ impl QueryService for MockQueryService {
         } else {
             0
         };
-        Ok(Response::new(ListTablesResponse {
-            tables,
-            table_summaries,
+        Ok(Response::new(ListRelationsResponse {
+            relations: tables,
+            relation_summaries: table_summaries,
             pagination: Some(PaginationResponse {
                 total_count: total,
                 limit: pagination.limit,
@@ -494,11 +518,11 @@ impl QueryService for MockQueryService {
             .expect("execute_sql capture")
             .push(request.clone());
         let sql = request.sql;
-        if sql
-            .trim_start()
-            .to_ascii_uppercase()
-            .starts_with("DELETE FROM")
-        {
+        let uppercase_sql = sql.trim_start().to_ascii_uppercase();
+        if uppercase_sql.starts_with("DROP ") {
+            return Err(Status::invalid_argument("DDL not supported: DROP"));
+        }
+        if uppercase_sql.starts_with("DELETE FROM") {
             return Err(Status::invalid_argument("DML not supported: DELETE"));
         }
 
@@ -670,7 +694,7 @@ impl MockServer {
         let query_config = Arc::clone(&config);
         let task = tokio::spawn(async move {
             Server::builder()
-                .add_service(QueryServiceServer::new(MockQueryService {
+                .add_service(SqlServiceServer::new(MockSqlService {
                     config: query_config,
                     captured: query_captured,
                 }))
@@ -730,11 +754,11 @@ impl MockServer {
             .clone()
     }
 
-    pub(crate) fn list_tables_requests(&self) -> Vec<ListTablesRequest> {
+    pub(crate) fn list_relations_requests(&self) -> Vec<ListRelationsRequest> {
         self.captured
-            .list_tables
+            .list_relations
             .lock()
-            .expect("list_tables capture")
+            .expect("list_relations capture")
             .clone()
     }
 

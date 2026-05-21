@@ -1,6 +1,6 @@
 name: slack
 version: 2.1.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 description: >-
   Query channels, messages, thread replies, and users from your Slack workspace.
@@ -29,7 +29,7 @@ auth:
       template: Bearer {{input.SLACK_TOKEN}}
 test_queries:
   - SELECT * FROM slack.channels LIMIT 1
-tables:
+relations:
   - name: channels
     description: Slack channels with topic, purpose, and member count
     guide: |

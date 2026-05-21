@@ -18,6 +18,7 @@ use arrow::record_batch::RecordBatch;
 use assert_cmd::Command;
 use coral_api::v1::{
     DiscoverSourcesResponse, ExecuteSqlResponse, ListSourcesResponse, SourceInfo, SourceOrigin,
+    SqlExecutionSummary,
 };
 use tonic::Code;
 
@@ -357,13 +358,16 @@ async fn source_test_renders_validation_summary() {
         "expected success summary: {stdout}"
     );
     assert!(
-        stdout.contains("github (2 tables)"),
+        stdout.contains("github (2 relations)"),
         "expected schema summary: {stdout}"
     );
-    assert!(stdout.contains("issues"), "expected issues table: {stdout}");
+    assert!(
+        stdout.contains("issues"),
+        "expected issues relation: {stdout}"
+    );
     assert!(
         stdout.contains("pull_requests"),
-        "expected pull_requests table: {stdout}"
+        "expected pull_requests relation: {stdout}"
     );
 
     let requests = server.validate_source_requests();
@@ -460,6 +464,11 @@ fn sql_response(schema: &Schema, batches: &[RecordBatch], row_count: i64) -> Exe
     ExecuteSqlResponse {
         arrow_ipc_stream: encode_arrow_ipc_stream(schema, batches).expect("encode arrow ipc"),
         row_count,
+        summary: Some(SqlExecutionSummary {
+            statement_kind: "select".to_string(),
+            effect: "read".to_string(),
+            affected_row_count: 0,
+        }),
     }
 }
 

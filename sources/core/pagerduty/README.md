@@ -257,14 +257,14 @@ WHERE id = 'PSCHED1';
 # Add the source
 coral source add pagerduty
 
-# Discover tables
-coral sql "SELECT * FROM coral.tables WHERE schema_name = 'pagerduty'"
+# Discover relations
+coral sql "SELECT * FROM coral.relations WHERE schema_name = 'pagerduty'"
 
 # Find required filters
 coral sql \
-  "SELECT table_name, column_name FROM coral.columns \
+  "SELECT relation_name, column_name FROM coral.columns \
    WHERE schema_name = 'pagerduty' AND is_required_filter = true \
-   ORDER BY table_name"
+   ORDER BY relation_name"
 
 # Query
 coral sql \

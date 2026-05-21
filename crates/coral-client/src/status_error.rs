@@ -170,7 +170,7 @@ mod tests {
             "MISSING_REQUIRED_FILTER",
             vec![
                 ("schema", "github"),
-                ("table", "issues"),
+                ("relation", "issues"),
                 ("column", "repo"),
                 (
                     "summary",
@@ -192,7 +192,7 @@ mod tests {
                     Some("Add a constant equality filter on `repo`.")
                 );
                 assert_eq!(err.metadata.get("schema").expect("schema"), "github");
-                assert_eq!(err.metadata.get("table").expect("table"), "issues");
+                assert_eq!(err.metadata.get("relation").expect("relation"), "issues");
                 assert_eq!(err.metadata.get("column").expect("column"), "repo");
                 assert!(
                     !err.metadata.contains_key("summary"),

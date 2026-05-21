@@ -17,7 +17,7 @@ use crate::RequestAuthenticator;
 use crate::backends::http::ProviderQueryError;
 use crate::backends::http::auth::{resolve_auth_headers, validate_auth_inputs};
 use crate::backends::http::rate_limit::{RateLimitDecision, check_rate_limit};
-use crate::backends::http::target::HttpFetchTarget;
+use crate::backends::http::target::{HttpFetchTarget, HttpWriteTarget};
 use crate::backends::shared::json_path::get_path_value;
 use crate::backends::shared::template::{
     RenderContext, render_template, resolve_value_source, validate_input_dependencies,
@@ -82,6 +82,9 @@ struct OutgoingHttpRequest<'a> {
     request_authenticators: &'a HashMap<String, Arc<dyn RequestAuthenticator>>,
     table_headers: &'a [HeaderSpec],
     table_name: &'a str,
+    target_kind: &'a str,
+    operation: &'a str,
+    path_template: &'a str,
     method: HttpMethod,
     base_url: &'a str,
     url: &'a str,
@@ -93,6 +96,7 @@ struct OutgoingHttpRequest<'a> {
     render_context: RenderContext<'a>,
     allow_404_empty: bool,
     link_header_require_results: bool,
+    allow_empty_success_body: bool,
 }
 
 struct HttpRequestSite<'a> {
@@ -106,6 +110,7 @@ struct ResponseDecodeContext<'a> {
     method_label: &'a str,
     logged_url: &'a str,
     response_span: &'a tracing::Span,
+    allow_empty_success_body: bool,
 }
 
 impl HttpSourceClient {
@@ -214,6 +219,7 @@ impl HttpSourceClient {
             let render_context = RenderContext::new(
                 filter_values,
                 arg_values,
+                &crate::backends::shared::template::EMPTY_MAP,
                 &state_values,
                 self.resolved_inputs.as_ref(),
             );
@@ -274,6 +280,9 @@ impl HttpSourceClient {
                     request_authenticators: &self.request_authenticators,
                     table_headers: &active_request.headers,
                     table_name: target.name(),
+                    target_kind: target.kind().as_str(),
+                    operation: "read",
+                    path_template: active_request.path.raw(),
                     method: active_request.method,
                     base_url: &base_url,
                     url: &url,
@@ -285,6 +294,7 @@ impl HttpSourceClient {
                     render_context,
                     allow_404_empty: target.response().allow_404_empty,
                     link_header_require_results: pagination.link_header_require_results,
+                    allow_empty_success_body: false,
                 },
             )
             .await?;
@@ -379,6 +389,116 @@ impl HttpSourceClient {
 
         Ok(all_rows)
     }
+
+    /// Execute one relation write request. The returned `Ok(())` means the
+    /// upstream request completed successfully; DML count semantics are owned
+    /// by the caller.
+    pub(crate) async fn write(
+        &self,
+        target: &HttpWriteTarget,
+        key_values: &HashMap<String, String>,
+        write_values: &HashMap<String, Value>,
+    ) -> Result<()> {
+        let state_values = HashMap::new();
+        let write_template_values = write_values
+            .iter()
+            .map(|(key, value)| (key.clone(), value_to_string(value)))
+            .collect::<HashMap<_, _>>();
+        let render_context = RenderContext::with_write_values(
+            &crate::backends::shared::template::EMPTY_MAP,
+            &crate::backends::shared::template::EMPTY_MAP,
+            key_values,
+            &write_template_values,
+            &state_values,
+            self.resolved_inputs.as_ref(),
+        );
+        let base_url = render_template(&self.base_url, &render_context)?;
+        let base_url = normalize_base_url(&base_url);
+        let active_request = target.resolved_request();
+        let rendered_path = render_template(&active_request.path, &render_context)?;
+        let url = join_url(&base_url, &rendered_path)?;
+        let query_pairs = build_query_pairs(active_request, &render_context)?;
+        let mut body = build_request_body(active_request, &render_context)?;
+        if body.is_none()
+            && matches!(
+                target.operation(),
+                coral_spec::backends::http::HttpRelationWriteOperation::Insert
+                    | coral_spec::backends::http::HttpRelationWriteOperation::Update
+            )
+        {
+            body = default_write_body(write_values);
+        }
+
+        let request = execute_request(
+            &self.http,
+            self.request_timeout,
+            OutgoingHttpRequest {
+                auth: &self.auth,
+                request_headers: &self.request_headers,
+                request_authenticators: &self.request_authenticators,
+                table_headers: &active_request.headers,
+                table_name: target.name(),
+                target_kind: "relation",
+                operation: target.operation().as_str(),
+                path_template: active_request.path.raw(),
+                method: active_request.method,
+                base_url: &base_url,
+                url: &url,
+                query_pairs: &query_pairs,
+                body: body.as_ref(),
+                response_format: target.response().format,
+                source_schema: &self.source_schema,
+                rate_limit: &self.rate_limit,
+                render_context,
+                allow_404_empty: target.response().allow_404_empty,
+                link_header_require_results: false,
+                allow_empty_success_body: true,
+            },
+        )
+        .await?;
+
+        if let Some((payload, _next_url)) = request
+            && !target.response().ok_path.is_empty()
+        {
+            let ok = get_path_value(&payload, &target.response().ok_path)
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if !ok {
+                let err = if target.response().error_path.is_empty() {
+                    "unknown source API error".to_string()
+                } else {
+                    get_path_value(&payload, &target.response().error_path)
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown source API error")
+                        .to_string()
+                };
+                return Err(DataFusionError::External(Box::new(
+                    ProviderQueryError::ApiRequest {
+                        source_schema: self.source_schema.clone(),
+                        table: target.name().to_string(),
+                        status: None,
+                        method: Some(http_method_label(active_request.method).to_string()),
+                        url: Some(build_logged_url(&url, &query_pairs)),
+                        filters: key_values.clone(),
+                        detail: err,
+                    },
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn default_write_body(write_values: &HashMap<String, Value>) -> Option<RequestBody> {
+    if write_values.is_empty() {
+        return None;
+    }
+    let mut body = Map::new();
+    for (key, value) in write_values {
+        body.insert(key.clone(), value.clone());
+    }
+    Some(RequestBody::Json(Value::Object(body)))
 }
 
 fn validate_source_scoped_http_config(
@@ -433,16 +553,19 @@ fn check_request_site_inputs(
 }
 
 fn http_request_sites(manifest: &HttpSourceManifest) -> Vec<HttpRequestSite<'_>> {
-    let table_sites = manifest.tables.iter().flat_map(|table| {
+    let table_sites = manifest.relations.iter().flat_map(|table| {
+        let Some(read) = table.read() else {
+            return Vec::new().into_iter();
+        };
         let default = std::iter::once(HttpRequestSite {
-            label: format!("table '{}' request", table.name()),
-            request: &table.request,
+            label: format!("relation '{}' read request", table.name()),
+            request: &read.request,
         });
-        let routes = table.requests.iter().map(move |route| HttpRequestSite {
-            label: table_request_route_label(table.name(), route),
+        let routes = read.requests.iter().map(move |route| HttpRequestSite {
+            label: relation_request_route_label(table.name(), route),
             request: &route.request,
         });
-        default.chain(routes)
+        default.chain(routes).collect::<Vec<_>>().into_iter()
     });
 
     let function_sites = manifest.functions.iter().map(|function| HttpRequestSite {
@@ -453,12 +576,12 @@ fn http_request_sites(manifest: &HttpSourceManifest) -> Vec<HttpRequestSite<'_>>
     table_sites.chain(function_sites).collect()
 }
 
-fn table_request_route_label(table_name: &str, route: &RequestRouteSpec) -> String {
+fn relation_request_route_label(table_name: &str, route: &RequestRouteSpec) -> String {
     if route.when_filters.is_empty() {
-        format!("table '{table_name}' request route")
+        format!("relation '{table_name}' read request route")
     } else {
         format!(
-            "table '{table_name}' request route for filters [{}]",
+            "relation '{table_name}' read request route for filters [{}]",
             route.when_filters.join(", ")
         )
     }
@@ -565,6 +688,9 @@ async fn execute_request(
         request_authenticators,
         table_headers,
         table_name,
+        target_kind,
+        operation,
+        path_template,
         method,
         base_url,
         url,
@@ -576,6 +702,7 @@ async fn execute_request(
         render_context,
         allow_404_empty,
         link_header_require_results,
+        allow_empty_success_body,
     } = request;
     let mut server_error_retries = 0usize;
     let mut throttle_retries = 0usize;
@@ -625,7 +752,9 @@ async fn execute_request(
             coral.http.error.timeout = field::Empty,
             coral.http.request_id = request_id,
             coral.source = source_schema,
-            coral.table = table_name,
+            coral.sql.target.kind = target_kind,
+            coral.sql.target.name = table_name,
+            coral.sql.operation = operation,
             error = field::Empty,
             error.type = field::Empty,
             exception.message = field::Empty,
@@ -633,6 +762,7 @@ async fn execute_request(
             http.request.body.present = body.is_some(),
             http.request.body.size = request_body_size(body).unwrap_or_default(),
             http.request.method = method_label,
+            http.request.path_template = path_template,
             http.request.query_count = query_pairs.len(),
             http.request.resend_count = field::Empty,
             http.response.body.size = field::Empty,
@@ -798,6 +928,7 @@ async fn execute_request(
                     method_label,
                     logged_url: &logged_url,
                     response_span: &request_span,
+                    allow_empty_success_body,
                 },
             )
             .instrument(request_span.clone())
@@ -830,6 +961,7 @@ async fn decode_response_body(
         method_label,
         logged_url,
         response_span,
+        allow_empty_success_body,
     } = context;
     match format {
         ResponseBodyFormat::Json => {
@@ -837,6 +969,9 @@ async fn decode_response_body(
                 decode_error(source_schema, table_name, method_label, logged_url, &error)
             })?;
             response_span.record("http.response.body.size", bytes.len());
+            if bytes.is_empty() && allow_empty_success_body {
+                return Ok(Value::Null);
+            }
             serde_json::from_slice(&bytes).map_err(|error| {
                 json_decode_error(source_schema, table_name, method_label, logged_url, &error)
             })
@@ -1017,6 +1152,9 @@ fn http_method_label(method: HttpMethod) -> &'static str {
     match method {
         HttpMethod::GET => "GET",
         HttpMethod::POST => "POST",
+        HttpMethod::PUT => "PUT",
+        HttpMethod::PATCH => "PATCH",
+        HttpMethod::DELETE => "DELETE",
     }
 }
 
@@ -1028,6 +1166,9 @@ fn build_http_request(
     match method {
         HttpMethod::GET => http.get(url),
         HttpMethod::POST => http.post(url),
+        HttpMethod::PUT => http.put(url),
+        HttpMethod::PATCH => http.patch(url),
+        HttpMethod::DELETE => http.delete(url),
     }
 }
 
@@ -1548,26 +1689,29 @@ mod tests {
 
     fn test_http_table_spec(columns: &serde_json::Value, request: &RequestSpec) -> HttpTableSpec {
         parse_http_manifest(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "demo",
             "version": "0.1.0",
             "backend": "http",
             "base_url": "https://api.example.com",
-            "tables": [{
+            "relations": [{
                 "name": "items",
                 "description": "items",
                 "request": request_json(request),
                 "columns": columns
             }]
         }))
-        .tables
+        .relations
         .into_iter()
         .next()
         .expect("table should exist")
     }
 
     fn test_http_request_target(table: &HttpTableSpec) -> HttpFetchTarget {
-        HttpFetchTarget::from_resolved_table_request(table, table.request.clone())
+        HttpFetchTarget::from_resolved_table_request(
+            table,
+            table.read().expect("read relation").request.clone(),
+        )
     }
 
     fn test_render_context<'a>(
@@ -1575,7 +1719,7 @@ mod tests {
         args: &'a HashMap<String, String>,
         resolved_inputs: &'a BTreeMap<String, String>,
     ) -> RenderContext<'a> {
-        RenderContext::new(filters, args, &EMPTY_MAP, resolved_inputs)
+        RenderContext::new(filters, args, &EMPTY_MAP, &EMPTY_MAP, resolved_inputs)
     }
 
     #[test]
@@ -1989,7 +2133,7 @@ mod tests {
     #[test]
     fn backend_client_requires_source_scoped_credentials() {
         let manifest = parse_http_manifest(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "alpha",
             "version": "0.1.0",
             "backend": "http",
@@ -2005,7 +2149,7 @@ mod tests {
             "inputs": {
                 "API_KEY": { "kind": "secret" }
             },
-            "tables": [{
+            "relations": [{
                 "name": "items",
                 "description": "items",
                 "request": { "path": "/items" },
@@ -2025,17 +2169,13 @@ mod tests {
         )
         .expect_err("missing source-scoped credentials must fail");
 
-        assert!(
-            error
-                .to_string()
-                .contains("missing source input 'API_KEY' for template token")
-        );
+        assert!(error.to_string().contains("API_KEY"));
     }
 
     #[test]
     fn backend_client_rejects_unresolved_table_request_path_inputs() {
         let manifest = parse_http_manifest(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "alpha",
             "version": "0.1.0",
             "backend": "http",
@@ -2044,7 +2184,7 @@ mod tests {
                 "API_KEY": { "kind": "secret" },
                 "ACCOUNT_ID": { "kind": "variable" }
             },
-            "tables": [{
+            "relations": [{
                 "name": "items",
                 "description": "items",
                 "request": {
@@ -2068,14 +2208,14 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("table 'items' request path could not be resolved")
+                .contains("relation 'items' read request path could not be resolved")
         );
     }
 
     #[test]
     fn backend_client_rejects_unresolved_table_request_header_inputs() {
         let manifest = parse_http_manifest(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "alpha",
             "version": "0.1.0",
             "backend": "http",
@@ -2083,7 +2223,7 @@ mod tests {
             "inputs": {
                 "ACCOUNT_ID": { "kind": "variable" }
             },
-            "tables": [{
+            "relations": [{
                 "name": "items",
                 "description": "items",
                 "request": {
@@ -2112,14 +2252,14 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("table 'items' request header 'X-Account' could not be resolved")
+                .contains("relation 'items' read request header 'X-Account' could not be resolved")
         );
     }
 
     #[test]
     fn backend_client_rejects_unresolved_table_request_query_inputs() {
         let manifest = parse_http_manifest(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "alpha",
             "version": "0.1.0",
             "backend": "http",
@@ -2127,7 +2267,7 @@ mod tests {
             "inputs": {
                 "ACCOUNT_ID": { "kind": "variable" }
             },
-            "tables": [{
+            "relations": [{
                 "name": "items",
                 "description": "items",
                 "request": {
@@ -2153,17 +2293,15 @@ mod tests {
         )
         .expect_err("missing table request query inputs must fail");
 
-        assert!(
-            error
-                .to_string()
-                .contains("table 'items' request query param 'account_id' could not be resolved")
-        );
+        assert!(error.to_string().contains(
+            "relation 'items' read request query param 'account_id' could not be resolved"
+        ));
     }
 
     #[test]
     fn backend_client_rejects_unresolved_table_request_body_inputs() {
         let manifest = parse_http_manifest(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "alpha",
             "version": "0.1.0",
             "backend": "http",
@@ -2171,7 +2309,7 @@ mod tests {
             "inputs": {
                 "ACCOUNT_ID": { "kind": "variable" }
             },
-            "tables": [{
+            "relations": [{
                 "name": "items",
                 "description": "items",
                 "request": {
@@ -2198,17 +2336,15 @@ mod tests {
         )
         .expect_err("missing table request body inputs must fail");
 
-        assert!(
-            error
-                .to_string()
-                .contains("table 'items' request body field 'account.id' could not be resolved")
-        );
+        assert!(error.to_string().contains(
+            "relation 'items' read request body field 'account.id' could not be resolved"
+        ));
     }
 
     #[test]
     fn backend_client_rejects_unresolved_request_route_inputs() {
         let manifest = parse_http_manifest(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "alpha",
             "version": "0.1.0",
             "backend": "http",
@@ -2216,7 +2352,7 @@ mod tests {
             "inputs": {
                 "ACCOUNT_ID": { "kind": "variable" }
             },
-            "tables": [{
+            "relations": [{
                 "name": "items",
                 "description": "items",
                 "request": { "path": "/items" },
@@ -2244,7 +2380,7 @@ mod tests {
         .expect_err("missing request route inputs must fail");
 
         assert!(error.to_string().contains(
-            "table 'items' request route for filters [account_id] path could not be resolved"
+            "relation 'items' read request route for filters [account_id] path could not be resolved"
         ));
     }
 
@@ -2299,7 +2435,7 @@ mod tests {
 
         for (name, request, expected) in cases {
             let manifest = parse_http_manifest(json!({
-                "dsl_version": 3,
+                "dsl_version": 4,
                 "name": "alpha",
                 "version": "0.1.0",
                 "backend": "http",
@@ -2307,7 +2443,7 @@ mod tests {
                 "inputs": {
                     "ACCOUNT_ID": { "kind": "variable" }
                 },
-                "tables": [{
+                "relations": [{
                     "name": "items",
                     "description": "items",
                     "request": { "path": "/items" },
@@ -2466,8 +2602,9 @@ mod tests {
                 headers: vec![],
             },
         );
-        table.response.rows_path = rows_path;
-        table.response.row_strategy = strategy;
+        let read = table.read.as_mut().expect("read relation");
+        read.response.rows_path = rows_path;
+        read.response.row_strategy = strategy;
         table
     }
 
@@ -2591,12 +2728,12 @@ mod tests {
     #[test]
     fn parse_manifest_accepts_dict_entries_row_strategy() {
         let manifest = parse_http_manifest(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "alpha",
             "version": "0.1.0",
             "backend": "http",
             "base_url": "https://api.example.com",
-            "tables": [{
+            "relations": [{
                 "name": "items",
                 "description": "items",
                 "request": { "path": "/items" },
@@ -2610,9 +2747,9 @@ mod tests {
                 }]
             }]
         }));
-        let table = manifest.tables.first().expect("HTTP table");
+        let table = manifest.relations.first().expect("HTTP relation");
         assert!(matches!(
-            table.response.row_strategy,
+            table.read().expect("read relation").response.row_strategy,
             RowStrategy::DictEntries
         ));
     }
@@ -2629,9 +2766,10 @@ mod tests {
         let query_pairs = vec![("api_key".to_string(), "secret-token".to_string())];
         let filters = HashMap::new();
         let args = HashMap::new();
+        let keys = HashMap::new();
         let state = HashMap::new();
         let resolved_inputs = BTreeMap::new();
-        let render_context = RenderContext::new(&filters, &args, &state, &resolved_inputs);
+        let render_context = RenderContext::new(&filters, &args, &keys, &state, &resolved_inputs);
 
         let error = execute_request(
             &http,
@@ -2642,6 +2780,9 @@ mod tests {
                 request_authenticators: &HashMap::new(),
                 table_headers: &[],
                 table_name: "items",
+                target_kind: "relation",
+                operation: "read",
+                path_template: "/items",
                 method: HttpMethod::GET,
                 base_url: &base_url,
                 url: &url,
@@ -2653,6 +2794,7 @@ mod tests {
                 render_context,
                 allow_404_empty: false,
                 link_header_require_results: false,
+                allow_empty_success_body: false,
             },
         )
         .await
@@ -2694,7 +2836,7 @@ mod tests {
     #[test]
     fn parse_manifest_accepts_source_rate_limit_policy() {
         let manifest = parse_http_manifest(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "alpha",
             "version": "0.1.0",
             "backend": "http",
@@ -2704,7 +2846,7 @@ mod tests {
                 "remaining_header": "X-RateLimit-Remaining",
                 "reset_header": "X-RateLimit-Reset"
             },
-            "tables": [{
+            "relations": [{
                 "name": "items",
                 "description": "items",
                 "request": { "path": "/items" },

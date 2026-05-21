@@ -305,7 +305,7 @@ mod tests {
     const SAMPLE_MANIFEST: &str = r#"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 description: A small demo source used in snapshot tests
 inputs:
@@ -325,7 +325,7 @@ auth:
     - name: Authorization
       from: template
       template: Bearer {{input.DEMO_TOKEN}}
-tables:
+relations:
   - name: widgets
     description: All the widgets
     request:
@@ -347,10 +347,10 @@ tables:
     const NO_INPUTS_MANIFEST: &str = r"
 name: minimal
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 base_url: https://api.example.com
-tables:
+relations:
   - name: pings
     description: Ping events
     request:

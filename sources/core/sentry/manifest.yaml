@@ -1,6 +1,6 @@
 name: sentry
 version: 2.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 description: >-
   Query issues, events, projects, releases, deployments, teams, and members
@@ -25,7 +25,7 @@ auth:
       template: Bearer {{input.SENTRY_TOKEN}}
 test_queries:
   - SELECT * FROM sentry.projects LIMIT 1
-tables:
+relations:
   - name: projects
     description: Sentry projects in the organization
     guide: |

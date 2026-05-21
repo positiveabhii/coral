@@ -122,6 +122,9 @@ impl TableCommon {
     }
 }
 
+/// Shared relation metadata used by backend-specific relation specs.
+pub type RelationCommon = TableCommon;
+
 /// How a filter value is matched against `SQL` predicates.
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -151,6 +154,10 @@ pub struct SourceTableFunctionSpec {
     pub name: String,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub effect: WriteEffect,
+    #[serde(default)]
+    pub idempotency: IdempotencyClass,
     #[serde(default)]
     pub fetch_limit_default: Option<usize>,
     #[serde(default)]
@@ -212,6 +219,56 @@ pub enum HttpMethod {
     #[default]
     GET,
     POST,
+    PUT,
+    PATCH,
+    DELETE,
+}
+
+/// Effect class for SQL-facing source operations.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteEffect {
+    /// Operation only reads provider state.
+    #[default]
+    Read,
+    /// Operation may create or update provider state.
+    Write,
+    /// Operation may delete provider state or perform another destructive action.
+    Destructive,
+}
+
+impl WriteEffect {
+    /// Stable catalog/API spelling for this effect.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Destructive => "destructive",
+        }
+    }
+}
+
+/// Idempotency class for effectful operations.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum IdempotencyClass {
+    /// Repeating the operation should produce the same provider effect.
+    #[default]
+    Idempotent,
+    /// Repeating the operation may duplicate provider effects.
+    NonIdempotent,
+}
+
+impl IdempotencyClass {
+    /// Stable catalog/API spelling for this idempotency class.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idempotent => "idempotent",
+            Self::NonIdempotent => "non_idempotent",
+        }
+    }
 }
 
 /// One query parameter emitted into an HTTP request.
@@ -858,7 +915,10 @@ mod tests {
             },
         );
         let filters = HashSet::new();
-        assert_eq!(table.resolve_request(&filters).path, "/items");
+        assert_eq!(
+            table.resolve_read_request(&filters).expect("read").path,
+            "/items"
+        );
     }
 
     #[test]
@@ -879,7 +939,7 @@ mod tests {
                 headers: vec![],
             },
         );
-        table.requests = vec![RequestRouteSpec {
+        table.read.as_mut().expect("read").requests = vec![RequestRouteSpec {
             when_filters: vec!["id".into()],
             request: RequestSpec {
                 method: HttpMethod::GET,
@@ -890,9 +950,15 @@ mod tests {
             },
         }];
         let mut filters = HashSet::new();
-        assert_eq!(table.resolve_request(&filters).path, "/items");
+        assert_eq!(
+            table.resolve_read_request(&filters).expect("read").path,
+            "/items"
+        );
         filters.insert("id".to_string());
-        assert_eq!(table.resolve_request(&filters).path, "/items/{{filter.id}}");
+        assert_eq!(
+            table.resolve_read_request(&filters).expect("read").path,
+            "/items/{{filter.id}}"
+        );
     }
 
     #[test]
@@ -920,7 +986,7 @@ mod tests {
                 headers: vec![],
             },
         );
-        table.requests = vec![
+        table.read.as_mut().expect("read").requests = vec![
             RequestRouteSpec {
                 when_filters: vec!["id".into()],
                 request: RequestSpec {
@@ -946,7 +1012,7 @@ mod tests {
 
         let filters = HashSet::from(["id".to_string(), "org".to_string()]);
         assert_eq!(
-            table.resolve_request(&filters).path,
+            table.resolve_read_request(&filters).expect("read").path,
             "/orgs/{{filter.org}}/items/{{filter.id}}"
         );
     }

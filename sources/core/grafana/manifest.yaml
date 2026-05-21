@@ -1,6 +1,6 @@
 name: grafana
 version: 0.1.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 description: >-
   Query dashboards, folders, datasources, alert rules, annotations,
@@ -30,7 +30,7 @@ auth:
 test_queries:
   - SELECT * FROM grafana.datasources LIMIT 1
 
-tables:
+relations:
   - name: dashboards
     description: Grafana dashboards listed via the search API
     guide: >

@@ -4,7 +4,33 @@ package coral.v1;
 
 import "coral/v1/resources.proto";
 
-// A column exposed by a discoverable query table.
+// Relation operations supported by a query-visible relation.
+enum RelationOperation {
+  // Operation was not specified.
+  RELATION_OPERATION_UNSPECIFIED = 0;
+  // Relation supports SELECT.
+  RELATION_OPERATION_READ = 1;
+  // Relation supports INSERT.
+  RELATION_OPERATION_INSERT = 2;
+  // Relation supports UPDATE.
+  RELATION_OPERATION_UPDATE = 3;
+  // Relation supports DELETE.
+  RELATION_OPERATION_DELETE = 4;
+  // Relation supports TRUNCATE.
+  RELATION_OPERATION_TRUNCATE = 5;
+}
+
+// Write behavior for one column.
+message ColumnWriteBehavior {
+  // Whether the column is used as a direct write target key.
+  bool is_key = 1;
+  // Whether the column can be assigned or inserted through a write operation.
+  bool is_writable = 2;
+  // Whether inserts must provide this writable column.
+  bool required_on_insert = 3;
+}
+
+// A column exposed by a discoverable SQL relation.
 message Column {
   // The column name as exposed by the query engine.
   string name = 1;
@@ -20,38 +46,54 @@ message Column {
   string description = 6;
   // Zero-based position of the column within the table.
   uint32 ordinal_position = 7;
+  // Write behavior for this column.
+  ColumnWriteBehavior write_behavior = 8;
 }
 
-// A query-visible table in one workspace.
-message Table {
-  // Workspace whose source set makes this table visible.
+// Capabilities exposed by one query-visible relation.
+message RelationCapabilities {
+  // Supported SQL operations.
+  repeated RelationOperation operations = 1;
+  // Direct-key columns required by relation write operations.
+  repeated string derived_key_columns = 2;
+  // Highest effect class exposed by this relation: read, write, or destructive.
+  string effect = 3;
+}
+
+// A query-visible relation in one workspace.
+message Relation {
+  // Workspace whose source set makes this relation visible.
   Workspace workspace = 1;
   // The schema name used for SQL qualification.
   string schema_name = 2;
-  // The bare table name within the schema.
+  // The bare relation name within the schema.
   string name = 3;
-  // The user-facing table description.
+  // The user-facing relation description.
   string description = 4;
-  // The columns exposed by the table.
+  // The columns exposed by the relation.
   repeated Column columns = 5;
   // Required filter names, if any.
   repeated string required_filters = 6;
   // User-facing query guidance.
   string guide = 7;
+  // Relation operation and effect metadata.
+  RelationCapabilities capabilities = 8;
 }
 
-// Table metadata without full column definitions.
-message TableSummary {
-  // Workspace that scopes this table.
+// Relation metadata without full column definitions.
+message RelationSummary {
+  // Workspace that scopes this relation.
   Workspace workspace = 1;
-  // Source schema that owns the table.
+  // Source schema that owns the relation.
   string schema_name = 2;
-  // Table name within the schema.
+  // Relation name within the schema.
   string name = 3;
-  // Human-readable table description.
+  // Human-readable relation description.
   string description = 4;
-  // Filter names that must be constrained when querying this table.
+  // Filter names that must be constrained when querying this relation.
   repeated string required_filters = 5;
   // User-facing query guidance.
   string guide = 6;
+  // Relation operation and effect metadata.
+  RelationCapabilities capabilities = 7;
 }

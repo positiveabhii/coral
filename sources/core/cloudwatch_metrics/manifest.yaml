@@ -1,4 +1,4 @@
-dsl_version: 3
+dsl_version: 4
 name: cloudwatch_metrics
 version: 0.2.0
 backend: http
@@ -44,7 +44,7 @@ request_headers:
 test_queries:
   - SELECT * FROM cloudwatch_metrics.metrics WHERE namespace = 'AWS/EC2' LIMIT 1
   - SELECT * FROM cloudwatch_metrics.metric_alarms LIMIT 1
-tables:
+relations:
   - name: metrics
     description: CloudWatch metric identities returned by ListMetrics.
     guide: >

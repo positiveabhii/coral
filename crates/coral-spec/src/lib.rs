@@ -48,9 +48,9 @@
 //!     r#"
 //! name: demo
 //! version: 0.1.0
-//! dsl_version: 3
+//! dsl_version: 4
 //! backend: jsonl
-//! tables:
+//! relations:
 //!   - name: events
 //!     description: Demo events
 //!     source:
@@ -89,11 +89,11 @@ pub use backends::http::{AuthSpec, BasicAuthSpec, CustomAuthSpec, HeaderAuthSpec
 pub(crate) use common::validate_test_queries;
 pub use common::{
     BodyFieldSpec, BodySpec, ColumnSpec, ExprSpec, FilterMode, FilterSpec, FunctionArgBinding,
-    HeaderSpec, HttpMethod, ManifestDataType, PageSizeSpec, PaginationMode, PaginationSpec,
-    QueryParamSpec, RequestRouteSpec, RequestSpec, ResponseBodyFormat, ResponseSpec, RowStrategy,
-    SourceBackend, SourceManifestCommon, SourceTableFunctionSpec, TableCommon,
-    TableFunctionArgSpec, TimestampInput, ValidatedPagination, ValidatedPaginationMode,
-    ValueSourceSpec,
+    HeaderSpec, HttpMethod, IdempotencyClass, ManifestDataType, PageSizeSpec, PaginationMode,
+    PaginationSpec, QueryParamSpec, RelationCommon, RequestRouteSpec, RequestSpec,
+    ResponseBodyFormat, ResponseSpec, RowStrategy, SourceBackend, SourceManifestCommon,
+    SourceTableFunctionSpec, TableCommon, TableFunctionArgSpec, TimestampInput,
+    ValidatedPagination, ValidatedPaginationMode, ValueSourceSpec, WriteEffect,
 };
 pub use error::{ManifestError, Result};
 pub use inputs::{ManifestInputKind, ManifestInputSpec, resolve_inputs};
@@ -104,5 +104,5 @@ pub use parser::{
 pub use template::{ParsedTemplate, TemplateNamespace, TemplatePart, TemplateToken};
 pub(crate) use validate::{
     validate_columns, validate_filters_and_column_exprs, validate_http_function,
-    validate_http_function_names, validate_http_table, validate_table_names,
+    validate_http_function_names, validate_http_table, validate_relation_names,
 };

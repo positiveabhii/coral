@@ -31,7 +31,7 @@
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!
 //! # let source_spec = parse_source_manifest_yaml(
-//! #     "name: demo\nversion: 0.1.0\ndsl_version: 3\nbackend: jsonl\ntables: []",
+//! #     "name: demo\nversion: 0.1.0\ndsl_version: 4\nbackend: jsonl\ntables: []",
 //! # )?;
 //! # let sources = vec![QuerySource::new(
 //! #     source_spec,
@@ -41,7 +41,7 @@
 //! # async fn demo(
 //! #     sources: &[QuerySource],
 //! # ) -> Result<(), Box<dyn std::error::Error>> {
-//! let _ = CoralQuery::list_tables(sources, QueryRuntimeConfig::default(), None, None).await?;
+//! let _ = CoralQuery::list_relations(sources, QueryRuntimeConfig::default(), None, None).await?;
 //! # Ok(())
 //! # }
 //! # Ok(())
@@ -66,18 +66,19 @@ pub use composition::{
     SourceTables,
 };
 pub use contracts::{
-    ColumnInfo, CoreError, QueryExecution, QueryPlan, QueryRuntimeConfig, QueryRuntimeContext,
-    QuerySource, QueryTestFailure, QueryTestResult, QueryTestSuccess, SourceValidationReport,
-    StatusCode, StructuredQueryError, TableInfo,
+    ColumnInfo, ColumnWriteBehavior, CoreError, QueryExecution, QueryPlan, QueryRuntimeConfig,
+    QueryRuntimeContext, QuerySource, QueryTestFailure, QueryTestResult, QueryTestSuccess,
+    RelationCapabilities, RelationInfo, RelationOperation, SourceValidationReport,
+    SqlExecutionSummary, StatusCode, StructuredQueryError,
 };
 
 /// High-level query operations for the local query engine.
 pub struct CoralQuery;
 
 impl CoralQuery {
-    /// Lists queryable tables from the provided source set.
+    /// Lists queryable relations from the provided source set.
     ///
-    /// When `schema_filter` is present, only tables for that visible `SQL`
+    /// When `schema_filter` is present, only relations for that visible `SQL`
     /// schema are returned.
     ///
     /// # Errors
@@ -85,15 +86,15 @@ impl CoralQuery {
     /// Returns [`CoreError`] if credential resolution fails, if any validated
     /// source spec cannot be compiled, or if the underlying query runtime
     /// cannot be built.
-    pub async fn list_tables(
+    pub async fn list_relations(
         sources: &[QuerySource],
         runtime: QueryRuntimeConfig,
         schema_filter: Option<&str>,
-        table_filter: Option<&str>,
-    ) -> Result<Vec<TableInfo>, CoreError> {
+        relation_filter: Option<&str>,
+    ) -> Result<Vec<RelationInfo>, CoreError> {
         Ok(runtime::query::build_runtime(sources, runtime)
             .await?
-            .list_tables(schema_filter, table_filter))
+            .list_relations(schema_filter, relation_filter))
     }
 
     /// Executes one `SQL` statement over the provided source set.
@@ -150,8 +151,8 @@ impl CoralQuery {
     pub async fn test_source(
         source: &QuerySource,
         runtime: QueryRuntimeConfig,
-    ) -> Result<Vec<TableInfo>, CoreError> {
-        Ok(Self::validate_source(source, runtime, &[]).await?.tables)
+    ) -> Result<Vec<RelationInfo>, CoreError> {
+        Ok(Self::validate_source(source, runtime, &[]).await?.relations)
     }
 
     /// Validates one source and then executes any declared validation queries.
@@ -168,8 +169,8 @@ impl CoralQuery {
     ) -> Result<SourceValidationReport, CoreError> {
         let query_runtime =
             runtime::query::build_runtime(std::slice::from_ref(source), runtime).await?;
-        let tables = query_runtime.list_tables(Some(source.source_name()), None);
-        if tables.is_empty() {
+        let relations = query_runtime.list_relations(Some(source.source_name()), None);
+        if relations.is_empty() {
             if let Some(failure) = query_runtime.registration_failure(source.source_name()) {
                 return Err(CoreError::FailedPrecondition(failure.detail.clone()));
             }
@@ -198,7 +199,7 @@ impl CoralQuery {
             }
         }
 
-        Ok(SourceValidationReport::new(tables, query_tests))
+        Ok(SourceValidationReport::new(relations, query_tests))
     }
 }
 

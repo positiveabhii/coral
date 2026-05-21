@@ -703,8 +703,8 @@ mod tests {
 
             let kept = tracing::info_span!(
                 target: "coral_app::transport",
-                "query_service_grpc",
-                rpc.service = "coral.v1.QueryService",
+                "sql_service_grpc",
+                rpc.service = "coral.v1.SqlService",
             );
             let _kept = kept.enter();
         });
@@ -717,7 +717,7 @@ mod tests {
             .map(|span| span.name.to_string())
             .collect::<Vec<_>>();
 
-        assert_eq!(span_names, vec!["query_service_grpc"]);
+        assert_eq!(span_names, vec!["sql_service_grpc"]);
         provider.shutdown().expect("provider shutdown");
     }
 

@@ -293,7 +293,7 @@ async fn show_next_steps_screen(
         });
         match action {
             Some(NextStepAction::RunExampleQuery) => {
-                let sql = "SELECT schema_name, COUNT(*) AS table_count FROM coral.tables GROUP BY schema_name ORDER BY 1";
+                let sql = "SELECT schema_name, COUNT(*) AS relation_count FROM coral.relations GROUP BY schema_name ORDER BY 1";
                 match run_first_query(app, sql).await {
                     Ok(output) => {
                         println!();

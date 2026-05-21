@@ -16,9 +16,9 @@ fn events_manifest(name: &str, dir: &Path, column_type: &str) -> Value {
     json!({
         "name": name,
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "jsonl",
-        "tables": [{
+        "relations": [{
             "name": "events",
             "description": "events with JSON-valued properties",
             "source": {

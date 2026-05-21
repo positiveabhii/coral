@@ -9,7 +9,7 @@ use std::fs;
 use coral_api::v1::{
     CreateBundledSourceRequest, DeleteSourceRequest, DiscoverSourcesRequest, ExecuteSqlRequest,
     ExplainSqlRequest, GetSourceInfoRequest, GetSourceRequest, ImportSourceRequest,
-    ListTablesRequest, PaginationRequest, QueryTestFailure, QueryTestSuccess, SourceOrigin,
+    ListRelationsRequest, PaginationRequest, QueryTestFailure, QueryTestSuccess, SourceOrigin,
     SourceSecret, SourceVariable, ValidateSourceRequest, Workspace, query_test_result,
 };
 use coral_client::default_workspace;
@@ -207,10 +207,10 @@ async fn validate_source_returns_tables() {
         .await;
 
     let validated = harness.validate_source("local_messages").await;
-    assert_eq!(validated.tables.len(), 1);
-    assert_eq!(validated.tables[0].schema_name, "local_messages");
-    assert_eq!(validated.tables[0].name, "messages");
-    assert!(validated.tables[0].required_filters.is_empty());
+    assert_eq!(validated.relations.len(), 1);
+    assert_eq!(validated.relations[0].schema_name, "local_messages");
+    assert_eq!(validated.relations[0].name, "messages");
+    assert!(validated.relations[0].required_filters.is_empty());
     assert!(validated.query_tests.is_empty());
 
     let rows = harness
@@ -221,7 +221,7 @@ async fn validate_source_returns_tables() {
 }
 
 #[tokio::test]
-async fn list_tables_supports_legacy_full_response_and_paginated_summaries() {
+async fn list_relations_supports_legacy_full_response_and_paginated_summaries() {
     let harness = GrpcHarness::new().await;
     harness
         .import_source(
@@ -233,32 +233,32 @@ async fn list_tables_supports_legacy_full_response_and_paginated_summaries() {
 
     let legacy = harness
         .query_client()
-        .list_tables(Request::new(ListTablesRequest {
+        .list_relations(Request::new(ListRelationsRequest {
             workspace: Some(default_workspace()),
             schema_name: String::new(),
-            table_name: String::new(),
+            relation_name: String::new(),
             pagination: None,
             omit_columns: false,
         }))
         .await
-        .expect("legacy list tables")
+        .expect("legacy list relations")
         .into_inner();
     let legacy_pagination = legacy.pagination.as_ref().expect("legacy pagination");
     assert_eq!(legacy_pagination.total_count, 3);
     assert_eq!(legacy_pagination.limit, 0);
     assert_eq!(legacy_pagination.offset, 0);
     assert!(!legacy_pagination.has_more);
-    assert_eq!(legacy.tables.len(), 3);
-    assert!(legacy.table_summaries.is_empty());
-    assert_eq!(legacy.tables[0].name, "events");
-    assert!(!legacy.tables[0].columns.is_empty());
+    assert_eq!(legacy.relations.len(), 3);
+    assert!(legacy.relation_summaries.is_empty());
+    assert_eq!(legacy.relations[0].name, "events");
+    assert!(!legacy.relations[0].columns.is_empty());
 
     let page = harness
         .query_client()
-        .list_tables(Request::new(ListTablesRequest {
+        .list_relations(Request::new(ListRelationsRequest {
             workspace: Some(default_workspace()),
             schema_name: "local_messages".to_string(),
-            table_name: String::new(),
+            relation_name: String::new(),
             pagination: Some(PaginationRequest {
                 limit: 2,
                 offset: 0,
@@ -266,7 +266,7 @@ async fn list_tables_supports_legacy_full_response_and_paginated_summaries() {
             omit_columns: true,
         }))
         .await
-        .expect("paginated list tables")
+        .expect("paginated list relations")
         .into_inner();
     let page_pagination = page.pagination.as_ref().expect("page pagination");
     assert_eq!(page_pagination.total_count, 3);
@@ -275,22 +275,22 @@ async fn list_tables_supports_legacy_full_response_and_paginated_summaries() {
     assert!(page_pagination.has_more);
     assert_eq!(page_pagination.next_offset, 2);
     assert_eq!(
-        page.table_summaries
+        page.relation_summaries
             .iter()
             .map(|table| table.name.as_str())
             .collect::<Vec<_>>(),
         vec!["events", "messages"]
     );
-    assert!(page.tables.is_empty());
+    assert!(page.relations.is_empty());
 
     assert_exact_table_filter(&harness).await;
 
     let unknown_schema = harness
         .query_client()
-        .list_tables(Request::new(ListTablesRequest {
+        .list_relations(Request::new(ListRelationsRequest {
             workspace: Some(default_workspace()),
             schema_name: "missing".to_string(),
-            table_name: String::new(),
+            relation_name: String::new(),
             pagination: Some(PaginationRequest {
                 limit: 2,
                 offset: 0,
@@ -298,25 +298,25 @@ async fn list_tables_supports_legacy_full_response_and_paginated_summaries() {
             omit_columns: true,
         }))
         .await
-        .expect("unknown schema list tables")
+        .expect("unknown schema list relations")
         .into_inner();
     let unknown_schema_pagination = unknown_schema
         .pagination
         .as_ref()
         .expect("unknown schema pagination");
     assert_eq!(unknown_schema_pagination.total_count, 0);
-    assert!(unknown_schema.tables.is_empty());
-    assert!(unknown_schema.table_summaries.is_empty());
+    assert!(unknown_schema.relations.is_empty());
+    assert!(unknown_schema.relation_summaries.is_empty());
     assert!(!unknown_schema_pagination.has_more);
 }
 
 async fn assert_exact_table_filter(harness: &GrpcHarness) {
     let exact_table = harness
         .query_client()
-        .list_tables(Request::new(ListTablesRequest {
+        .list_relations(Request::new(ListRelationsRequest {
             workspace: Some(default_workspace()),
             schema_name: "local_messages".to_string(),
-            table_name: "messages".to_string(),
+            relation_name: "messages".to_string(),
             pagination: Some(PaginationRequest {
                 limit: 1,
                 offset: 0,
@@ -324,17 +324,17 @@ async fn assert_exact_table_filter(harness: &GrpcHarness) {
             omit_columns: false,
         }))
         .await
-        .expect("exact table list tables")
+        .expect("exact relation list relations")
         .into_inner();
     let exact_pagination = exact_table
         .pagination
         .as_ref()
-        .expect("exact table pagination");
+        .expect("exact relation pagination");
     assert_eq!(exact_pagination.total_count, 1);
-    assert_eq!(exact_table.tables.len(), 1);
-    assert_eq!(exact_table.tables[0].schema_name, "local_messages");
-    assert_eq!(exact_table.tables[0].name, "messages");
-    assert!(!exact_table.tables[0].columns.is_empty());
+    assert_eq!(exact_table.relations.len(), 1);
+    assert_eq!(exact_table.relations[0].schema_name, "local_messages");
+    assert_eq!(exact_table.relations[0].name, "messages");
+    assert!(!exact_table.relations[0].columns.is_empty());
 }
 
 #[tokio::test]
@@ -385,7 +385,7 @@ async fn validate_source_returns_query_test_results_without_unary_error() {
         .await;
 
     let validated = harness.validate_source("local_messages").await;
-    assert_eq!(validated.tables.len(), 1);
+    assert_eq!(validated.relations.len(), 1);
     assert_eq!(validated.query_tests.len(), 2);
     assert!(matches!(
         &validated.query_tests[0].outcome,
@@ -399,7 +399,7 @@ async fn validate_source_returns_query_test_results_without_unary_error() {
 }
 
 #[tokio::test]
-async fn query_execution_rejects_non_read_only_sql() {
+async fn query_execution_rejects_ddl_copy_and_session_statements() {
     let harness = GrpcHarness::new().await;
     let manifest_yaml = fixture_manifest_yaml(harness.temp_path());
     harness
@@ -419,7 +419,11 @@ async fn query_execution_rejects_non_read_only_sql() {
         .await
         .expect_err("COPY TO should be rejected");
     assert_eq!(copy_error.code(), tonic::Code::InvalidArgument);
-    assert!(copy_error.message().contains("DML not supported: COPY"));
+    assert!(
+        copy_error
+            .message()
+            .contains("COPY is not supported by Coral SQL")
+    );
 
     let create_error = harness
         .query_client()
@@ -461,9 +465,9 @@ async fn validate_source_with_unreachable_api_returns_declared_tables() {
         .await
         .expect("unreachable source validation should still enumerate tables")
         .into_inner();
-    assert_eq!(validated.tables.len(), 1);
-    assert_eq!(validated.tables[0].schema_name, "unreachable_messages");
-    assert_eq!(validated.tables[0].name, "messages");
+    assert_eq!(validated.relations.len(), 1);
+    assert_eq!(validated.relations[0].schema_name, "unreachable_messages");
+    assert_eq!(validated.relations[0].name, "messages");
     assert!(validated.query_tests.is_empty());
 }
 
@@ -481,7 +485,7 @@ async fn validate_source_with_unreachable_api_and_test_queries_returns_query_fai
         .await;
 
     let validated = harness.validate_source("unreachable_messages").await;
-    assert_eq!(validated.tables.len(), 1);
+    assert_eq!(validated.relations.len(), 1);
     assert_eq!(validated.query_tests.len(), 1);
     assert!(matches!(
         &validated.query_tests[0].outcome,
@@ -517,9 +521,9 @@ async fn validate_source_skipped_registration_returns_unary_failed_precondition(
     let manifest_yaml = serde_yaml::to_string(&serde_json::json!({
         "name": "missing_messages",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "jsonl",
-        "tables": [{
+        "relations": [{
             "name": "messages",
             "description": "Missing messages",
             "source": {
@@ -884,7 +888,7 @@ async fn create_bundled_source_registers_tables() {
         .await
         .expect("create bundled github source");
 
-    let tables = harness.list_tables().await;
+    let tables = harness.list_relations().await;
     assert!(
         tables.iter().any(|table| table.schema_name == "github"),
         "github tables should register once the template secret dependency is provided"
@@ -1045,7 +1049,7 @@ async fn create_bundled_source_does_not_persist_manifest_to_config_dir() {
     );
 
     // The source should still be fully functional despite no on-disk manifest.
-    let tables = harness.list_tables().await;
+    let tables = harness.list_relations().await;
     assert!(
         tables.iter().any(|table| table.schema_name == "github"),
         "bundled source should register tables resolved from the binary"
@@ -1348,12 +1352,12 @@ async fn rejects_invalid_workspace_and_source_names() {
 
     let invalid_workspace = harness
         .query_client()
-        .list_tables(Request::new(ListTablesRequest {
+        .list_relations(Request::new(ListRelationsRequest {
             workspace: Some(Workspace {
                 name: r"bad\workspace".to_string(),
             }),
             schema_name: String::new(),
-            table_name: String::new(),
+            relation_name: String::new(),
             pagination: None,
             omit_columns: false,
         }))

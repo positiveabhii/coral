@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use datafusion::common::utils::quote_identifier;
 
-use super::catalog::TableInfo;
+use super::catalog::RelationInfo;
 use super::error::StatusCode;
 
 /// Wire-stable `reason` code for unknown-column errors.
@@ -173,7 +173,10 @@ impl StructuredQueryError {
     /// synthetic `public` schema from a real user source also named `public`,
     /// and (b) recover a correct `(schema, table)` split when the source
     /// name itself contains a dot.
-    pub(crate) fn table_not_found(missing_ref: &TableRefParts, known_tables: &[TableInfo]) -> Self {
+    pub(crate) fn table_not_found(
+        missing_ref: &TableRefParts,
+        known_tables: &[RelationInfo],
+    ) -> Self {
         let parsed = parse_table_ref(missing_ref, known_tables);
 
         let (schema, table) = match &parsed {
@@ -343,14 +346,14 @@ fn unknown_column_hint(missing: &ColumnParts, valid_columns: &[ColumnParts]) -> 
 fn table_not_found_hint(
     schema: Option<&str>,
     table: &str,
-    known_tables: &[TableInfo],
+    known_tables: &[RelationInfo],
 ) -> Option<String> {
     let Some(schema) = schema else {
         // Unqualified `FROM X` could not be resolved. Before falling back to
         // the generic catalog pointer, scan every known table across every
         // schema for a close match — if `FROM account` has `stripe.accounts`
         // in the catalog, suggest the schema-qualified name instead of
-        // sending the user to `coral.tables`.
+        // sending the user to `coral.relations`.
         if table.contains('.')
             && let Some(info) = quoted_qualified_table_match(table, known_tables)
         {
@@ -361,8 +364,10 @@ fn table_not_found_hint(
         let best = known_tables
             .iter()
             .filter_map(|info| {
-                let score =
-                    strsim::normalized_levenshtein(&info.table_name.to_lowercase(), &table_lower);
+                let score = strsim::normalized_levenshtein(
+                    &info.relation_name.to_lowercase(),
+                    &table_lower,
+                );
                 (score >= DID_YOU_MEAN_SIMILARITY).then_some((info, score))
             })
             .max_by(|left, right| {
@@ -374,13 +379,13 @@ fn table_not_found_hint(
             return Some(did_you_mean_hint(&format_schema_table(winner)));
         }
         return Some(
-            "List available tables with `SELECT schema_name, table_name FROM coral.tables`."
+            "List available relations with `SELECT schema_name, relation_name FROM coral.relations`."
                 .to_string(),
         );
     };
 
     let schema_lower = schema.to_lowercase();
-    let tables_in_schema: Vec<&TableInfo> = known_tables
+    let tables_in_schema: Vec<&RelationInfo> = known_tables
         .iter()
         .filter(|info| info.schema_name.to_lowercase() == schema_lower)
         .collect();
@@ -395,7 +400,7 @@ fn table_not_found_hint(
         // enrich the hint at their layer.
         return Some(format!(
             "Schema `{schema}` is not currently registered. \
-             Query `SELECT DISTINCT schema_name FROM coral.tables` \
+             Query `SELECT DISTINCT schema_name FROM coral.relations` \
              to see available schemas."
         ));
     }
@@ -403,7 +408,7 @@ fn table_not_found_hint(
     let table_lower = table.to_lowercase();
     if let Some(hit) = tables_in_schema
         .iter()
-        .find(|info| info.table_name.to_lowercase() == table_lower)
+        .find(|info| info.relation_name.to_lowercase() == table_lower)
     {
         return Some(case_sensitive_hint(&format_schema_table(hit)));
     }
@@ -412,7 +417,7 @@ fn table_not_found_hint(
         .iter()
         .filter_map(|info| {
             let score =
-                strsim::normalized_levenshtein(&info.table_name.to_lowercase(), &table_lower);
+                strsim::normalized_levenshtein(&info.relation_name.to_lowercase(), &table_lower);
             (score >= DID_YOU_MEAN_SIMILARITY).then_some((info, score))
         })
         .max_by(|left, right| {
@@ -425,8 +430,8 @@ fn table_not_found_hint(
 
 fn quoted_qualified_table_match<'a>(
     table: &str,
-    known_tables: &'a [TableInfo],
-) -> Option<&'a TableInfo> {
+    known_tables: &'a [RelationInfo],
+) -> Option<&'a RelationInfo> {
     if let Some(exact) = known_tables
         .iter()
         .find(|info| raw_schema_table_name(info) == table)
@@ -441,7 +446,7 @@ fn quoted_qualified_table_match<'a>(
     matches.next().is_none().then_some(first)
 }
 
-fn quoted_qualified_table_hint(missing: &str, info: &TableInfo) -> String {
+fn quoted_qualified_table_hint(missing: &str, info: &RelationInfo) -> String {
     let reference = format_schema_table(info);
     let fully_quoted_reference = format_schema_table_fully_quoted(info);
     let suggestions = if reference == fully_quoted_reference {
@@ -457,26 +462,26 @@ fn quoted_qualified_table_hint(missing: &str, info: &TableInfo) -> String {
     )
 }
 
-fn raw_schema_table_name(info: &TableInfo) -> String {
-    format!("{}.{}", info.schema_name, info.table_name)
+fn raw_schema_table_name(info: &RelationInfo) -> String {
+    format!("{}.{}", info.schema_name, info.relation_name)
 }
 
 /// Renders `schema.table` with per-component SQL quoting (dotted source
 /// names stay one quoted identifier; case-preserving names are quoted
 /// only when they would otherwise round-trip wrong).
-fn format_schema_table(info: &TableInfo) -> String {
+fn format_schema_table(info: &RelationInfo) -> String {
     format!(
         "{}.{}",
         quote_dotted_identifier(&info.schema_name),
-        quote_identifier(&info.table_name)
+        quote_identifier(&info.relation_name)
     )
 }
 
-fn format_schema_table_fully_quoted(info: &TableInfo) -> String {
+fn format_schema_table_fully_quoted(info: &RelationInfo) -> String {
     format!(
         "{}.{}",
         quote_identifier_always(&info.schema_name),
-        quote_identifier_always(&info.table_name)
+        quote_identifier_always(&info.relation_name)
     )
 }
 
@@ -499,7 +504,7 @@ enum ParsedTableRef {
 /// For dotted source names, we try increasingly long schema candidates
 /// against the registered set so `datafusion."foo.bar".missing` is not
 /// silently sliced into `bar` / `missing`.
-fn parse_table_ref(reference: &TableRefParts, known_tables: &[TableInfo]) -> ParsedTableRef {
+fn parse_table_ref(reference: &TableRefParts, known_tables: &[RelationInfo]) -> ParsedTableRef {
     let parts = reference.parts.as_slice();
 
     if parts.is_empty() {
@@ -583,7 +588,7 @@ fn join_ref_parts(parts: &[String]) -> String {
     parts.join(".")
 }
 
-fn schema_is_registered(candidate: &str, known_tables: &[TableInfo]) -> bool {
+fn schema_is_registered(candidate: &str, known_tables: &[RelationInfo]) -> bool {
     let lowered = candidate.to_lowercase();
     known_tables
         .iter()
@@ -613,15 +618,21 @@ fn quote_identifier_always(ident: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contracts::catalog::{RelationCapabilities, RelationOperation};
 
-    fn table(schema: &str, name: &str) -> TableInfo {
-        TableInfo {
+    fn table(schema: &str, name: &str) -> RelationInfo {
+        RelationInfo {
             schema_name: schema.to_string(),
-            table_name: name.to_string(),
+            relation_name: name.to_string(),
             description: String::new(),
             guide: String::new(),
             columns: vec![],
             required_filters: vec![],
+            capabilities: RelationCapabilities {
+                operations: vec![RelationOperation::Read],
+                derived_key_columns: vec![],
+                effect: "read".to_string(),
+            },
         }
     }
 
@@ -718,7 +729,7 @@ mod tests {
     }
 
     #[test]
-    fn table_not_found_missing_schema_points_at_coral_tables_catalog() {
+    fn table_not_found_missing_schema_points_at_coral_relations_catalog() {
         let tables = vec![table("github", "issues")];
         let err = StructuredQueryError::table_not_found(
             &tr(&["datafusion", "hockey", "master"]),
@@ -728,7 +739,7 @@ mod tests {
         assert_eq!(err.reason(), TABLE_NOT_FOUND_REASON);
         assert_eq!(err.status(), StatusCode::NotFound);
         let hint = err.hint().expect("hint should be present");
-        assert!(hint.contains("coral.tables"), "got: {hint}");
+        assert!(hint.contains("coral.relations"), "got: {hint}");
         assert!(
             !hint.contains("coral source"),
             "hint must stay transport-neutral (no CLI-specific commands), got: {hint}"
@@ -845,7 +856,7 @@ mod tests {
     fn table_not_found_quoted_qualified_name_suggests_sql_reference() {
         // `FROM "github.pulls"` reaches the planner as a single bare
         // identifier under the synthetic `public` schema. When that flat
-        // string exactly matches a visible `schema_name.table_name`, point
+        // string exactly matches a visible `schema_name.relation_name`, point
         // at the qualified SQL form before typo-based fallback can fire.
         let tables = vec![table("github", "pulls")];
         let err = StructuredQueryError::table_not_found(
@@ -992,7 +1003,7 @@ mod tests {
         let err = StructuredQueryError::table_not_found(&tr(&["games"]), &tables);
 
         let hint = err.hint().expect("hint should be present");
-        assert!(hint.contains("coral.tables"), "got: {hint}");
+        assert!(hint.contains("coral.relations"), "got: {hint}");
     }
 
     #[test]
@@ -1030,7 +1041,7 @@ mod tests {
 
         let hint = err.hint().expect("hint should be present");
         assert!(
-            hint.contains("coral.tables"),
+            hint.contains("coral.relations"),
             "no-match unqualified case should fall back to catalog pointer, got: {hint}"
         );
     }

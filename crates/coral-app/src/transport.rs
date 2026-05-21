@@ -5,7 +5,9 @@ use std::future::Future;
 use coral_api::{
     CORAL_ERROR_DOMAIN, grpc_response_status_code,
     v1::{
-        Column, QueryTestFailure, QueryTestResult, QueryTestSuccess, Source, Table, TableSummary,
+        Column, ColumnWriteBehavior as ProtoColumnWriteBehavior, QueryTestFailure, QueryTestResult,
+        QueryTestSuccess, Relation, RelationCapabilities as ProtoRelationCapabilities,
+        RelationOperation as ProtoRelationOperation, RelationSummary, Source,
         ValidateSourceResponse, Workspace, query_test_result,
     },
 };
@@ -243,32 +245,33 @@ pub(crate) fn workspace_to_proto(workspace_name: &WorkspaceName) -> Workspace {
     }
 }
 
-pub(crate) fn table_to_proto(
+pub(crate) fn relation_to_proto(
     workspace_name: &WorkspaceName,
-    table: coral_engine::TableInfo,
-) -> Table {
-    table_to_proto_with_columns(workspace_name, table)
+    relation: coral_engine::RelationInfo,
+) -> Relation {
+    relation_to_proto_with_columns(workspace_name, relation)
 }
 
-pub(crate) fn table_summary_to_proto(
+pub(crate) fn relation_summary_to_proto(
     workspace_name: &WorkspaceName,
-    table: coral_engine::TableInfo,
-) -> TableSummary {
-    TableSummary {
+    relation: coral_engine::RelationInfo,
+) -> RelationSummary {
+    RelationSummary {
         workspace: Some(workspace_to_proto(workspace_name)),
-        schema_name: table.schema_name,
-        name: table.table_name,
-        description: table.description,
-        required_filters: table.required_filters,
-        guide: table.guide,
+        schema_name: relation.schema_name,
+        name: relation.relation_name,
+        description: relation.description,
+        required_filters: relation.required_filters,
+        guide: relation.guide,
+        capabilities: Some(relation_capabilities_to_proto(relation.capabilities)),
     }
 }
 
-fn table_to_proto_with_columns(
+fn relation_to_proto_with_columns(
     workspace_name: &WorkspaceName,
-    table: coral_engine::TableInfo,
-) -> Table {
-    let columns = table
+    relation: coral_engine::RelationInfo,
+) -> Relation {
+    let columns = relation
         .columns
         .into_iter()
         .map(|column| Column {
@@ -279,17 +282,47 @@ fn table_to_proto_with_columns(
             is_required_filter: column.is_required_filter,
             description: column.description,
             ordinal_position: column.ordinal_position,
+            write_behavior: Some(ProtoColumnWriteBehavior {
+                is_key: column.write_behavior.is_key,
+                is_writable: column.write_behavior.is_writable,
+                required_on_insert: column.write_behavior.required_on_insert,
+            }),
         })
         .collect();
 
-    Table {
+    Relation {
         workspace: Some(workspace_to_proto(workspace_name)),
-        schema_name: table.schema_name,
-        name: table.table_name,
-        description: table.description,
+        schema_name: relation.schema_name,
+        name: relation.relation_name,
+        description: relation.description,
         columns,
-        required_filters: table.required_filters,
-        guide: table.guide,
+        required_filters: relation.required_filters,
+        guide: relation.guide,
+        capabilities: Some(relation_capabilities_to_proto(relation.capabilities)),
+    }
+}
+
+fn relation_capabilities_to_proto(
+    capabilities: coral_engine::RelationCapabilities,
+) -> ProtoRelationCapabilities {
+    ProtoRelationCapabilities {
+        operations: capabilities
+            .operations
+            .into_iter()
+            .map(relation_operation_to_proto)
+            .collect(),
+        derived_key_columns: capabilities.derived_key_columns,
+        effect: capabilities.effect,
+    }
+}
+
+fn relation_operation_to_proto(operation: coral_engine::RelationOperation) -> i32 {
+    match operation {
+        coral_engine::RelationOperation::Read => ProtoRelationOperation::Read as i32,
+        coral_engine::RelationOperation::Insert => ProtoRelationOperation::Insert as i32,
+        coral_engine::RelationOperation::Update => ProtoRelationOperation::Update as i32,
+        coral_engine::RelationOperation::Delete => ProtoRelationOperation::Delete as i32,
+        coral_engine::RelationOperation::Truncate => ProtoRelationOperation::Truncate as i32,
     }
 }
 
@@ -316,14 +349,14 @@ pub(crate) fn validate_source_response_to_proto(
     report: coral_engine::SourceValidationReport,
 ) -> ValidateSourceResponse {
     let coral_engine::SourceValidationReport {
-        tables,
+        relations,
         query_tests,
     } = report;
     ValidateSourceResponse {
         source: Some(source),
-        tables: tables
+        relations: relations
             .into_iter()
-            .map(|table| table_to_proto(workspace_name, table))
+            .map(|relation| relation_to_proto(workspace_name, relation))
             .collect(),
         query_tests: query_tests.iter().map(query_test_result_to_proto).collect(),
     }
@@ -344,14 +377,15 @@ mod tests {
 
     use super::{
         GrpcMethodMetadata, GrpcServerMethod, grpc_method, query_status,
-        query_test_result_to_proto, table_summary_to_proto, table_to_proto,
+        query_test_result_to_proto, relation_summary_to_proto, relation_to_proto,
         workspace_name_from_proto, workspace_to_proto,
     };
     use crate::bootstrap::AppError;
     use crate::query::manager::QueryManagerError;
     use crate::workspaces::WorkspaceName;
     use coral_engine::{
-        ColumnInfo, CoreError, QueryTestResult as EngineQueryTestResult, TableInfo,
+        ColumnInfo, ColumnWriteBehavior, CoreError, QueryTestResult as EngineQueryTestResult,
+        RelationCapabilities, RelationInfo, RelationOperation,
     };
 
     #[test]
@@ -387,15 +421,15 @@ mod tests {
     #[test]
     fn grpc_server_method_derives_from_uri_path() {
         assert_eq!(
-            GrpcServerMethod::from_path("/coral.v1.QueryService/ExecuteSql"),
+            GrpcServerMethod::from_path("/coral.v1.SqlService/ExecuteSql"),
             Some(GrpcServerMethod {
-                service: "coral.v1.QueryService".to_string(),
+                service: "coral.v1.SqlService".to_string(),
                 method: "ExecuteSql".to_string(),
             })
         );
         assert_eq!(GrpcServerMethod::from_path("/missing-method"), None);
         assert_eq!(
-            GrpcServerMethod::from_path("/coral.v1.QueryService/Extra/Path"),
+            GrpcServerMethod::from_path("/coral.v1.SqlService/Extra/Path"),
             None
         );
     }
@@ -405,11 +439,11 @@ mod tests {
         let mut request = Request::new(());
         request
             .extensions_mut()
-            .insert(GrpcServerMethod::from_path("/coral.v1.QueryService/ExecuteSql").unwrap());
+            .insert(GrpcServerMethod::from_path("/coral.v1.SqlService/ExecuteSql").unwrap());
 
         assert_eq!(
             grpc_method(&request),
-            GrpcMethodMetadata::new("coral.v1.QueryService", "ExecuteSql")
+            GrpcMethodMetadata::new("coral.v1.SqlService", "ExecuteSql")
         );
     }
 
@@ -434,11 +468,11 @@ mod tests {
     }
 
     #[test]
-    fn table_to_proto_preserves_table_metadata() {
+    fn relation_to_proto_preserves_relation_metadata() {
         let workspace_name = WorkspaceName::parse("default").expect("workspace");
-        let table = TableInfo {
+        let relation = RelationInfo {
             schema_name: "demo".to_string(),
-            table_name: "users".to_string(),
+            relation_name: "users".to_string(),
             description: "User records".to_string(),
             guide: "Filter by org_id.".to_string(),
             columns: vec![ColumnInfo {
@@ -447,13 +481,27 @@ mod tests {
                 nullable: false,
                 is_virtual: false,
                 is_required_filter: true,
+                write_behavior: ColumnWriteBehavior {
+                    is_key: true,
+                    is_writable: true,
+                    required_on_insert: true,
+                },
                 description: "User id".to_string(),
                 ordinal_position: 0,
             }],
             required_filters: vec!["org_id".to_string()],
+            capabilities: RelationCapabilities {
+                operations: vec![
+                    RelationOperation::Read,
+                    RelationOperation::Insert,
+                    RelationOperation::Update,
+                ],
+                derived_key_columns: vec!["id".to_string()],
+                effect: "write".to_string(),
+            },
         };
 
-        let proto = table_to_proto(&workspace_name, table);
+        let proto = relation_to_proto(&workspace_name, relation);
 
         assert_eq!(proto.workspace, Some(workspace_to_proto(&workspace_name)));
         assert_eq!(proto.schema_name, "demo");
@@ -466,17 +514,35 @@ mod tests {
         assert!(!proto.columns[0].nullable);
         assert!(!proto.columns[0].is_virtual);
         assert!(proto.columns[0].is_required_filter);
+        let write_behavior = proto.columns[0]
+            .write_behavior
+            .as_ref()
+            .expect("write behavior");
+        assert!(write_behavior.is_key);
+        assert!(write_behavior.is_writable);
+        assert!(write_behavior.required_on_insert);
         assert_eq!(proto.columns[0].description, "User id");
         assert_eq!(proto.columns[0].ordinal_position, 0);
         assert_eq!(proto.required_filters, vec!["org_id"]);
+        let capabilities = proto.capabilities.expect("capabilities");
+        assert_eq!(
+            capabilities.operations,
+            vec![
+                coral_api::v1::RelationOperation::Read as i32,
+                coral_api::v1::RelationOperation::Insert as i32,
+                coral_api::v1::RelationOperation::Update as i32,
+            ]
+        );
+        assert_eq!(capabilities.derived_key_columns, vec!["id"]);
+        assert_eq!(capabilities.effect, "write");
     }
 
     #[test]
-    fn table_summary_to_proto_preserves_table_metadata_without_columns() {
+    fn relation_summary_to_proto_preserves_relation_metadata_without_columns() {
         let workspace_name = WorkspaceName::parse("default").expect("workspace");
-        let table = TableInfo {
+        let relation = RelationInfo {
             schema_name: "demo".to_string(),
-            table_name: "users".to_string(),
+            relation_name: "users".to_string(),
             description: "User records".to_string(),
             guide: "Filter by org_id.".to_string(),
             columns: vec![ColumnInfo {
@@ -485,13 +551,27 @@ mod tests {
                 nullable: false,
                 is_virtual: false,
                 is_required_filter: true,
+                write_behavior: ColumnWriteBehavior {
+                    is_key: true,
+                    is_writable: true,
+                    required_on_insert: true,
+                },
                 description: "User id".to_string(),
                 ordinal_position: 0,
             }],
             required_filters: vec!["org_id".to_string()],
+            capabilities: RelationCapabilities {
+                operations: vec![
+                    RelationOperation::Read,
+                    RelationOperation::Insert,
+                    RelationOperation::Update,
+                ],
+                derived_key_columns: vec!["id".to_string()],
+                effect: "write".to_string(),
+            },
         };
 
-        let proto = table_summary_to_proto(&workspace_name, table);
+        let proto = relation_summary_to_proto(&workspace_name, relation);
 
         assert_eq!(proto.workspace, Some(workspace_to_proto(&workspace_name)));
         assert_eq!(proto.schema_name, "demo");
@@ -499,6 +579,17 @@ mod tests {
         assert_eq!(proto.description, "User records");
         assert_eq!(proto.guide, "Filter by org_id.");
         assert_eq!(proto.required_filters, vec!["org_id"]);
+        let capabilities = proto.capabilities.expect("capabilities");
+        assert_eq!(
+            capabilities.operations,
+            vec![
+                coral_api::v1::RelationOperation::Read as i32,
+                coral_api::v1::RelationOperation::Insert as i32,
+                coral_api::v1::RelationOperation::Update as i32,
+            ]
+        );
+        assert_eq!(capabilities.derived_key_columns, vec!["id"]);
+        assert_eq!(capabilities.effect, "write");
     }
 
     #[test]

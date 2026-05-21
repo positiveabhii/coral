@@ -12,32 +12,31 @@ use datafusion::prelude::SessionContext;
 
 use crate::backends::RegisteredSource;
 use crate::runtime::schema_provider::StaticSchemaProvider;
-use crate::{ColumnInfo, TableInfo};
+use crate::{
+    ColumnInfo, ColumnWriteBehavior, RelationCapabilities, RelationInfo, RelationOperation,
+};
 
-/// Schema name for source metadata tables such as `coral.tables`.
+/// Schema name for source metadata relations such as `coral.relations`.
 pub(crate) const SYSTEM_SCHEMA: &str = "coral";
 
-/// Register `coral.tables` and `coral.columns` for the active source set.
+/// Register `coral.relations` and `coral.columns` for the active source set.
 ///
 /// # Errors
 ///
 /// Returns a `DataFusionError` if the catalog is missing or the metadata
 /// tables cannot be materialized.
 pub(crate) fn register(ctx: &SessionContext, active_sources: &[RegisteredSource]) -> Result<()> {
-    let tables_table = build_tables_table(active_sources)?;
+    let relations_table = build_relations_table(active_sources)?;
     let columns_table = build_columns_table(active_sources)?;
     let inputs_table = build_inputs_table(active_sources)?;
-    let table_functions_table = build_table_functions_table(active_sources)?;
+    let functions_table = build_functions_table(active_sources)?;
 
     let mut meta_tables: HashMap<String, Arc<dyn datafusion::datasource::TableProvider>> =
         HashMap::new();
-    meta_tables.insert("tables".to_string(), Arc::new(tables_table));
+    meta_tables.insert("relations".to_string(), Arc::new(relations_table));
     meta_tables.insert("columns".to_string(), Arc::new(columns_table));
     meta_tables.insert("inputs".to_string(), Arc::new(inputs_table));
-    meta_tables.insert(
-        "table_functions".to_string(),
-        Arc::new(table_functions_table),
-    );
+    meta_tables.insert("functions".to_string(), Arc::new(functions_table));
 
     let catalog = ctx
         .catalog("datafusion")
@@ -50,13 +49,16 @@ pub(crate) fn register(ctx: &SessionContext, active_sources: &[RegisteredSource]
     Ok(())
 }
 
-fn build_table_functions_table(active_sources: &[RegisteredSource]) -> Result<MemTable> {
+fn build_functions_table(active_sources: &[RegisteredSource]) -> Result<MemTable> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("schema_name", DataType::Utf8, false),
         Field::new("function_name", DataType::Utf8, false),
         Field::new("description", DataType::Utf8, false),
         Field::new("arguments_json", DataType::Utf8, false),
         Field::new("result_columns_json", DataType::Utf8, false),
+        Field::new("effect", DataType::Utf8, false),
+        Field::new("idempotency", DataType::Utf8, false),
+        Field::new("supports_top_level_call_only", DataType::Boolean, false),
     ]));
 
     let mut rows = active_sources
@@ -78,6 +80,13 @@ fn build_table_functions_table(active_sources: &[RegisteredSource]) -> Result<Me
                 rows.iter()
                     .map(|row| Some(row.result_columns_json.as_str())),
             ),
+            utf8_column(rows.iter().map(|row| Some(row.effect.as_str()))),
+            utf8_column(rows.iter().map(|row| Some(row.idempotency.as_str()))),
+            Arc::new(
+                rows.iter()
+                    .map(|row| Some(row.supports_top_level_call_only))
+                    .collect::<BooleanArray>(),
+            ),
         ],
     )
     .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
@@ -89,15 +98,15 @@ fn utf8_column<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> ArrayRe
     Arc::new(values.into_iter().collect::<StringArray>())
 }
 
-/// Collect typed query-visible table metadata for the active source set.
+/// Collect typed query-visible relation metadata for the active source set.
 #[must_use]
-pub(crate) fn collect_tables(active_sources: &[RegisteredSource]) -> Vec<TableInfo> {
-    let mut tables = active_sources
+pub(crate) fn collect_tables(active_sources: &[RegisteredSource]) -> Vec<RelationInfo> {
+    let mut relations = active_sources
         .iter()
         .flat_map(|source| {
-            source.tables.iter().map(move |table| TableInfo {
+            source.tables.iter().map(move |table| RelationInfo {
                 schema_name: source.schema_name.clone(),
-                table_name: table.table_name.clone(),
+                relation_name: table.table_name.clone(),
                 description: table.description.clone(),
                 guide: table.guide.clone(),
                 columns: table
@@ -110,27 +119,44 @@ pub(crate) fn collect_tables(active_sources: &[RegisteredSource]) -> Vec<TableIn
                         nullable: column.nullable,
                         is_virtual: column.is_virtual,
                         is_required_filter: column.is_required_filter,
+                        write_behavior: ColumnWriteBehavior {
+                            is_key: column.write_behavior.is_key,
+                            is_writable: column.write_behavior.is_writable,
+                            required_on_insert: column.write_behavior.required_on_insert,
+                        },
                         description: column.description.clone(),
                         ordinal_position: u32::try_from(position).unwrap_or(u32::MAX),
                     })
                     .collect(),
                 required_filters: table.required_filters.clone(),
+                capabilities: RelationCapabilities {
+                    operations: table.operations.clone(),
+                    derived_key_columns: table.derived_key_columns.clone(),
+                    effect: table.effect.as_str().to_string(),
+                },
             })
         })
         .collect::<Vec<_>>();
-    tables.sort_by(|left, right| {
-        (&left.schema_name, &left.table_name).cmp(&(&right.schema_name, &right.table_name))
+    relations.sort_by(|left, right| {
+        (&left.schema_name, &left.relation_name).cmp(&(&right.schema_name, &right.relation_name))
     });
-    tables
+    relations
 }
 
-fn build_tables_table(active_sources: &[RegisteredSource]) -> Result<MemTable> {
+fn build_relations_table(active_sources: &[RegisteredSource]) -> Result<MemTable> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("schema_name", DataType::Utf8, false),
-        Field::new("table_name", DataType::Utf8, false),
+        Field::new("relation_name", DataType::Utf8, false),
         Field::new("description", DataType::Utf8, false),
         Field::new("guide", DataType::Utf8, false),
         Field::new("required_filters", DataType::Utf8, false),
+        Field::new("supports_read", DataType::Boolean, false),
+        Field::new("supports_insert", DataType::Boolean, false),
+        Field::new("supports_update", DataType::Boolean, false),
+        Field::new("supports_delete", DataType::Boolean, false),
+        Field::new("supports_truncate", DataType::Boolean, false),
+        Field::new("derived_key_columns", DataType::Utf8, false),
+        Field::new("effect", DataType::Utf8, false),
     ]));
 
     let mut rows = active_sources
@@ -143,6 +169,13 @@ fn build_tables_table(active_sources: &[RegisteredSource]) -> Result<MemTable> {
                     table.description.as_str(),
                     table.guide.as_str(),
                     table.required_filters.join(","),
+                    table.operations.contains(&RelationOperation::Read),
+                    table.operations.contains(&RelationOperation::Insert),
+                    table.operations.contains(&RelationOperation::Update),
+                    table.operations.contains(&RelationOperation::Delete),
+                    table.operations.contains(&RelationOperation::Truncate),
+                    table.derived_key_columns.join(","),
+                    table.effect.as_str(),
                 )
             })
         })
@@ -162,6 +195,17 @@ fn build_tables_table(active_sources: &[RegisteredSource]) -> Result<MemTable> {
                     .map(|row| Some(row.4.as_str()))
                     .collect::<StringArray>(),
             ),
+            Arc::new(rows.iter().map(|row| Some(row.5)).collect::<BooleanArray>()),
+            Arc::new(rows.iter().map(|row| Some(row.6)).collect::<BooleanArray>()),
+            Arc::new(rows.iter().map(|row| Some(row.7)).collect::<BooleanArray>()),
+            Arc::new(rows.iter().map(|row| Some(row.8)).collect::<BooleanArray>()),
+            Arc::new(rows.iter().map(|row| Some(row.9)).collect::<BooleanArray>()),
+            Arc::new(
+                rows.iter()
+                    .map(|row| Some(row.10.as_str()))
+                    .collect::<StringArray>(),
+            ),
+            Arc::new(rows.iter().map(|row| Some(row.11)).collect::<StringArray>()),
         ],
     )
     .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
@@ -274,29 +318,53 @@ fn build_inputs_table(active_sources: &[RegisteredSource]) -> Result<MemTable> {
 
 struct CatalogColumn {
     schema_name: String,
-    table_name: String,
+    relation_name: String,
     column_name: String,
     data_type: String,
-    is_nullable: bool,
-    is_virtual: bool,
-    is_required_filter: bool,
+    flags: CatalogColumnFlags,
+    write: CatalogColumnWrite,
     description: String,
     ordinal_position: usize,
 }
 
+struct CatalogColumnFlags {
+    is_nullable: bool,
+    is_virtual: bool,
+    is_required_filter: bool,
+}
+
+struct CatalogColumnWrite {
+    is_key: bool,
+    is_writable: bool,
+    required_on_insert: bool,
+}
+
 fn build_columns_table(active_sources: &[RegisteredSource]) -> Result<MemTable> {
-    let schema = Arc::new(Schema::new(vec![
+    let schema = columns_schema();
+    let rows = collect_catalog_columns(active_sources);
+    let batch = build_columns_batch(schema.clone(), &rows)?;
+
+    MemTable::try_new(schema, vec![vec![batch]])
+}
+
+fn columns_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
         Field::new("schema_name", DataType::Utf8, false),
-        Field::new("table_name", DataType::Utf8, false),
+        Field::new("relation_name", DataType::Utf8, false),
         Field::new("ordinal_position", DataType::Int32, false),
         Field::new("column_name", DataType::Utf8, false),
         Field::new("data_type", DataType::Utf8, false),
         Field::new("is_nullable", DataType::Boolean, false),
         Field::new("is_virtual", DataType::Boolean, false),
         Field::new("is_required_filter", DataType::Boolean, false),
+        Field::new("is_key", DataType::Boolean, false),
+        Field::new("is_writable", DataType::Boolean, false),
+        Field::new("write_required_on_insert", DataType::Boolean, false),
         Field::new("description", DataType::Utf8, false),
-    ]));
+    ]))
+}
 
+fn collect_catalog_columns(active_sources: &[RegisteredSource]) -> Vec<CatalogColumn> {
     let mut rows = active_sources
         .iter()
         .flat_map(|source| {
@@ -307,12 +375,19 @@ fn build_columns_table(active_sources: &[RegisteredSource]) -> Result<MemTable> 
                     .enumerate()
                     .map(move |(position, column)| CatalogColumn {
                         schema_name: source.schema_name.clone(),
-                        table_name: table.table_name.clone(),
+                        relation_name: table.table_name.clone(),
                         column_name: column.name.clone(),
                         data_type: column.data_type.clone(),
-                        is_nullable: column.nullable,
-                        is_virtual: column.is_virtual,
-                        is_required_filter: column.is_required_filter,
+                        flags: CatalogColumnFlags {
+                            is_nullable: column.nullable,
+                            is_virtual: column.is_virtual,
+                            is_required_filter: column.is_required_filter,
+                        },
+                        write: CatalogColumnWrite {
+                            is_key: column.write_behavior.is_key,
+                            is_writable: column.write_behavior.is_writable,
+                            required_on_insert: column.write_behavior.required_on_insert,
+                        },
                         description: column.description.clone(),
                         ordinal_position: position,
                     })
@@ -321,64 +396,45 @@ fn build_columns_table(active_sources: &[RegisteredSource]) -> Result<MemTable> 
         .collect::<Vec<_>>();
 
     rows.sort_by(|left, right| {
-        (&left.schema_name, &left.table_name, left.ordinal_position).cmp(&(
-            &right.schema_name,
-            &right.table_name,
-            right.ordinal_position,
-        ))
+        (
+            &left.schema_name,
+            &left.relation_name,
+            left.ordinal_position,
+        )
+            .cmp(&(
+                &right.schema_name,
+                &right.relation_name,
+                right.ordinal_position,
+            ))
     });
+    rows
+}
 
-    let batch = RecordBatch::try_new(
-        schema.clone(),
+fn build_columns_batch(schema: Arc<Schema>, rows: &[CatalogColumn]) -> Result<RecordBatch> {
+    RecordBatch::try_new(
+        schema,
         vec![
-            Arc::new(
-                rows.iter()
-                    .map(|row| Some(row.schema_name.as_str()))
-                    .collect::<StringArray>(),
-            ),
-            Arc::new(
-                rows.iter()
-                    .map(|row| Some(row.table_name.as_str()))
-                    .collect::<StringArray>(),
-            ),
+            utf8_column(rows.iter().map(|row| Some(row.schema_name.as_str()))),
+            utf8_column(rows.iter().map(|row| Some(row.relation_name.as_str()))),
             Arc::new(
                 rows.iter()
                     .map(|row| Some(i32::try_from(row.ordinal_position).unwrap_or_default()))
                     .collect::<Int32Array>(),
             ),
-            Arc::new(
-                rows.iter()
-                    .map(|row| Some(row.column_name.as_str()))
-                    .collect::<StringArray>(),
-            ),
-            Arc::new(
-                rows.iter()
-                    .map(|row| Some(row.data_type.as_str()))
-                    .collect::<StringArray>(),
-            ),
-            Arc::new(
-                rows.iter()
-                    .map(|row| Some(row.is_nullable))
-                    .collect::<BooleanArray>(),
-            ),
-            Arc::new(
-                rows.iter()
-                    .map(|row| Some(row.is_virtual))
-                    .collect::<BooleanArray>(),
-            ),
-            Arc::new(
-                rows.iter()
-                    .map(|row| Some(row.is_required_filter))
-                    .collect::<BooleanArray>(),
-            ),
-            Arc::new(
-                rows.iter()
-                    .map(|row| Some(row.description.as_str()))
-                    .collect::<StringArray>(),
-            ),
+            utf8_column(rows.iter().map(|row| Some(row.column_name.as_str()))),
+            utf8_column(rows.iter().map(|row| Some(row.data_type.as_str()))),
+            bool_column(rows.iter().map(|row| row.flags.is_nullable)),
+            bool_column(rows.iter().map(|row| row.flags.is_virtual)),
+            bool_column(rows.iter().map(|row| row.flags.is_required_filter)),
+            bool_column(rows.iter().map(|row| row.write.is_key)),
+            bool_column(rows.iter().map(|row| row.write.is_writable)),
+            bool_column(rows.iter().map(|row| row.write.required_on_insert)),
+            utf8_column(rows.iter().map(|row| Some(row.description.as_str()))),
         ],
     )
-    .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))?;
+    .map_err(|error| DataFusionError::ArrowError(Box::new(error), None))
+}
 
-    MemTable::try_new(schema, vec![vec![batch]])
+fn bool_column(values: impl IntoIterator<Item = bool>) -> ArrayRef {
+    Arc::new(values.into_iter().map(Some).collect::<BooleanArray>())
 }

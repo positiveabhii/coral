@@ -92,7 +92,7 @@ fn plain_fallback(operation: &str, code: tonic::Code) -> (String, Option<String>
         tonic::Code::InvalidArgument => (
             format!("{operation} request is invalid"),
             Some(
-                "Check the SQL and retry. Use `coral://guide`, `coral.tables`, \
+                "Check the SQL and retry. Use `coral://guide`, `coral.relations`, \
                  and `coral.columns` for discovery."
                     .to_string(),
             ),
@@ -100,7 +100,8 @@ fn plain_fallback(operation: &str, code: tonic::Code) -> (String, Option<String>
         tonic::Code::NotFound => (
             format!("{operation} target was not found"),
             Some(
-                "Confirm the visible source, schema, and table names before retrying.".to_string(),
+                "Confirm the visible source, schema, and relation names before retrying."
+                    .to_string(),
             ),
         ),
         tonic::Code::FailedPrecondition => (
@@ -211,7 +212,7 @@ mod tests {
                 ("detail", "missing required filter"),
                 ("hint", "Add a constant equality filter on `owner`."),
                 ("schema", "github"),
-                ("table", "pulls"),
+                ("relation", "pulls"),
                 ("field", "owner"),
             ],
             false,
@@ -339,7 +340,7 @@ mod tests {
                 ("detail", "missing required filter"),
                 ("hint", "Add a constant equality filter on `owner`."),
                 ("schema", "github"),
-                ("table", "pulls"),
+                ("relation", "pulls"),
             ],
             false,
         );
@@ -357,7 +358,7 @@ mod tests {
         assert_eq!(data["reason"], "MISSING_REQUIRED_FILTER");
         assert_eq!(data["retryable"], false);
         assert_eq!(data["metadata"]["schema"], "github");
-        assert_eq!(data["metadata"]["table"], "pulls");
+        assert_eq!(data["metadata"]["relation"], "pulls");
     }
 
     #[test]

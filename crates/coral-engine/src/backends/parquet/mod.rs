@@ -236,9 +236,9 @@ impl CompiledBackendSource for ParquetCompiledSource {
             )
             .await?;
             let schema = provider.schema();
-            let table_name = table.name().to_string();
+            let relation_name = table.name().to_string();
             let metadata = registered_table(table, &schema);
-            tables.insert(table_name, Arc::new(provider));
+            tables.insert(relation_name, Arc::new(provider));
             table_infos.push(metadata);
         }
 
@@ -695,7 +695,7 @@ mod tests {
             .sql(
                 "SELECT column_name, data_type \
                  FROM coral.columns \
-                 WHERE schema_name = 'otel' AND table_name = 'metrics' \
+                 WHERE schema_name = 'otel' AND relation_name = 'metrics' \
                  ORDER BY column_name",
             )
             .await
@@ -1080,11 +1080,11 @@ mod tests {
         partitions: &[serde_json::Value],
     ) -> ValidatedSourceManifest {
         parse_source_manifest_value(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "otel",
             "version": "0.1.0",
             "backend": "parquet",
-            "tables": [{
+            "relations": [{
                 "name": "metrics",
                 "description": "metrics",
                 "source": {

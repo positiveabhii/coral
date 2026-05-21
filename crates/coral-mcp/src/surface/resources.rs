@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use coral_api::v1::{ListTablesResponse, Source, Table, TableSummary};
+use coral_api::v1::{ListRelationsResponse, Relation, RelationOperation, RelationSummary, Source};
 use rmcp::model::{AnnotateAble, RawResource, Resource};
 use serde_json::{Value, json};
 
-static INITIAL_INSTRUCTIONS: &str = "You are connected to Coral. Read `coral://guide` for query patterns, use `list_tables`, `search_tables`, `describe_table`, and `list_columns` to inspect queryable tables, and use `sql` for final queries.";
+static INITIAL_INSTRUCTIONS: &str = "You are connected to Coral. Read `coral://guide` for SQL patterns, use `list_relations`, `search_relations`, `describe_relation`, and `list_columns` to inspect queryable relations, and use `sql` for execution. SQL may mutate remote systems when writable relations or effectful functions are installed.";
 static GUIDE_TEMPLATE: &str = include_str!("../guide_template.md");
 
 pub(crate) fn initial_instructions() -> &'static str {
@@ -19,17 +19,17 @@ pub(crate) fn guide_resource(sources: &[Source], visible_table_count: usize) -> 
         .no_annotation()
 }
 
-pub(crate) fn tables_resource(visible_table_count: usize) -> Resource {
-    RawResource::new("coral://tables", "tables")
-        .with_description(tables_resource_description(visible_table_count))
+pub(crate) fn relations_resource(visible_relation_count: usize) -> Resource {
+    RawResource::new("coral://relations", "relations")
+        .with_description(relations_resource_description(visible_relation_count))
         .with_mime_type("application/json")
         .no_annotation()
 }
 
-pub(crate) fn guide_resource_content(sources: &[Source], tables: &[TableSummary]) -> String {
+pub(crate) fn guide_resource_content(sources: &[Source], tables: &[RelationSummary]) -> String {
     let mut sources_section = String::from("## Available Schemas\n\n");
     sources_section.push_str(
-        "- coral: System metadata schema. Use `coral.tables` and `coral.columns` to discover queryable tables, columns, descriptions, and required filters.\n",
+        "- coral: System metadata schema. Use `coral.relations`, `coral.columns`, and `coral.functions` to discover queryable relations, columns, write capabilities, and function effects.\n",
     );
     let schemas = tables
         .iter()
@@ -51,14 +51,14 @@ pub(crate) fn guide_resource_content(sources: &[Source], tables: &[TableSummary]
 
     let columns_example = first_visible_table(tables).map_or_else(
         || {
-            "SELECT column_name, data_type, is_nullable, is_virtual, is_required_filter, description \
-FROM coral.columns WHERE schema_name = '<schema>' AND table_name = '<table>' ORDER BY ordinal_position;"
+            "SELECT column_name, data_type, is_nullable, is_virtual, is_required_filter, is_key, is_writable, write_required_on_insert, description \
+FROM coral.columns WHERE schema_name = '<schema>' AND relation_name = '<relation>' ORDER BY ordinal_position;"
                 .to_string()
         },
         |(schema_name, table_name)| {
             format!(
-                "SELECT column_name, data_type, is_nullable, is_virtual, is_required_filter, description \
-FROM coral.columns WHERE schema_name = '{schema_name}' AND table_name = '{table_name}' ORDER BY ordinal_position;"
+                "SELECT column_name, data_type, is_nullable, is_virtual, is_required_filter, is_key, is_writable, write_required_on_insert, description \
+FROM coral.columns WHERE schema_name = '{schema_name}' AND relation_name = '{table_name}' ORDER BY ordinal_position;"
             )
         },
     );
@@ -68,17 +68,17 @@ FROM coral.columns WHERE schema_name = '{schema_name}' AND table_name = '{table_
         .replace("{{COLUMNS_EXAMPLE}}", &columns_example)
 }
 
-pub(crate) fn tables_resource_content(
-    tables: &[TableSummary],
+pub(crate) fn relations_resource_content(
+    tables: &[RelationSummary],
 ) -> Result<String, serde_json::Error> {
-    serde_json::to_string_pretty(&json!({ "tables": queryable_tables(tables) }))
+    serde_json::to_string_pretty(&json!({ "relations": queryable_tables(tables) }))
 }
 
-pub(crate) fn list_tables_value(response: &ListTablesResponse) -> Value {
+pub(crate) fn list_relations_value(response: &ListRelationsResponse) -> Value {
     let pagination = response.pagination.unwrap_or_default();
     let table_summaries = response_table_summaries(response);
     let mut value = json!({
-        "tables": queryable_tables(&table_summaries),
+        "relations": queryable_tables(&table_summaries),
         "total": pagination.total_count,
         "limit": pagination.limit,
         "offset": pagination.offset,
@@ -95,28 +95,35 @@ pub(crate) fn list_tables_value(response: &ListTablesResponse) -> Value {
 
 fn guide_resource_description(sources: &[Source], visible_table_count: usize) -> String {
     format!(
-        "Query workflow and schema discovery guidance for {} configured source(s) and {} visible table(s).",
+        "SQL workflow and schema discovery guidance for {} configured source(s) and {} visible relation(s).",
         sources.len(),
         visible_table_count
     )
 }
 
-fn tables_resource_description(visible_table_count: usize) -> String {
-    format!("Queryable fully qualified Coral tables ({visible_table_count} table(s)).")
+fn relations_resource_description(visible_relation_count: usize) -> String {
+    format!("Queryable fully qualified Coral relations ({visible_relation_count} relation(s)).")
 }
 
-fn queryable_tables(tables: &[TableSummary]) -> Vec<Value> {
+fn queryable_tables(tables: &[RelationSummary]) -> Vec<Value> {
     let mut summaries = tables
         .iter()
         .map(|table| {
             json!({
                 "schema_name": table.schema_name,
-                "table_name": table.name,
+                "relation_name": table.name,
                 "name": format!("{}.{}", table.schema_name, table.name),
                 "sql_reference": format_schema_table_equivalent(&table.schema_name, &table.name),
                 "description": table.description,
                 "guide": table.guide,
                 "required_filters": table.required_filters,
+                "supports_read": supports_operation(table, RelationOperation::Read),
+                "supports_insert": supports_operation(table, RelationOperation::Insert),
+                "supports_update": supports_operation(table, RelationOperation::Update),
+                "supports_delete": supports_operation(table, RelationOperation::Delete),
+                "supports_truncate": supports_operation(table, RelationOperation::Truncate),
+                "derived_key_columns": derived_key_columns(table),
+                "effect": relation_effect(table),
             })
         })
         .collect::<Vec<_>>();
@@ -128,26 +135,49 @@ fn queryable_tables(tables: &[TableSummary]) -> Vec<Value> {
     summaries
 }
 
-fn response_table_summaries(response: &ListTablesResponse) -> Vec<TableSummary> {
-    if response.table_summaries.is_empty() {
-        response.tables.iter().map(table_to_summary).collect()
+fn response_table_summaries(response: &ListRelationsResponse) -> Vec<RelationSummary> {
+    if response.relation_summaries.is_empty() {
+        response.relations.iter().map(table_to_summary).collect()
     } else {
-        response.table_summaries.clone()
+        response.relation_summaries.clone()
     }
 }
 
-fn table_to_summary(table: &Table) -> TableSummary {
-    TableSummary {
+fn table_to_summary(table: &Relation) -> RelationSummary {
+    RelationSummary {
         workspace: table.workspace.clone(),
         schema_name: table.schema_name.clone(),
         name: table.name.clone(),
         description: table.description.clone(),
         required_filters: table.required_filters.clone(),
         guide: table.guide.clone(),
+        capabilities: table.capabilities.clone(),
     }
 }
 
-fn first_visible_table(tables: &[TableSummary]) -> Option<(&str, &str)> {
+fn supports_operation(table: &RelationSummary, operation: RelationOperation) -> bool {
+    table
+        .capabilities
+        .as_ref()
+        .is_some_and(|capabilities| capabilities.operations.contains(&(operation as i32)))
+}
+
+fn derived_key_columns(table: &RelationSummary) -> Vec<String> {
+    table
+        .capabilities
+        .as_ref()
+        .map(|capabilities| capabilities.derived_key_columns.clone())
+        .unwrap_or_default()
+}
+
+fn relation_effect(table: &RelationSummary) -> String {
+    table.capabilities.as_ref().map_or_else(
+        || "read".to_string(),
+        |capabilities| capabilities.effect.clone(),
+    )
+}
+
+fn first_visible_table(tables: &[RelationSummary]) -> Option<(&str, &str)> {
     tables
         .iter()
         .min_by(|left, right| {
@@ -190,10 +220,13 @@ mod tests {
         reason = "JSON shape assertions intentionally fail loudly in tests"
     )]
 
-    use coral_api::v1::{ListTablesResponse, PaginationResponse, Source, TableSummary, Workspace};
+    use coral_api::v1::{
+        ListRelationsResponse, PaginationResponse, RelationCapabilities, RelationOperation,
+        RelationSummary, Source, Workspace,
+    };
     use serde_json::json;
 
-    use super::{format_schema_table_equivalent, guide_resource_content, list_tables_value};
+    use super::{format_schema_table_equivalent, guide_resource_content, list_relations_value};
 
     fn source(name: &str) -> Source {
         Source {
@@ -208,8 +241,8 @@ mod tests {
         }
     }
 
-    fn table(schema_name: &str, name: &str) -> TableSummary {
-        TableSummary {
+    fn table(schema_name: &str, name: &str) -> RelationSummary {
+        RelationSummary {
             workspace: Some(Workspace {
                 name: "default".to_string(),
             }),
@@ -218,6 +251,11 @@ mod tests {
             description: format!("{name} description"),
             required_filters: Vec::new(),
             guide: format!("Query {name}."),
+            capabilities: Some(RelationCapabilities {
+                operations: vec![RelationOperation::Read as i32],
+                derived_key_columns: Vec::new(),
+                effect: "read".to_string(),
+            }),
         }
     }
 
@@ -240,17 +278,15 @@ mod tests {
         assert!(content.contains("- coral: System metadata schema."));
         assert!(content.contains("Visible source schemas:"));
         assert!(content.contains("- slack"));
-        assert!(
-            content.contains(
-                "Use each table's `sql_reference` from `list_tables` or `coral://tables`"
-            )
-        );
+        assert!(content.contains(
+            "Use each relation's `sql_reference` from `list_relations` or `coral://relations`"
+        ));
     }
 
     #[test]
-    fn list_tables_value_includes_compatible_name_and_sql_reference() {
-        let value = list_tables_value(&ListTablesResponse {
-            tables: Vec::new(),
+    fn list_relations_value_includes_compatible_name_and_sql_reference() {
+        let value = list_relations_value(&ListRelationsResponse {
+            relations: Vec::new(),
             pagination: Some(PaginationResponse {
                 total_count: 1,
                 limit: 50,
@@ -258,21 +294,31 @@ mod tests {
                 has_more: false,
                 next_offset: 0,
             }),
-            table_summaries: vec![table("local_messages", "events")],
+            relation_summaries: vec![table("local_messages", "events")],
         });
 
-        assert_eq!(value["tables"][0]["name"], "local_messages.events");
-        assert_eq!(value["tables"][0]["sql_reference"], "local_messages.events");
+        assert_eq!(value["relations"][0]["name"], "local_messages.events");
         assert_eq!(
-            value["tables"][0],
+            value["relations"][0]["sql_reference"],
+            "local_messages.events"
+        );
+        assert_eq!(
+            value["relations"][0],
             json!({
                 "schema_name": "local_messages",
-                "table_name": "events",
+                "relation_name": "events",
                 "name": "local_messages.events",
                 "sql_reference": "local_messages.events",
                 "description": "events description",
                 "guide": "Query events.",
                 "required_filters": [],
+                "supports_read": true,
+                "supports_insert": false,
+                "supports_update": false,
+                "supports_delete": false,
+                "supports_truncate": false,
+                "derived_key_columns": [],
+                "effect": "read",
             })
         );
         assert_eq!(value["total"], 1);

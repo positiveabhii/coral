@@ -156,7 +156,7 @@ mod tests {
             r#"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 inputs:
   API_BASE:
@@ -171,7 +171,7 @@ auth:
     - name: Authorization
       from: template
       template: Bearer {{input.API_TOKEN}}
-tables:
+relations:
   - name: messages
     description: Demo messages
     request:
@@ -200,10 +200,10 @@ tables:
 name: demo
 schema: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 base_url: https://example.com
-tables:
+relations:
   - name: messages
     description: Demo messages
     request:

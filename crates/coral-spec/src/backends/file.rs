@@ -19,7 +19,7 @@ use crate::inputs::collect_source_inputs_value;
 use crate::{
     ColumnSpec, FilterSpec, ManifestDataType, ManifestError, ManifestInputKind, ManifestInputSpec,
     Result, SourceBackend, SourceManifestCommon, TableCommon, validate_columns,
-    validate_filters_and_column_exprs, validate_table_names, validate_test_queries,
+    validate_filters_and_column_exprs, validate_relation_names, validate_test_queries,
 };
 
 /// Validated top-level manifest for a `Parquet`-backed source.
@@ -76,6 +76,7 @@ struct RawFileSourceManifest {
     backend: SourceBackend,
     #[serde(default)]
     inputs: Option<Value>,
+    #[serde(rename = "relations")]
     tables: Vec<RawFileTableSpec>,
 }
 
@@ -302,7 +303,7 @@ impl ParquetSourceManifest {
             tables,
         } = raw;
         validate_test_queries(&name, &test_queries)?;
-        validate_table_names(&name, tables.iter().map(|table| table.name.as_str()))?;
+        validate_relation_names(&name, tables.iter().map(|table| table.name.as_str()))?;
         let common =
             SourceManifestCommon::new(dsl_version, name, version, description, test_queries);
         let tables = tables
@@ -333,7 +334,7 @@ impl JsonlSourceManifest {
             tables,
         } = raw;
         validate_test_queries(&name, &test_queries)?;
-        validate_table_names(&name, tables.iter().map(|table| table.name.as_str()))?;
+        validate_relation_names(&name, tables.iter().map(|table| table.name.as_str()))?;
         let common =
             SourceManifestCommon::new(dsl_version, name, version, description, test_queries);
         let tables = tables
@@ -357,7 +358,7 @@ mod tests {
     #[test]
     fn parquet_manifest_surfaces_declared_secret_inputs() {
         let manifest = ParquetSourceManifest::parse_manifest_value(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "warehouse",
             "version": "0.1.0",
             "backend": "parquet",
@@ -366,7 +367,7 @@ mod tests {
                 "signing_key": { "kind": "secret" },
                 "region": { "kind": "variable", "default": "us-east-1" },
             },
-            "tables": [{
+            "relations": [{
                 "name": "events",
                 "description": "Warehouse events",
                 "source": { "location": "s3://example/warehouse/" },
@@ -392,14 +393,14 @@ mod tests {
     #[test]
     fn jsonl_manifest_surfaces_declared_secret_inputs() {
         let manifest = JsonlSourceManifest::parse_manifest_value(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "logs",
             "version": "0.1.0",
             "backend": "jsonl",
             "inputs": {
                 "access_token": { "kind": "secret" },
             },
-            "tables": [{
+            "relations": [{
                 "name": "messages",
                 "description": "JSONL messages",
                 "source": { "location": "file:///tmp/logs/" },
@@ -416,11 +417,11 @@ mod tests {
     #[test]
     fn parquet_manifest_without_inputs_block_has_no_required_secrets() {
         let manifest = ParquetSourceManifest::parse_manifest_value(json!({
-            "dsl_version": 3,
+            "dsl_version": 4,
             "name": "local",
             "version": "0.1.0",
             "backend": "parquet",
-            "tables": [{
+            "relations": [{
                 "name": "events",
                 "description": "Local events",
                 "source": { "location": "file:///tmp/local/" },

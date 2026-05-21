@@ -44,10 +44,10 @@ mod tests {
         r"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 base_url: https://example.com
-tables:
+relations:
   - name: messages
     description: Demo messages
     request:
@@ -82,9 +82,9 @@ tables:
             r"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 base_url: https://example.com
-tables:
+relations:
   - name: messages
     description: Demo messages
     request:
@@ -105,10 +105,10 @@ tables:
             r#"
 name: demo
 version: 1.0.0
-dsl_version: 3
+dsl_version: 4
 backend: http
 base_url: https://example.com
-tables:
+relations:
   - name: messages
     description: Demo messages
     request:
@@ -119,7 +119,7 @@ tables:
         .expect_err("schema validation should fail");
         assert_eq!(
             error.to_string(),
-            "source manifest failed schema validation:\n  /tables/0/request/path: \"\" is shorter than 1 character"
+            "source manifest failed schema validation:\n  /relations/0/request/path: \"\" is shorter than 1 character"
         );
     }
 }

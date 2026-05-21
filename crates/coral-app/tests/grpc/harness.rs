@@ -2,8 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use coral_api::v1::{
-    ExecuteSqlRequest, ImportSourceRequest, ListSourcesRequest, ListTablesRequest, Source,
-    SourceSecret, SourceVariable, Table, ValidateSourceRequest, ValidateSourceResponse,
+    ExecuteSqlRequest, ImportSourceRequest, ListRelationsRequest, ListSourcesRequest, Relation,
+    Source, SourceSecret, SourceVariable, ValidateSourceRequest, ValidateSourceResponse,
 };
 use coral_client::{
     AppClient, QueryClient, SourceClient, batches_to_json_rows, decode_execute_sql_response,
@@ -102,19 +102,19 @@ impl GrpcHarness {
             .sources
     }
 
-    pub(crate) async fn list_tables(&self) -> Vec<Table> {
+    pub(crate) async fn list_relations(&self) -> Vec<Relation> {
         self.query_client()
-            .list_tables(Request::new(ListTablesRequest {
+            .list_relations(Request::new(ListRelationsRequest {
                 workspace: Some(default_workspace()),
                 schema_name: String::new(),
-                table_name: String::new(),
+                relation_name: String::new(),
                 pagination: None,
                 omit_columns: false,
             }))
             .await
-            .expect("list tables")
+            .expect("list relations")
             .into_inner()
-            .tables
+            .relations
     }
 
     pub(crate) async fn validate_source(&self, source_name: &str) -> ValidateSourceResponse {
@@ -174,11 +174,11 @@ impl FailingHttpFixture {
         manifest_yaml(&json!({
             "name": "unreachable_messages",
             "version": "0.1.0",
-            "dsl_version": 3,
+            "dsl_version": 4,
             "backend": "http",
             "base_url": self.base_url,
             "test_queries": test_queries,
-            "tables": [{
+            "relations": [{
                 "name": "messages",
                 "description": "Unreachable messages",
                 "request": {
@@ -226,9 +226,9 @@ pub(crate) fn fixture_manifest_with_multiple_tables_yaml(root: &Path) -> String 
     manifest_yaml(&json!({
         "name": "local_messages",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "jsonl",
-        "tables": [
+        "relations": [
             {
                 "name": "events",
                 "description": "Fixture events",
@@ -267,10 +267,10 @@ pub(crate) fn fixture_manifest_with_test_queries_yaml(
     manifest_yaml(&json!({
         "name": "local_messages",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "jsonl",
         "test_queries": test_queries,
-        "tables": [{
+        "relations": [{
             "name": "messages",
             "description": "Fixture messages",
             "source": {
@@ -290,7 +290,7 @@ pub(crate) fn fixture_manifest_with_inputs_yaml() -> String {
     manifest_yaml(&json!({
         "name": "secured_messages",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
         "inputs": {
             "API_BASE": { "kind": "variable", "default": "https://example.com" },
@@ -305,7 +305,7 @@ pub(crate) fn fixture_manifest_with_inputs_yaml() -> String {
                 "template": "Bearer {{input.API_TOKEN}}",
             }],
         },
-        "tables": [{
+        "relations": [{
             "name": "messages",
             "description": "Secured messages",
             "request": {
@@ -324,7 +324,7 @@ pub(crate) fn fixture_manifest_with_required_inputs_yaml() -> String {
     manifest_yaml(&json!({
         "name": "required_messages",
         "version": "0.1.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
         "inputs": {
             "API_BASE": { "kind": "variable" },
@@ -339,7 +339,7 @@ pub(crate) fn fixture_manifest_with_required_inputs_yaml() -> String {
                 "template": "Bearer {{input.API_TOKEN}}",
             }],
         },
-        "tables": [{
+        "relations": [{
             "name": "messages",
             "description": "Required-input messages",
             "request": {
@@ -359,9 +359,9 @@ pub(crate) fn invalid_manifest_yaml() -> String {
         "name": "demo",
         "schema": "demo",
         "version": "1.0.0",
-        "dsl_version": 3,
+        "dsl_version": 4,
         "backend": "http",
-        "tables": [{
+        "relations": [{
             "name": "messages",
             "description": "Demo messages",
             "request": {

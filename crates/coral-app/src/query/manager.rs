@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use coral_engine::{
     CoralQuery, CoreError, QueryExecution, QueryPlan, QueryRuntimeConfig, QueryRuntimeContext,
-    QuerySource, SourceValidationReport, StatusCode, TableInfo,
+    QuerySource, RelationInfo, SourceValidationReport, StatusCode,
 };
 use coral_spec::{ManifestInputKind, ManifestInputSpec};
 use opentelemetry::{KeyValue, trace::Status as OtelStatus};
@@ -59,17 +59,17 @@ impl QueryManager {
         }
     }
 
-    pub(crate) async fn list_tables(
+    pub(crate) async fn list_relations(
         &self,
         workspace_name: &WorkspaceName,
         schema_filter: Option<&str>,
         table_filter: Option<&str>,
-    ) -> Result<Vec<TableInfo>, QueryManagerError> {
+    ) -> Result<Vec<RelationInfo>, QueryManagerError> {
         let sources = self
             .load_query_sources(workspace_name)
             .map_err(QueryManagerError::App)?;
         let runtime = self.runtime_config(&sources);
-        CoralQuery::list_tables(&sources, runtime, schema_filter, table_filter)
+        CoralQuery::list_relations(&sources, runtime, schema_filter, table_filter)
             .await
             .map_err(QueryManagerError::Core)
     }

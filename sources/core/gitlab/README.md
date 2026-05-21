@@ -162,14 +162,14 @@ WHERE id = '12345';
 # Add the source
 coral source add gitlab
 
-# Discover tables
-coral sql "SELECT * FROM coral.tables WHERE schema_name = 'gitlab'"
+# Discover relations
+coral sql "SELECT * FROM coral.relations WHERE schema_name = 'gitlab'"
 
 # Find required filters
 coral sql \
-  "SELECT table_name, column_name FROM coral.columns \
+  "SELECT relation_name, column_name FROM coral.columns \
    WHERE schema_name = 'gitlab' AND is_required_filter = true \
-   ORDER BY table_name"
+   ORDER BY relation_name"
 
 # Query
 coral sql \

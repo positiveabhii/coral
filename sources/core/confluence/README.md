@@ -19,10 +19,10 @@ export CONFLUENCE_API_TOKEN="YOUR_CONFLUENCE_API_TOKEN"
 ```bash
 coral source add confluence
 coral source test confluence
-coral sql "SELECT table_name FROM coral.tables WHERE schema_name = 'confluence' ORDER BY table_name"
+coral sql "SELECT relation_name FROM coral.relations WHERE schema_name = 'confluence' ORDER BY relation_name"
 ```
 
-## Tables
+## Relations
 
 | Table | Notes |
 |---|---|
