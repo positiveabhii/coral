@@ -599,7 +599,7 @@ fn oauth_to_proto(oauth: ManifestOAuthCredentialSpec) -> OAuthAuthorizationCodeC
                     transport: proto_oauth_client_secret_transport(secret.transport) as i32,
                 }),
         }),
-        redirect_uri_port: proto_redirect_uri_port_mode(oauth.redirect_uri_port) as i32,
+        redirect_uri_port_mode: proto_redirect_uri_port_mode(oauth.redirect_uri_port_mode) as i32,
         scopes: oauth.scopes.map(|scopes| OAuthCredentialScopes {
             scope: Some(OAuthCredentialScope {
                 delimiter: proto_oauth_scope_delimiter(scopes.scope.delimiter) as i32,
@@ -683,7 +683,7 @@ mod tests {
                                 pkce: ManifestOAuthPkceMode::Required,
                             },
                             redirect_uri: "http://127.0.0.1:53682/oauth/callback".to_string(),
-                            redirect_uri_port: ManifestOAuthRedirectUriPortMode::Fixed,
+                            redirect_uri_port_mode: ManifestOAuthRedirectUriPortMode::Fixed,
                             authorization_url: "https://provider.example.com/oauth/authorize"
                                 .to_string(),
                             token_url: "https://provider.example.com/oauth/token".to_string(),
@@ -719,7 +719,7 @@ mod tests {
             ProtoCredentialMethod::OauthAuthorizationCode(oauth) => {
                 assert_eq!(oauth.redirect_uri, "http://127.0.0.1:53682/oauth/callback");
                 assert_eq!(
-                    OauthCredentialRedirectUriPortMode::try_from(oauth.redirect_uri_port)
+                    OauthCredentialRedirectUriPortMode::try_from(oauth.redirect_uri_port_mode)
                         .expect("redirect uri port mode"),
                     OauthCredentialRedirectUriPortMode::Fixed
                 );

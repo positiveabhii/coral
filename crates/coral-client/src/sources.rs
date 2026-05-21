@@ -145,7 +145,7 @@ fn oauth_authorization_code_from_proto(
             pkce: oauth_pkce_from_proto(oauth.pkce)?,
         },
         redirect_uri: oauth.redirect_uri.clone(),
-        redirect_uri_port: redirect_uri_port_from_proto(oauth.redirect_uri_port)?,
+        redirect_uri_port_mode: redirect_uri_port_mode_from_proto(oauth.redirect_uri_port_mode)?,
         authorization_url: endpoints.authorization_url.clone(),
         token_url: endpoints.token_url.clone(),
         client,
@@ -168,7 +168,7 @@ fn oauth_pkce_from_proto(pkce: i32) -> Result<ManifestOAuthPkceMode, SourceInput
     Ok(pkce)
 }
 
-fn redirect_uri_port_from_proto(
+fn redirect_uri_port_mode_from_proto(
     mode: i32,
 ) -> Result<ManifestOAuthRedirectUriPortMode, SourceInputDecodeError> {
     match OauthCredentialRedirectUriPortMode::try_from(mode) {
@@ -292,8 +292,8 @@ mod tests {
                                         }),
                                         secret: None,
                                     }),
-                                    redirect_uri_port: OauthCredentialRedirectUriPortMode::Random
-                                        as i32,
+                                    redirect_uri_port_mode:
+                                        OauthCredentialRedirectUriPortMode::Random as i32,
                                     scopes: None,
                                 },
                             )),
@@ -323,7 +323,7 @@ mod tests {
                 .oauth
                 .as_ref()
                 .expect("oauth")
-                .redirect_uri_port,
+                .redirect_uri_port_mode,
             ManifestOAuthRedirectUriPortMode::Random
         );
         assert_eq!(
@@ -370,7 +370,8 @@ mod tests {
                                     }),
                                     secret: None,
                                 }),
-                                redirect_uri_port: OauthCredentialRedirectUriPortMode::Fixed as i32,
+                                redirect_uri_port_mode: OauthCredentialRedirectUriPortMode::Fixed
+                                    as i32,
                                 scopes: None,
                             },
                         )),

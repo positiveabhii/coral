@@ -60,8 +60,10 @@ struct OAuthSessionConfig {
     client_secret: Option<String>,
     state: String,
     code_verifier: Option<String>,
-    redirect_uri: Url,
-    redirect_uri_parameter: String,
+    // Request path accepted by the local callback listener.
+    callback_path: String,
+    // Exact redirect_uri value sent to the provider for authorization and token exchange.
+    provider_redirect_uri: String,
     listener: TcpListener,
     expires_at: Instant,
 }
@@ -112,13 +114,13 @@ impl OAuthCredentialManager {
         reject_unknown_credential_inputs(&oauth, &credential_inputs)?;
         let client_id = resolve_client_id(&oauth, &credential_inputs)?;
         let client_secret = resolve_client_secret(&oauth, &credential_inputs)?;
-        let (listener, redirect_uri, redirect_uri_parameter) =
+        let (listener, callback_path, provider_redirect_uri) =
             bind_redirect_listener(&oauth).await?;
         let state = random_token();
         let code_verifier = pkce_code_verifier(&oauth);
         let authorization_url = build_authorization_url(
             &oauth,
-            &redirect_uri_parameter,
+            &provider_redirect_uri,
             &client_id,
             &state,
             code_verifier.as_deref(),
@@ -131,8 +133,8 @@ impl OAuthCredentialManager {
             client_secret,
             state,
             code_verifier,
-            redirect_uri,
-            redirect_uri_parameter,
+            callback_path,
+            provider_redirect_uri,
             listener,
             expires_at,
         };
@@ -289,7 +291,7 @@ fn resolve_client_secret(
 
 async fn bind_redirect_listener(
     oauth: &ManifestOAuthCredentialSpec,
-) -> Result<(TcpListener, Url, String), AppError> {
+) -> Result<(TcpListener, String, String), AppError> {
     let redirect_uri = Url::parse(&oauth.redirect_uri)
         .map_err(|error| AppError::InvalidInput(format!("invalid OAuth redirect URI: {error}")))?;
     let host = redirect_uri
@@ -300,7 +302,7 @@ async fn bind_redirect_listener(
             "OAuth redirect URI must use a loopback host".to_string(),
         ));
     }
-    let port = match oauth.redirect_uri_port {
+    let port = match oauth.redirect_uri_port_mode {
         ManifestOAuthRedirectUriPortMode::Fixed => {
             let port = redirect_uri.port().ok_or_else(|| {
                 AppError::InvalidInput("OAuth redirect URI is missing explicit port".to_string())
@@ -312,7 +314,10 @@ async fn bind_redirect_listener(
             }
             port
         }
-        ManifestOAuthRedirectUriPortMode::Random => 0,
+        ManifestOAuthRedirectUriPortMode::Random => {
+            // Binding port 0 asks the OS to assign a free loopback port.
+            0
+        }
     };
     let listener = TcpListener::bind((host, port)).await.map_err(|error| {
         let port_label = if port == 0 {
@@ -325,7 +330,7 @@ async fn bind_redirect_listener(
         ))
     })?;
     let mut effective_redirect_uri = redirect_uri;
-    if oauth.redirect_uri_port == ManifestOAuthRedirectUriPortMode::Random {
+    if oauth.redirect_uri_port_mode == ManifestOAuthRedirectUriPortMode::Random {
         let assigned_port = listener.local_addr()?.port();
         effective_redirect_uri
             .set_port(Some(assigned_port))
@@ -333,16 +338,17 @@ async fn bind_redirect_listener(
                 AppError::InvalidInput("OAuth redirect URI port is invalid".to_string())
             })?;
     }
-    let redirect_uri_parameter = match oauth.redirect_uri_port {
+    let provider_redirect_uri = match oauth.redirect_uri_port_mode {
         ManifestOAuthRedirectUriPortMode::Fixed => oauth.redirect_uri.clone(),
         ManifestOAuthRedirectUriPortMode::Random => effective_redirect_uri.to_string(),
     };
-    Ok((listener, effective_redirect_uri, redirect_uri_parameter))
+    let callback_path = effective_redirect_uri.path().to_string();
+    Ok((listener, callback_path, provider_redirect_uri))
 }
 
 fn build_authorization_url(
     oauth: &ManifestOAuthCredentialSpec,
-    redirect_uri: &str,
+    provider_redirect_uri: &str,
     client_id: &str,
     state: &str,
     code_verifier: Option<&str>,
@@ -355,7 +361,7 @@ fn build_authorization_url(
         query
             .append_pair("response_type", "code")
             .append_pair("client_id", client_id)
-            .append_pair("redirect_uri", redirect_uri)
+            .append_pair("redirect_uri", provider_redirect_uri)
             .append_pair("state", state);
         if let Some(scopes) = oauth.scopes.as_ref() {
             query.append_pair(
@@ -410,7 +416,7 @@ async fn receive_callback(session: &OAuthSessionConfig) -> Result<Callback, AppE
             accepted = session.listener.accept() => {
                 let (mut stream, _peer): (_, SocketAddr) = accepted?;
                 let result_tx = result_tx.clone();
-                let expected_path = session.redirect_uri.path().to_string();
+                let expected_path = session.callback_path.clone();
                 let expected_state = session.state.clone();
                 tokio::spawn(async move {
                     let result = handle_callback_connection(
@@ -618,7 +624,7 @@ async fn exchange_authorization_code(
     let mut form = vec![
         ("grant_type", "authorization_code".to_string()),
         ("code", code.to_string()),
-        ("redirect_uri", session.redirect_uri_parameter.clone()),
+        ("redirect_uri", session.provider_redirect_uri.clone()),
     ];
     let mut request = http
         .post(&session.oauth.token_url)
@@ -1065,9 +1071,8 @@ mod tests {
             client_secret: None,
             state: "expected-state".to_string(),
             code_verifier: None,
-            redirect_uri: Url::parse(&format!("http://127.0.0.1:{redirect_port}/oauth/callback"))
-                .expect("redirect uri"),
-            redirect_uri_parameter: format!("http://127.0.0.1:{redirect_port}/oauth/callback"),
+            callback_path: "/oauth/callback".to_string(),
+            provider_redirect_uri: format!("http://127.0.0.1:{redirect_port}/oauth/callback"),
             listener,
             expires_at: std::time::Instant::now() + std::time::Duration::from_mins(1),
         };
@@ -1126,9 +1131,8 @@ mod tests {
             client_secret: None,
             state: "expected-state".to_string(),
             code_verifier: None,
-            redirect_uri: Url::parse(&format!("http://127.0.0.1:{redirect_port}/oauth/callback"))
-                .expect("redirect uri"),
-            redirect_uri_parameter: format!("http://127.0.0.1:{redirect_port}/oauth/callback"),
+            callback_path: "/oauth/callback".to_string(),
+            provider_redirect_uri: format!("http://127.0.0.1:{redirect_port}/oauth/callback"),
             listener,
             expires_at: std::time::Instant::now() + std::time::Duration::from_mins(1),
         };
@@ -1360,7 +1364,7 @@ mod tests {
     fn oauth_spec_with_redirect_uri(
         token_url: &str,
         redirect_uri: &str,
-        redirect_uri_port: ManifestOAuthRedirectUriPortMode,
+        redirect_uri_port_mode: ManifestOAuthRedirectUriPortMode,
         pkce: ManifestOAuthPkceMode,
         client: ManifestOAuthClientSpec,
     ) -> ManifestOAuthCredentialSpec {
@@ -1370,7 +1374,7 @@ mod tests {
                 pkce,
             },
             redirect_uri: redirect_uri.to_string(),
-            redirect_uri_port,
+            redirect_uri_port_mode,
             authorization_url: "https://provider.example.com/oauth/authorize".to_string(),
             token_url: token_url.to_string(),
             client,

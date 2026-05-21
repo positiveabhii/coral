@@ -120,7 +120,7 @@ message OAuthAuthorizationCodeCredentialMethod {
   // PKCE mode.
   OauthCredentialPkceMode pkce = 5;
   // Loopback callback port binding mode.
-  OauthCredentialRedirectUriPortMode redirect_uri_port = 6;
+  OauthCredentialRedirectUriPortMode redirect_uri_port_mode = 6;
 }
 
 // Supported OAuth PKCE modes.
