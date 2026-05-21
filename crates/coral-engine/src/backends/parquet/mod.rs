@@ -33,6 +33,7 @@ use crate::backends::{
     registered_columns_from_schema, registered_columns_from_specs, required_filter_names,
     schema_from_columns,
 };
+use coral_spec::SourceBackend;
 use coral_spec::backends::file::{FileTableSpec, ParquetSourceManifest};
 
 const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
@@ -223,8 +224,8 @@ impl CompiledBackendSource for ParquetCompiledSource {
         &self.manifest.common.name
     }
 
-    fn backend_kind(&self) -> &'static str {
-        "parquet"
+    fn backend_kind(&self) -> SourceBackend {
+        SourceBackend::Parquet
     }
 
     fn has_bindable_filters(&self) -> bool {
