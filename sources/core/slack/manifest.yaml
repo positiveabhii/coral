@@ -235,6 +235,71 @@ tables:
           kind: path
           path:
             - text
+      - name: ts
+        type: Timestamp
+        nullable: false
+        description: Message time from Slack `ts`, exposed as a UTC Timestamp
+        expr:
+          kind: format_timestamp
+          input: seconds
+          expr:
+            kind: path
+            path:
+              - ts
+      - name: permalink
+        type: Utf8
+        nullable: false
+        description: Deep link to the message in Slack
+        expr:
+          kind: template
+          template: "https://slack.com/archives/{{filter.channel}}/p{{expr.ts_id}}"
+          values:
+            ts_id:
+              kind: replace
+              expr:
+                kind: path
+                path:
+                  - ts
+              from: "."
+              to: ""
+      - name: thread_ts
+        type: Utf8
+        nullable: true
+        description: Thread parent timestamp (null if not in a thread)
+        expr:
+          kind: path
+          path:
+            - thread_ts
+      - name: reply_count
+        type: Int64
+        nullable: true
+        description: Number of replies in thread
+        expr:
+          kind: path
+          path:
+            - reply_count
+      - name: subtype
+        type: Utf8
+        nullable: true
+        description: Message subtype
+        expr:
+          kind: path
+          path:
+            - subtype
+      - name: oldest
+        type: Utf8
+        nullable: true
+        description: Oldest Slack raw `ts` filter such as `1777593600.000000`; not ISO-8601 (virtual)
+        expr:
+          kind: "null"
+        virtual: true
+      - name: latest
+        type: Utf8
+        nullable: true
+        description: Latest Slack raw `ts` filter such as `1777593600.000000`; not ISO-8601 (virtual)
+        expr:
+          kind: "null"
+        virtual: true
       - name: files
         type: Json
         nullable: true
@@ -503,71 +568,6 @@ tables:
           item_path:
             - image_url
           separator: " | "
-      - name: ts
-        type: Timestamp
-        nullable: false
-        description: Message time from Slack `ts`, exposed as a UTC Timestamp
-        expr:
-          kind: format_timestamp
-          input: seconds
-          expr:
-            kind: path
-            path:
-              - ts
-      - name: permalink
-        type: Utf8
-        nullable: false
-        description: Deep link to the message in Slack
-        expr:
-          kind: template
-          template: "https://slack.com/archives/{{filter.channel}}/p{{expr.ts_id}}"
-          values:
-            ts_id:
-              kind: replace
-              expr:
-                kind: path
-                path:
-                  - ts
-              from: "."
-              to: ""
-      - name: thread_ts
-        type: Utf8
-        nullable: true
-        description: Thread parent timestamp (null if not in a thread)
-        expr:
-          kind: path
-          path:
-            - thread_ts
-      - name: reply_count
-        type: Int64
-        nullable: true
-        description: Number of replies in thread
-        expr:
-          kind: path
-          path:
-            - reply_count
-      - name: subtype
-        type: Utf8
-        nullable: true
-        description: Message subtype
-        expr:
-          kind: path
-          path:
-            - subtype
-      - name: oldest
-        type: Utf8
-        nullable: true
-        description: Oldest Slack raw `ts` filter such as `1777593600.000000`; not ISO-8601 (virtual)
-        expr:
-          kind: "null"
-        virtual: true
-      - name: latest
-        type: Utf8
-        nullable: true
-        description: Latest Slack raw `ts` filter such as `1777593600.000000`; not ISO-8601 (virtual)
-        expr:
-          kind: "null"
-        virtual: true
     filters:
       - name: channel
         required: true
@@ -669,6 +669,88 @@ tables:
           kind: path
           path:
             - text
+      - name: ts
+        type: Timestamp
+        nullable: false
+        description: Reply time from Slack `ts`, exposed as a UTC Timestamp
+        expr:
+          kind: format_timestamp
+          input: seconds
+          expr:
+            kind: path
+            path:
+              - ts
+      - name: permalink
+        type: Utf8
+        nullable: false
+        description: Deep link to the thread reply in Slack
+        expr:
+          kind: template
+          template: "https://slack.com/archives/{{filter.channel}}/p{{expr.ts_id}}?thread_ts={{expr.thread_ts}}&cid={{filter.channel}}"
+          values:
+            ts_id:
+              kind: replace
+              expr:
+                kind: path
+                path:
+                  - ts
+              from: "."
+              to: ""
+            thread_ts:
+              kind: coalesce
+              exprs:
+                - kind: path
+                  path:
+                    - thread_ts
+                - kind: path
+                  path:
+                    - ts
+      - name: reply_count
+        type: Int64
+        nullable: true
+        description: Number of replies in thread (present on parent messages)
+        expr:
+          kind: path
+          path:
+            - reply_count
+      - name: subtype
+        type: Utf8
+        nullable: true
+        description: Message subtype
+        expr:
+          kind: path
+          path:
+            - subtype
+      - name: oldest
+        type: Utf8
+        nullable: true
+        description: Oldest Slack raw `ts` filter such as `1777593600.000000`; not ISO-8601 (virtual)
+        expr:
+          kind: "null"
+        virtual: true
+      - name: latest
+        type: Utf8
+        nullable: true
+        description: Latest Slack raw `ts` filter such as `1777593600.000000`; not ISO-8601 (virtual)
+        expr:
+          kind: "null"
+        virtual: true
+      - name: inclusive
+        type: Utf8
+        nullable: true
+        description: Include messages matching oldest or latest timestamps, as true or false (virtual)
+        expr:
+          kind: from_filter
+          key: inclusive
+        virtual: true
+      - name: include_all_metadata
+        type: Utf8
+        nullable: true
+        description: Return all metadata associated with thread messages, as true or false (virtual)
+        expr:
+          kind: from_filter
+          key: include_all_metadata
+        virtual: true
       - name: files
         type: Json
         nullable: true
@@ -937,88 +1019,6 @@ tables:
           item_path:
             - image_url
           separator: " | "
-      - name: ts
-        type: Timestamp
-        nullable: false
-        description: Reply time from Slack `ts`, exposed as a UTC Timestamp
-        expr:
-          kind: format_timestamp
-          input: seconds
-          expr:
-            kind: path
-            path:
-              - ts
-      - name: permalink
-        type: Utf8
-        nullable: false
-        description: Deep link to the thread reply in Slack
-        expr:
-          kind: template
-          template: "https://slack.com/archives/{{filter.channel}}/p{{expr.ts_id}}?thread_ts={{expr.thread_ts}}&cid={{filter.channel}}"
-          values:
-            ts_id:
-              kind: replace
-              expr:
-                kind: path
-                path:
-                  - ts
-              from: "."
-              to: ""
-            thread_ts:
-              kind: coalesce
-              exprs:
-                - kind: path
-                  path:
-                    - thread_ts
-                - kind: path
-                  path:
-                    - ts
-      - name: reply_count
-        type: Int64
-        nullable: true
-        description: Number of replies in thread (present on parent messages)
-        expr:
-          kind: path
-          path:
-            - reply_count
-      - name: subtype
-        type: Utf8
-        nullable: true
-        description: Message subtype
-        expr:
-          kind: path
-          path:
-            - subtype
-      - name: oldest
-        type: Utf8
-        nullable: true
-        description: Oldest Slack raw `ts` filter such as `1777593600.000000`; not ISO-8601 (virtual)
-        expr:
-          kind: "null"
-        virtual: true
-      - name: latest
-        type: Utf8
-        nullable: true
-        description: Latest Slack raw `ts` filter such as `1777593600.000000`; not ISO-8601 (virtual)
-        expr:
-          kind: "null"
-        virtual: true
-      - name: inclusive
-        type: Utf8
-        nullable: true
-        description: Include messages matching oldest or latest timestamps, as true or false (virtual)
-        expr:
-          kind: from_filter
-          key: inclusive
-        virtual: true
-      - name: include_all_metadata
-        type: Utf8
-        nullable: true
-        description: Return all metadata associated with thread messages, as true or false (virtual)
-        expr:
-          kind: from_filter
-          key: include_all_metadata
-        virtual: true
     filters:
       - name: channel
         required: true
