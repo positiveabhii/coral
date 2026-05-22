@@ -230,6 +230,7 @@ impl PartitionColumnSpec {
 impl RawFileTableSpec {
     fn into_validated_parquet(self, schema: &str) -> Result<FileTableSpec> {
         self.source.validate_for_parquet(schema, &self.name)?;
+        validate_no_bindable_filters(SourceBackend::Parquet, schema, &self.name, &self.filters)?;
         validate_columns(&self.columns, schema, &self.name)?;
 
         let partition_names = self
@@ -269,6 +270,7 @@ impl RawFileTableSpec {
             )));
         }
         self.source.validate_for_jsonl(schema, &self.name)?;
+        validate_no_bindable_filters(SourceBackend::Jsonl, schema, &self.name, &self.filters)?;
         validate_columns(&self.columns, schema, &self.name)?;
         validate_filters_and_column_exprs(&self.filters, &self.columns, schema, &self.name)?;
 
@@ -283,6 +285,31 @@ impl RawFileTableSpec {
             ),
             source: self.source,
         })
+    }
+}
+
+fn validate_no_bindable_filters(
+    backend: SourceBackend,
+    schema: &str,
+    table: &str,
+    filters: &[FilterSpec],
+) -> Result<()> {
+    if let Some(filter) = filters.iter().find(|filter| filter.bindable) {
+        return Err(ManifestError::validation(format!(
+            "{schema}.{table} filter '{}': backend={} does not support bindable filters",
+            filter.name,
+            source_backend_label(backend)
+        )));
+    }
+
+    Ok(())
+}
+
+fn source_backend_label(backend: SourceBackend) -> &'static str {
+    match backend {
+        SourceBackend::Http => "http",
+        SourceBackend::Parquet => "parquet",
+        SourceBackend::Jsonl => "jsonl",
     }
 }
 

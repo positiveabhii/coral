@@ -215,8 +215,8 @@ tables:
     }
 
     #[test]
-    fn bindable_on_non_http_accepts_at_spec_layer() {
-        let manifest = parse_source_manifest_yaml(
+    fn bindable_on_jsonl_rejects_at_spec_layer() {
+        let error = parse_source_manifest_yaml(
             r"
 name: demo
 version: 1.0.0
@@ -235,9 +235,39 @@ tables:
         type: Utf8
 ",
         )
-        .expect("spec layer should accept bindable filters on non-http sources");
+        .expect_err("spec layer should reject bindable filters on jsonl sources");
 
-        assert_eq!(manifest.schema_name(), "demo");
+        assert!(error.to_string().contains(
+            "demo.messages filter 'id': backend=jsonl does not support bindable filters"
+        ));
+    }
+
+    #[test]
+    fn bindable_on_parquet_rejects_at_spec_layer() {
+        let error = parse_source_manifest_yaml(
+            r"
+name: demo
+version: 1.0.0
+dsl_version: 3
+backend: parquet
+tables:
+  - name: messages
+    description: Demo messages
+    filters:
+      - name: id
+        bindable: true
+    source:
+      location: file:///tmp/demo/
+    columns:
+      - name: id
+        type: Utf8
+",
+        )
+        .expect_err("spec layer should reject bindable filters on parquet sources");
+
+        assert!(error.to_string().contains(
+            "demo.messages filter 'id': backend=parquet does not support bindable filters"
+        ));
     }
 
     #[test]
