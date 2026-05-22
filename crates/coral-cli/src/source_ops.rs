@@ -494,8 +494,23 @@ pub(crate) fn prompt_for_inputs_with_credential_methods(
 
 pub(crate) fn collect_inputs_from_env(
     inputs: &[ManifestInputSpec],
+    interactive_command: String,
 ) -> Result<(Vec<SourceVariable>, Vec<SourceSecret>), anyhow::Error> {
-    collect_inputs_with(inputs, |key| read_source_input_env(key).unwrap_or_default())
+    collect_inputs_with_hint(
+        inputs,
+        |key| read_source_input_env(key).unwrap_or_default(),
+        Some(interactive_command),
+    )
+}
+
+pub(crate) fn shell_quote_arg(value: &str) -> String {
+    if value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-' | ':' | '='))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 #[expect(
@@ -506,9 +521,10 @@ fn read_source_input_env(key: &str) -> Option<String> {
     std::env::var(key).ok()
 }
 
-fn collect_inputs_with(
+fn collect_inputs_with_hint(
     inputs: &[ManifestInputSpec],
     mut lookup: impl FnMut(&str) -> String,
+    interactive_command: Option<String>,
 ) -> Result<(Vec<SourceVariable>, Vec<SourceSecret>), anyhow::Error> {
     let mut variables = Vec::new();
     let mut secrets = Vec::new();
@@ -540,8 +556,12 @@ fn collect_inputs_with(
     }
 
     if !missing.is_empty() {
+        let interactive_hint = interactive_command.map_or_else(
+            || "--interactive".to_string(),
+            |command| format!("`{command}`"),
+        );
         return Err(anyhow::anyhow!(
-            "missing required environment variable{}: {}. Set the variable{} or run with --interactive.",
+            "missing required environment variable{}: {}. Set the variable{} or run {interactive_hint}.",
             if missing.len() == 1 { "" } else { "s" },
             missing.join(", "),
             if missing.len() == 1 { "" } else { "s" },
@@ -1044,8 +1064,8 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        ValidationFollowUp, ValidationSeverityMode, collect_inputs_with, finalize_input_value,
-        source_name_arg, validation_follow_up,
+        ValidationFollowUp, ValidationSeverityMode, collect_inputs_with_hint, finalize_input_value,
+        shell_quote_arg, source_name_arg, validation_follow_up,
     };
 
     #[test]
@@ -1069,9 +1089,11 @@ mod tests {
             },
         ];
         let env: HashMap<&str, &str> = [("LINEAR_API_KEY", "lin_token")].into_iter().collect();
-        let (variables, secrets) = collect_inputs_with(&inputs, |key| {
-            env.get(key).map(|v| (*v).to_string()).unwrap_or_default()
-        })
+        let (variables, secrets) = collect_inputs_with_hint(
+            &inputs,
+            |key| env.get(key).map(|v| (*v).to_string()).unwrap_or_default(),
+            None,
+        )
         .expect("should succeed");
         assert_eq!(variables.len(), 1);
         assert_eq!(variables[0].key, "LINEAR_API_BASE");
@@ -1091,8 +1113,9 @@ mod tests {
             hint: None,
             credential: None,
         }];
-        let (variables, _) = collect_inputs_with(&inputs, |_| "https://override.test".to_string())
-            .expect("env should override default");
+        let (variables, _) =
+            collect_inputs_with_hint(&inputs, |_| "https://override.test".to_string(), None)
+                .expect("env should override default");
         assert_eq!(variables.len(), 1);
         assert_eq!(variables[0].value, "https://override.test");
     }
@@ -1107,7 +1130,7 @@ mod tests {
             hint: None,
             credential: None,
         }];
-        let (variables, secrets) = collect_inputs_with(&inputs, |_| String::new())
+        let (variables, secrets) = collect_inputs_with_hint(&inputs, |_| String::new(), None)
             .expect("default should satisfy required");
         assert_eq!(secrets.len(), 0);
         assert_eq!(variables.len(), 1);
@@ -1134,7 +1157,7 @@ mod tests {
                 credential: None,
             },
         ];
-        let error = collect_inputs_with(&inputs, |_| String::new())
+        let error = collect_inputs_with_hint(&inputs, |_| String::new(), None)
             .expect_err("missing required inputs should fail");
         let message = error.to_string();
         assert!(message.contains("LINEAR_API_KEY"));
@@ -1161,8 +1184,8 @@ mod tests {
             hint: None,
             credential: None,
         }];
-        let (variables, secrets) =
-            collect_inputs_with(&inputs, |_| String::new()).expect("optional should be omitted");
+        let (variables, secrets) = collect_inputs_with_hint(&inputs, |_| String::new(), None)
+            .expect("optional should be omitted");
         assert!(variables.is_empty());
         assert!(secrets.is_empty());
     }
@@ -1197,6 +1220,16 @@ mod tests {
         let error = finalize_input_value(&input, String::new(), "source secret")
             .expect_err("required empty input should fail");
         assert!(error.to_string().contains("missing required source secret"));
+    }
+
+    #[test]
+    fn shell_quote_arg_quotes_copyable_commands() {
+        assert_eq!(shell_quote_arg("sources/demo.yaml"), "sources/demo.yaml");
+        assert_eq!(
+            shell_quote_arg("fixtures/my source.yaml"),
+            "'fixtures/my source.yaml'"
+        );
+        assert_eq!(shell_quote_arg("it'demo.yaml"), "'it'\\''demo.yaml'");
     }
 
     #[test]

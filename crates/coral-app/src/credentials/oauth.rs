@@ -12,7 +12,7 @@ use base64::engine::general_purpose::{
 use chrono::{DateTime, Utc};
 use coral_spec::{
     ManifestOAuthClientSecretTransport, ManifestOAuthCredentialSpec, ManifestOAuthPkceMode,
-    ManifestOAuthScopeDelimiter,
+    ManifestOAuthRedirectBindPort, ManifestOAuthScopeDelimiter,
 };
 use reqwest::header::{ACCEPT, AUTHORIZATION};
 use serde_json::Value;
@@ -60,7 +60,10 @@ struct OAuthSessionConfig {
     client_secret: Option<String>,
     state: String,
     code_verifier: Option<String>,
-    redirect_uri: Url,
+    // Request path accepted by the local callback listener.
+    callback_path: String,
+    // Exact redirect_uri value sent to the provider for authorization and token exchange.
+    provider_redirect_uri: String,
     listener: TcpListener,
     expires_at: Instant,
 }
@@ -111,15 +114,17 @@ impl OAuthCredentialManager {
         reject_unknown_credential_inputs(&oauth, &credential_inputs)?;
         let client_id = resolve_client_id(&oauth, &credential_inputs)?;
         let client_secret = resolve_client_secret(&oauth, &credential_inputs)?;
-        let redirect_uri = Url::parse(&oauth.redirect_uri).map_err(|error| {
-            AppError::InvalidInput(format!("invalid OAuth redirect URI: {error}"))
-        })?;
-        let listener = bind_redirect_listener(&redirect_uri).await?;
+        let (listener, callback_path, provider_redirect_uri) =
+            bind_redirect_listener(&oauth).await?;
         let state = random_token();
-        let code_verifier =
-            (oauth.flow.pkce == ManifestOAuthPkceMode::Required).then(random_code_verifier);
-        let authorization_url =
-            build_authorization_url(&oauth, &client_id, &state, code_verifier.as_deref())?;
+        let code_verifier = pkce_code_verifier(&oauth);
+        let authorization_url = build_authorization_url(
+            &oauth,
+            &provider_redirect_uri,
+            &client_id,
+            &state,
+            code_verifier.as_deref(),
+        )?;
         let expires_at = Instant::now() + SESSION_TTL;
         let session = OAuthSessionConfig {
             input_key: request.input_key.to_string(),
@@ -128,7 +133,8 @@ impl OAuthCredentialManager {
             client_secret,
             state,
             code_verifier,
-            redirect_uri,
+            callback_path,
+            provider_redirect_uri,
             listener,
             expires_at,
         };
@@ -148,9 +154,9 @@ impl OAuthCredentialManager {
         reject_unknown_credential_inputs(oauth, &credential_inputs)?;
         let _client_id = resolve_client_id(oauth, &credential_inputs)?;
         let _client_secret = resolve_client_secret(oauth, &credential_inputs)?;
-        Url::parse(&oauth.redirect_uri).map_err(|error| {
-            AppError::InvalidInput(format!("invalid OAuth redirect URI: {error}"))
-        })?;
+        oauth
+            .redirect_bind_port()
+            .map_err(|error| AppError::InvalidInput(error.to_string()))?;
         Ok(())
     }
 
@@ -283,27 +289,54 @@ fn resolve_client_secret(
     Ok(Some(value.clone()))
 }
 
-async fn bind_redirect_listener(redirect_uri: &Url) -> Result<TcpListener, AppError> {
+async fn bind_redirect_listener(
+    oauth: &ManifestOAuthCredentialSpec,
+) -> Result<(TcpListener, String, String), AppError> {
+    let bind_port = oauth
+        .redirect_bind_port()
+        .map_err(|error| AppError::InvalidInput(error.to_string()))?;
+    let redirect_uri = Url::parse(&oauth.redirect_uri)
+        .map_err(|error| AppError::InvalidInput(format!("invalid OAuth redirect URI: {error}")))?;
     let host = redirect_uri
         .host_str()
         .ok_or_else(|| AppError::InvalidInput("OAuth redirect URI is missing host".to_string()))?;
-    let port = redirect_uri.port().ok_or_else(|| {
-        AppError::InvalidInput("OAuth redirect URI is missing explicit port".to_string())
-    })?;
-    if host != "127.0.0.1" && host != "localhost" {
-        return Err(AppError::InvalidInput(
-            "OAuth redirect URI must use a loopback host".to_string(),
-        ));
-    }
-    TcpListener::bind((host, port)).await.map_err(|error| {
+    let port = match bind_port {
+        ManifestOAuthRedirectBindPort::Fixed(port) => port,
+        ManifestOAuthRedirectBindPort::Random => {
+            // Binding port 0 asks the OS to assign a free loopback port.
+            0
+        }
+    };
+    let listener = TcpListener::bind((host, port)).await.map_err(|error| {
+        let port_label = if port == 0 {
+            "a random port".to_string()
+        } else {
+            port.to_string()
+        };
         AppError::FailedPrecondition(format!(
-            "OAuth callback listener could not bind {host}:{port}: {error}"
+            "OAuth callback listener could not bind {host}:{port_label}: {error}"
         ))
-    })
+    })?;
+    let mut effective_redirect_uri = redirect_uri;
+    if bind_port == ManifestOAuthRedirectBindPort::Random {
+        let assigned_port = listener.local_addr()?.port();
+        effective_redirect_uri
+            .set_port(Some(assigned_port))
+            .map_err(|()| {
+                AppError::InvalidInput("OAuth redirect URI port is invalid".to_string())
+            })?;
+    }
+    let provider_redirect_uri = match bind_port {
+        ManifestOAuthRedirectBindPort::Fixed(_) => oauth.redirect_uri.clone(),
+        ManifestOAuthRedirectBindPort::Random => effective_redirect_uri.to_string(),
+    };
+    let callback_path = effective_redirect_uri.path().to_string();
+    Ok((listener, callback_path, provider_redirect_uri))
 }
 
 fn build_authorization_url(
     oauth: &ManifestOAuthCredentialSpec,
+    provider_redirect_uri: &str,
     client_id: &str,
     state: &str,
     code_verifier: Option<&str>,
@@ -316,7 +349,7 @@ fn build_authorization_url(
         query
             .append_pair("response_type", "code")
             .append_pair("client_id", client_id)
-            .append_pair("redirect_uri", &oauth.redirect_uri)
+            .append_pair("redirect_uri", provider_redirect_uri)
             .append_pair("state", state);
         if let Some(scopes) = oauth.scopes.as_ref() {
             query.append_pair(
@@ -345,6 +378,10 @@ fn random_token() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
+fn pkce_code_verifier(oauth: &ManifestOAuthCredentialSpec) -> Option<String> {
+    (oauth.flow.pkce == ManifestOAuthPkceMode::Required).then(random_code_verifier)
+}
+
 fn random_code_verifier() -> String {
     format!(
         "{}{}{}",
@@ -367,7 +404,7 @@ async fn receive_callback(session: &OAuthSessionConfig) -> Result<Callback, AppE
             accepted = session.listener.accept() => {
                 let (mut stream, _peer): (_, SocketAddr) = accepted?;
                 let result_tx = result_tx.clone();
-                let expected_path = session.redirect_uri.path().to_string();
+                let expected_path = session.callback_path.clone();
                 let expected_state = session.state.clone();
                 tokio::spawn(async move {
                     let result = handle_callback_connection(
@@ -575,7 +612,7 @@ async fn exchange_authorization_code(
     let mut form = vec![
         ("grant_type", "authorization_code".to_string()),
         ("code", code.to_string()),
-        ("redirect_uri", session.oauth.redirect_uri.clone()),
+        ("redirect_uri", session.provider_redirect_uri.clone()),
     ];
     let mut request = http
         .post(&session.oauth.token_url)
@@ -787,7 +824,8 @@ mod tests {
         ManifestOAuthClientIdSpec, ManifestOAuthClientSecretSpec,
         ManifestOAuthClientSecretTransport, ManifestOAuthClientSpec, ManifestOAuthCredentialSpec,
         ManifestOAuthFlowKind, ManifestOAuthFlowSpec, ManifestOAuthPkceMode,
-        ManifestOAuthScopeDelimiter, ManifestOAuthScopeSpec, ManifestOAuthScopesSpec,
+        ManifestOAuthRedirectUriPortMode, ManifestOAuthScopeDelimiter, ManifestOAuthScopeSpec,
+        ManifestOAuthScopesSpec,
     };
     use tokio::sync::oneshot;
     use tokio::task::JoinHandle;
@@ -984,7 +1022,7 @@ mod tests {
             let authorization_url = authorization_rx.await.expect("authorization url");
             let parsed = Url::parse(&authorization_url).expect("authorization url");
             assert!(!query_pairs(&parsed).contains_key("client_secret"));
-            callback(&authorization_url, redirect_port).await;
+            callback(&authorization_url).await;
         };
 
         let (completed, ()) = tokio::join!(authorize, callback);
@@ -1021,8 +1059,8 @@ mod tests {
             client_secret: None,
             state: "expected-state".to_string(),
             code_verifier: None,
-            redirect_uri: Url::parse(&format!("http://127.0.0.1:{redirect_port}/oauth/callback"))
-                .expect("redirect uri"),
+            callback_path: "/oauth/callback".to_string(),
+            provider_redirect_uri: format!("http://127.0.0.1:{redirect_port}/oauth/callback"),
             listener,
             expires_at: std::time::Instant::now() + std::time::Duration::from_mins(1),
         };
@@ -1081,8 +1119,8 @@ mod tests {
             client_secret: None,
             state: "expected-state".to_string(),
             code_verifier: None,
-            redirect_uri: Url::parse(&format!("http://127.0.0.1:{redirect_port}/oauth/callback"))
-                .expect("redirect uri"),
+            callback_path: "/oauth/callback".to_string(),
+            provider_redirect_uri: format!("http://127.0.0.1:{redirect_port}/oauth/callback"),
             listener,
             expires_at: std::time::Instant::now() + std::time::Duration::from_mins(1),
         };
@@ -1151,7 +1189,7 @@ mod tests {
         );
         let callback = async {
             let authorization_url = authorization_rx.await.expect("authorization url");
-            callback(&authorization_url, redirect_port).await;
+            callback(&authorization_url).await;
         };
 
         let (completed, ()) = tokio::join!(authorize, callback);
@@ -1164,13 +1202,131 @@ mod tests {
         );
     }
 
-    async fn callback(authorization_url: &str, redirect_port: u16) {
+    #[tokio::test]
+    async fn random_redirect_port_is_used_for_authorization_callback_and_token_exchange() {
+        let fixture = OAuthFixture::new(None);
+        let oauth = oauth_spec_with_redirect_uri(
+            &fixture.token_url,
+            "http://127.0.0.1/oauth/callback",
+            ManifestOAuthRedirectUriPortMode::Random,
+            ManifestOAuthPkceMode::Required,
+            ManifestOAuthClientSpec {
+                id: ManifestOAuthClientIdSpec {
+                    default: Some("default-client".to_string()),
+                    input: None,
+                },
+                secret: None,
+            },
+        );
+        let manager = OAuthCredentialManager::new();
+
+        let (authorization_tx, authorization_rx) = oneshot::channel();
+        let authorize = manager.authorize(
+            StartOAuthCredentialRequest {
+                input_key: "API_TOKEN",
+                oauth: &oauth,
+                credential_inputs: Vec::new(),
+            },
+            move |authorization| async move {
+                authorization_tx
+                    .send(authorization.authorization_url)
+                    .map_err(|_authorization_url| {
+                        crate::bootstrap::AppError::FailedPrecondition(
+                            "authorization receiver closed".to_string(),
+                        )
+                    })
+            },
+        );
+        let callback = async {
+            let authorization_url = authorization_rx.await.expect("authorization url");
+            let authorization_url = Url::parse(&authorization_url).expect("authorization url");
+            let query = query_pairs(&authorization_url);
+            let redirect_uri =
+                Url::parse(query.get("redirect_uri").expect("redirect uri")).expect("redirect uri");
+            let redirect_port = redirect_uri.port().expect("assigned redirect port");
+            assert_ne!(redirect_port, 0);
+
+            callback(authorization_url.as_str()).await;
+            redirect_uri
+        };
+        let (completed, redirect_uri) = tokio::join!(authorize, callback);
+        completed.expect("authorize oauth");
+
+        let captured = fixture.token_server.await.expect("token server");
+        assert_eq!(
+            captured.form.get("redirect_uri").map(String::as_str),
+            Some(redirect_uri.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn fixed_redirect_uri_is_sent_exactly_as_authored() {
+        let fixture = OAuthFixture::new(None);
+        let redirect_port = free_loopback_port();
+        let redirect_uri = format!("http://127.0.0.1:{redirect_port}");
+        let oauth = oauth_spec_with_redirect_uri(
+            &fixture.token_url,
+            &redirect_uri,
+            ManifestOAuthRedirectUriPortMode::Fixed,
+            ManifestOAuthPkceMode::Required,
+            ManifestOAuthClientSpec {
+                id: ManifestOAuthClientIdSpec {
+                    default: Some("default-client".to_string()),
+                    input: None,
+                },
+                secret: None,
+            },
+        );
+        let manager = OAuthCredentialManager::new();
+
+        let (authorization_tx, authorization_rx) = oneshot::channel();
+        let authorize = manager.authorize(
+            StartOAuthCredentialRequest {
+                input_key: "API_TOKEN",
+                oauth: &oauth,
+                credential_inputs: Vec::new(),
+            },
+            move |authorization| async move {
+                authorization_tx
+                    .send(authorization.authorization_url)
+                    .map_err(|_authorization_url| {
+                        crate::bootstrap::AppError::FailedPrecondition(
+                            "authorization receiver closed".to_string(),
+                        )
+                    })
+            },
+        );
+        let callback = async {
+            let authorization_url = authorization_rx.await.expect("authorization url");
+            let authorization_url = Url::parse(&authorization_url).expect("authorization url");
+            let query = query_pairs(&authorization_url);
+            assert_eq!(
+                query.get("redirect_uri").map(String::as_str),
+                Some(redirect_uri.as_str())
+            );
+
+            callback(authorization_url.as_str()).await;
+        };
+        let (completed, ()) = tokio::join!(authorize, callback);
+        completed.expect("authorize oauth");
+
+        let captured = fixture.token_server.await.expect("token server");
+        assert_eq!(
+            captured.form.get("redirect_uri").map(String::as_str),
+            Some(redirect_uri.as_str())
+        );
+    }
+
+    async fn callback(authorization_url: &str) {
         let authorization_url = Url::parse(authorization_url).expect("authorization url");
-        let state = query_pairs(&authorization_url)
-            .remove("state")
-            .expect("state");
-        let callback_url =
-            format!("http://127.0.0.1:{redirect_port}/oauth/callback?state={state}&code=test-code");
+        let mut query = query_pairs(&authorization_url);
+        let state = query.remove("state").expect("state");
+        let mut callback_url =
+            Url::parse(query.get("redirect_uri").expect("redirect uri")).expect("redirect uri");
+        callback_url
+            .query_pairs_mut()
+            .append_pair("state", &state)
+            .append_pair("code", "test-code");
         reqwest::get(callback_url)
             .await
             .expect("callback response")
@@ -1184,12 +1340,29 @@ mod tests {
         pkce: ManifestOAuthPkceMode,
         client: ManifestOAuthClientSpec,
     ) -> ManifestOAuthCredentialSpec {
+        oauth_spec_with_redirect_uri(
+            token_url,
+            &format!("http://127.0.0.1:{redirect_port}/oauth/callback"),
+            ManifestOAuthRedirectUriPortMode::Fixed,
+            pkce,
+            client,
+        )
+    }
+
+    fn oauth_spec_with_redirect_uri(
+        token_url: &str,
+        redirect_uri: &str,
+        redirect_uri_port_mode: ManifestOAuthRedirectUriPortMode,
+        pkce: ManifestOAuthPkceMode,
+        client: ManifestOAuthClientSpec,
+    ) -> ManifestOAuthCredentialSpec {
         ManifestOAuthCredentialSpec {
             flow: ManifestOAuthFlowSpec {
                 kind: ManifestOAuthFlowKind::AuthorizationCode,
                 pkce,
             },
-            redirect_uri: format!("http://127.0.0.1:{redirect_port}/oauth/callback"),
+            redirect_uri: redirect_uri.to_string(),
+            redirect_uri_port_mode,
             authorization_url: "https://provider.example.com/oauth/authorize".to_string(),
             token_url: token_url.to_string(),
             client,

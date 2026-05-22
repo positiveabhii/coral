@@ -119,6 +119,8 @@ message OAuthAuthorizationCodeCredentialMethod {
   OAuthCredentialScopes scopes = 4;
   // PKCE mode.
   OauthCredentialPkceMode pkce = 5;
+  // Loopback callback port binding mode.
+  OauthCredentialRedirectUriPortMode redirect_uri_port_mode = 6;
 }
 
 // Supported OAuth PKCE modes.
@@ -130,6 +132,16 @@ enum OauthCredentialPkceMode {
   OAUTH_CREDENTIAL_PKCE_MODE_REQUIRED = 1;
   // PKCE is not used for the OAuth flow.
   OAUTH_CREDENTIAL_PKCE_MODE_DISABLED = 2;
+}
+
+// Supported loopback redirect URI port binding modes.
+enum OauthCredentialRedirectUriPortMode {
+  // Port mode is unspecified.
+  OAUTH_CREDENTIAL_REDIRECT_URI_PORT_MODE_UNSPECIFIED = 0;
+  // Bind the exact port authored in redirect_uri.
+  OAUTH_CREDENTIAL_REDIRECT_URI_PORT_MODE_FIXED = 1;
+  // Bind a random free port and use it for authorization and token exchange.
+  OAUTH_CREDENTIAL_REDIRECT_URI_PORT_MODE_RANDOM = 2;
 }
 
 // OAuth provider endpoints.

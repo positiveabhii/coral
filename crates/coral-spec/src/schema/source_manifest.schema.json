@@ -169,6 +169,7 @@
       "properties": {
         "flow": { "$ref": "#/$defs/oauth_flow" },
         "redirect_uri": { "type": "string", "minLength": 1 },
+        "redirect_uri_port_mode": { "type": "string", "enum": ["fixed", "random"] },
         "endpoints": { "$ref": "#/$defs/oauth_endpoints" },
         "client": { "$ref": "#/$defs/oauth_client" },
         "scopes": { "$ref": "#/$defs/oauth_scopes" }
