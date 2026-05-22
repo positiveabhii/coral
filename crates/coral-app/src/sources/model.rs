@@ -14,6 +14,8 @@ pub(crate) struct CandidateSource {
     pub(crate) description: String,
     pub(crate) version: String,
     pub(crate) inputs: Vec<ManifestInputSpec>,
+    /// Network hosts this source will contact, de-duplicated and sorted.
+    pub(crate) hosts: Vec<String>,
     pub(crate) installed: bool,
     pub(crate) origin: SourceOrigin,
 }

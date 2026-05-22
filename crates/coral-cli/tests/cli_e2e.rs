@@ -785,6 +785,7 @@ async fn source_test_suggests_add_for_uninstalled_bundled_source() {
                     description: "A demo bundled source for testing".to_string(),
                     version: "1.0.0".to_string(),
                     inputs: Vec::new(),
+                    hosts: Vec::new(),
                     installed: false,
                     origin: SourceOrigin::Bundled as i32,
                 }],

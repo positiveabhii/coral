@@ -635,6 +635,10 @@ async fn run_source_add(app: &AppClient, args: SourceAddArgs) -> Result<(), CliE
                 .into_iter()
                 .find(|source| source.name == bundled_name)
                 .ok_or_else(|| anyhow::anyhow!("unknown bundled source '{bundled_name}'"))?;
+            if !source_ops::confirm_source_hosts(&available.hosts, interactive)? {
+                println!("Cancelled. Source '{}' was not connected.", available.name);
+                return Ok(());
+            }
             let inputs = available
                 .inputs
                 .iter()
@@ -655,6 +659,10 @@ async fn run_source_add(app: &AppClient, args: SourceAddArgs) -> Result<(), CliE
         }
         (None, Some(file)) => {
             let (manifest_yaml, manifest) = source_ops::load_validated_manifest_file(&file)?;
+            if !source_ops::confirm_source_hosts(&manifest.outbound_hosts(), interactive)? {
+                println!("Cancelled. Source '{}' was not connected.", manifest.schema_name());
+                return Ok(());
+            }
             if interactive {
                 let inputs = source_ops::prompt_for_inputs_with_credential_methods(
                     manifest.declared_inputs(),

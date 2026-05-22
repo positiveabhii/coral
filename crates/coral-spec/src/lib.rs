@@ -77,6 +77,7 @@
 )]
 pub mod backends;
 mod common;
+mod endpoints;
 mod error;
 mod inputs;
 mod loader;

@@ -529,6 +529,7 @@ fn candidate_source_to_proto(source: CandidateSource) -> SourceInfo {
             .into_iter()
             .map(candidate_source_input_to_proto)
             .collect(),
+        hosts: source.hosts,
         installed: source.installed,
         origin: proto_source_origin(source.origin) as i32,
     }

@@ -787,11 +787,22 @@ fn redirect_uri_has_explicit_port(raw: &str) -> bool {
 }
 
 fn validate_url(input_key: &str, field: &str, raw: &str) -> Result<()> {
-    Url::parse(raw).map_err(|error| {
+    let url = Url::parse(raw).map_err(|error| {
         ManifestError::validation(format!(
             "manifest input '{input_key}' oauth.endpoints.{field} is invalid: {error}"
         ))
     })?;
+    // OAuth provider endpoints carry the authorization code and exchange it for
+    // an access token, so they must not travel over plaintext HTTP where they
+    // can be intercepted. A loopback host is exempt: it cannot be observed off
+    // the machine and keeps local OAuth test servers usable.
+    let host = url.host_str().unwrap_or_default();
+    let is_loopback = host == "127.0.0.1" || host == "localhost";
+    if url.scheme() != "https" && !(url.scheme() == "http" && is_loopback) {
+        return Err(ManifestError::validation(format!(
+            "manifest input '{input_key}' oauth.endpoints.{field} must use https"
+        )));
+    }
     Ok(())
 }
 
@@ -1413,6 +1424,41 @@ tables: []
         )
         .expect_err("bad endpoint should fail");
         assert!(error.to_string().contains("authorization_url is invalid"));
+    }
+
+    #[test]
+    fn rejects_plaintext_http_oauth_endpoint_urls() {
+        let error = collect(
+            &oauth_input(
+                r"
+              id:
+                default: default-client
+",
+            )
+            .replace(
+                "https://provider.example.com/oauth/token",
+                "http://provider.example.com/oauth/token",
+            ),
+        )
+        .expect_err("plaintext oauth endpoint should fail");
+        assert!(error.to_string().contains("token_url must use https"));
+    }
+
+    #[test]
+    fn allows_loopback_http_oauth_endpoint_urls() {
+        collect(
+            &oauth_input(
+                r"
+              id:
+                default: default-client
+",
+            )
+            .replace(
+                "https://provider.example.com/oauth/token",
+                "http://127.0.0.1:8080/oauth/token",
+            ),
+        )
+        .expect("loopback http oauth endpoint should be allowed");
     }
 
     #[test]

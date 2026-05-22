@@ -192,6 +192,10 @@ async fn run_installed_source_menu(
 }
 
 async fn run_add_bundled_source(app: &AppClient, source: &SourceInfo) -> Result<(), anyhow::Error> {
+    if !source_ops::confirm_source_hosts(&source.hosts, true)? {
+        println!("Cancelled. Source '{}' was not connected.", source.name);
+        return Ok(());
+    }
     let inputs = source
         .inputs
         .iter()
@@ -360,6 +364,7 @@ mod tests {
             description: "Query repositories and issues".to_string(),
             version: "1.0.0".to_string(),
             inputs: Vec::new(),
+            hosts: Vec::new(),
             installed: true,
             origin: 1,
         };
@@ -376,6 +381,7 @@ mod tests {
             description: "Send and receive messages".to_string(),
             version: "1.0.0".to_string(),
             inputs: Vec::new(),
+            hosts: Vec::new(),
             installed: false,
             origin: 1,
         };
@@ -391,6 +397,7 @@ mod tests {
             description: "GitHub".to_string(),
             version: "1.0.0".to_string(),
             inputs: Vec::new(),
+            hosts: Vec::new(),
             installed: false,
             origin: 1,
         };
@@ -399,6 +406,7 @@ mod tests {
             description: "Status pages".to_string(),
             version: "1.0.0".to_string(),
             inputs: Vec::new(),
+            hosts: Vec::new(),
             installed: false,
             origin: 1,
         };

@@ -19,7 +19,7 @@ use coral_spec::{
     parse_source_manifest_yaml,
 };
 use dialoguer::console::style;
-use dialoguer::{Input, Password, Select, theme::ColorfulTheme};
+use dialoguer::{Confirm, Input, Password, Select, theme::ColorfulTheme};
 use tonic::Request;
 
 const MAX_TABLES_PER_SCHEMA: usize = 9;
@@ -403,6 +403,44 @@ pub(crate) fn require_interactive() -> Result<(), anyhow::Error> {
         return Err(anyhow::anyhow!("interactive source install requires a TTY"));
     }
     Ok(())
+}
+
+/// Shows the network hosts a source will contact and, in interactive mode,
+/// asks the user to confirm before installation proceeds.
+///
+/// Returns `true` when installation should continue. In non-interactive mode
+/// the hosts are printed for visibility and `true` is returned without
+/// prompting, since there is no user available to answer.
+pub(crate) fn confirm_source_hosts(
+    hosts: &[String],
+    interactive: bool,
+) -> Result<bool, anyhow::Error> {
+    println!();
+    if hosts.is_empty() {
+        println!(
+            "{}",
+            style("This source does not declare any outbound network hosts.").dim()
+        );
+    } else {
+        println!(
+            "{}",
+            style("This source will connect to the following hosts:").bold()
+        );
+        for host in hosts {
+            println!("  {} {host}", style("•").dim());
+        }
+    }
+
+    if !interactive {
+        return Ok(true);
+    }
+
+    println!();
+    let proceed = Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Continue connecting this source?")
+        .default(true)
+        .interact()?;
+    Ok(proceed)
 }
 
 pub(crate) fn source_name_arg(name: Option<&str>) -> Result<String, anyhow::Error> {
