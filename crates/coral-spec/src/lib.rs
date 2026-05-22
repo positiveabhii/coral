@@ -108,6 +108,7 @@ pub use loader::load_manifest_path;
 pub use parser::{
     ValidatedSourceManifest, parse_source_manifest_value, parse_source_manifest_yaml,
 };
+pub use schema::{source_manifest_schema, source_manifest_schema_json};
 pub use template::{ParsedTemplate, TemplateNamespace, TemplatePart, TemplateToken};
 pub(crate) use validate::{
     DetailHintDeclaringSurface, DetailHintTargetTable, validate_columns,

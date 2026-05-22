@@ -220,6 +220,9 @@ tables:
         .expect_err("legacy schema field should fail");
         let message = error.to_string();
         assert!(message.starts_with("invalid input: source manifest failed schema validation:"));
-        assert!(message.contains("'schema'"));
+        assert!(message.contains("\"schema\":\"demo\""));
+        assert!(
+            message.contains("is not valid under any of the schemas listed in the 'anyOf' keyword")
+        );
     }
 }

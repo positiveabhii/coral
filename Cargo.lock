@@ -1141,6 +1141,7 @@ name = "coral-spec"
 version = "0.2.1"
 dependencies = [
  "jsonschema",
+ "schemars",
  "serde",
  "serde_json",
  "serde_yaml",

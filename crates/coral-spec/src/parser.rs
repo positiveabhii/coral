@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::backends::file::{JsonlSourceManifest, ParquetSourceManifest};
 use crate::backends::http::HttpSourceManifest;
-use crate::schema::validate_manifest_schema;
+use crate::schema::{parse_manifest_backend, validate_manifest_schema};
 use crate::{ManifestError, ManifestInputSpec, Result, SourceBackend};
 
 /// Validated top-level source spec for one registered source.
@@ -157,7 +157,7 @@ pub fn parse_source_manifest_yaml(raw: &str) -> Result<ValidatedSourceManifest> 
 /// rules.
 pub fn parse_source_manifest_value(value: Value) -> Result<ValidatedSourceManifest> {
     validate_manifest_schema(&value)?;
-    let backend_kind = parse_source_backend(&value)?;
+    let backend_kind = parse_manifest_backend(value.clone())?;
     match backend_kind {
         SourceBackend::Http => Ok(ValidatedSourceManifest {
             inner: ValidatedManifestKind::Http(Box::new(HttpSourceManifest::parse_manifest_value(
@@ -173,15 +173,6 @@ pub fn parse_source_manifest_value(value: Value) -> Result<ValidatedSourceManife
             inner: ValidatedManifestKind::Jsonl(JsonlSourceManifest::parse_manifest_value(value)?),
         }),
     }
-}
-
-fn parse_source_backend(value: &Value) -> Result<SourceBackend> {
-    let backend = value.get("backend").cloned().ok_or_else(|| {
-        ManifestError::validation("failed to deserialize manifest: missing backend")
-    })?;
-    let backend: SourceBackend =
-        serde_json::from_value(backend).map_err(ManifestError::deserialize)?;
-    Ok(backend)
 }
 
 #[cfg(test)]

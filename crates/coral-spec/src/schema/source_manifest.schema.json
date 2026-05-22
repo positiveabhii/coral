@@ -1,1057 +1,3783 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coral.local/source_manifest.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Coral Source Manifest",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["dsl_version", "name", "version", "backend"],
-  "allOf": [
+  "anyOf": [
     {
-      "if": {
-        "properties": { "backend": { "const": "http" } },
-        "required": ["backend"]
-      },
-      "then": {
-        "anyOf": [
-          { "required": ["tables"] },
-          { "required": ["functions"] }
-        ],
-        "properties": {
-          "tables": {
-            "items": { "$ref": "#/$defs/http_table" }
-          }
-        }
-      }
+      "$ref": "#/$defs/HttpManifestWithTablesAndFunctions"
     },
     {
-      "if": {
-        "properties": { "backend": { "enum": ["jsonl", "parquet"] } },
-        "required": ["backend"]
-      },
-      "then": {
-        "required": ["tables"],
-        "properties": {
-          "tables": {
-            "items": { "$ref": "#/$defs/file_table" }
-          }
-        }
-      }
+      "$ref": "#/$defs/HttpManifestWithTables"
     },
     {
-      "if": {
-        "properties": {
-          "backend": { "not": { "enum": ["http", "jsonl", "parquet"] } }
-        },
-        "required": ["backend"]
-      },
-      "then": {
-        "properties": {
-          "tables": {
-            "items": false
-          }
-        }
-      }
+      "$ref": "#/$defs/HttpManifestWithFunctions"
+    },
+    {
+      "$ref": "#/$defs/FileManifest"
+    },
+    {
+      "$ref": "#/$defs/FileManifest2"
     }
   ],
-  "properties": {
-    "dsl_version": { "type": "integer", "const": 3 },
-    "name": { "type": "string", "minLength": 1 },
-    "version": { "type": "string", "minLength": 1 },
-    "description": { "type": "string" },
-    "test_queries": {
-      "type": "array",
-      "items": { "type": "string", "minLength": 1 }
-    },
-    "backend": { "type": "string", "enum": ["http", "parquet", "jsonl"] },
-    "inputs": { "$ref": "#/$defs/inputs" },
-    "base_url": { "type": "string", "minLength": 1 },
-    "auth": { "$ref": "#/$defs/auth" },
-    "request_headers": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/header" }
-    },
-    "rate_limit": { "$ref": "#/$defs/rate_limit" },
-    "tables": {
-      "type": "array",
-      "minItems": 1,
-      "items": { "type": "object" }
-    },
-    "functions": {
-      "type": "array",
-      "minItems": 1,
-      "items": { "$ref": "#/$defs/table_function" }
-    },
-    "onboarding": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["instructions"],
-      "properties": {
-        "instructions": {
-          "type": "string",
-          "description": "Freeform instructions for an AI agent to discover shared workspace context for this provider"
-        }
-      }
-    }
-  },
   "$defs": {
-    "inputs": {
+    "HttpManifestWithTablesAndFunctions": {
       "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/input" },
-      "propertyNames": { "minLength": 1 }
-    },
-    "input": {
-      "oneOf": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind"],
-          "properties": {
-            "kind": { "const": "variable" },
-            "default": { "type": "string" },
-            "required": { "type": "boolean" },
-            "hint": { "type": "string" }
+      "properties": {
+        "dsl_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 3,
+          "maximum": 3
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "test_queries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "backend": {
+          "$ref": "#/$defs/HttpBackend"
+        },
+        "inputs": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Input"
           }
         },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind"],
-          "properties": {
-            "kind": { "const": "secret" },
-            "required": { "type": "boolean" },
-            "hint": { "type": "string" },
-            "credential": { "$ref": "#/$defs/credential" }
+        "base_url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "auth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Auth"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_headers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Header"
           }
+        },
+        "rate_limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateLimit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HttpTable"
+          },
+          "minItems": 1
+        },
+        "functions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableFunction"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "dsl_version",
+        "name",
+        "version",
+        "backend",
+        "base_url",
+        "tables",
+        "functions"
+      ]
+    },
+    "HttpBackend": {
+      "type": "string",
+      "enum": [
+        "http"
+      ]
+    },
+    "Input": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/VariableInput"
+        },
+        {
+          "$ref": "#/$defs/SecretInput"
         }
       ]
     },
-    "credential": {
+    "VariableInput": {
       "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/VariableInputKind"
+        },
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "required": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "hint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
       "additionalProperties": false,
-      "required": ["methods"],
+      "required": [
+        "kind"
+      ]
+    },
+    "VariableInputKind": {
+      "type": "string",
+      "enum": [
+        "variable"
+      ]
+    },
+    "SecretInput": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SecretInputKind"
+        },
+        "required": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "hint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "credential": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Credential"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ]
+    },
+    "SecretInputKind": {
+      "type": "string",
+      "enum": [
+        "secret"
+      ]
+    },
+    "Credential": {
+      "type": "object",
       "properties": {
         "methods": {
           "type": "array",
-          "minItems": 1,
-          "items": { "$ref": "#/$defs/credential_method" }
+          "items": {
+            "$ref": "#/$defs/CredentialMethod"
+          },
+          "minItems": 1
         }
-      }
+      },
+      "additionalProperties": false,
+      "required": [
+        "methods"
+      ]
     },
-    "credential_method": {
-      "oneOf": [
+    "CredentialMethod": {
+      "anyOf": [
         {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["type"],
-          "properties": {
-            "type": { "const": "source_config" },
-            "label": { "type": "string" },
-            "description": { "type": "string" }
-          }
+          "$ref": "#/$defs/SourceConfigCredentialMethod"
         },
         {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["type", "oauth"],
-          "properties": {
-            "type": { "const": "oauth" },
-            "label": { "type": "string" },
-            "description": { "type": "string" },
-            "oauth": { "$ref": "#/$defs/oauth_credential_method" }
-          }
+          "$ref": "#/$defs/OAuthCredentialMethod"
         }
       ]
     },
-    "oauth_credential_method": {
+    "SourceConfigCredentialMethod": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["flow", "redirect_uri", "endpoints", "client"],
       "properties": {
-        "flow": { "$ref": "#/$defs/oauth_flow" },
-        "redirect_uri": { "type": "string", "minLength": 1 },
-        "redirect_uri_port_mode": { "type": "string", "enum": ["fixed", "random"] },
-        "endpoints": { "$ref": "#/$defs/oauth_endpoints" },
-        "client": { "$ref": "#/$defs/oauth_client" },
-        "scopes": { "$ref": "#/$defs/oauth_scopes" }
-      }
-    },
-    "oauth_flow": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type", "pkce"],
-      "properties": {
-        "type": { "const": "authorization_code" },
-        "pkce": { "type": "string", "enum": ["required", "disabled"] }
-      }
-    },
-    "oauth_endpoints": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["authorization_url", "token_url"],
-      "properties": {
-        "authorization_url": { "type": "string", "minLength": 1 },
-        "token_url": { "type": "string", "minLength": 1 }
-      }
-    },
-    "oauth_client": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id"],
-      "properties": {
-        "id": { "$ref": "#/$defs/oauth_client_id" },
-        "secret": { "$ref": "#/$defs/oauth_client_secret" }
-      }
-    },
-    "oauth_client_id": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "default": { "type": "string", "minLength": 1 },
-        "input": { "type": "string", "minLength": 1 }
+        "type": {
+          "$ref": "#/$defs/SourceConfigCredentialMethodKind"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
       },
-      "anyOf": [
-        { "required": ["default"] },
-        { "required": ["input"] }
+      "additionalProperties": false,
+      "required": [
+        "type"
       ]
     },
-    "oauth_client_secret": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["input", "transport"],
-      "properties": {
-        "input": { "type": "string", "minLength": 1 },
-        "transport": { "type": "string", "enum": ["basic_auth", "request_body"] }
-      }
+    "SourceConfigCredentialMethodKind": {
+      "type": "string",
+      "enum": [
+        "source_config"
+      ]
     },
-    "oauth_scopes": {
+    "OAuthCredentialMethod": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["scope"],
       "properties": {
-        "scope": { "$ref": "#/$defs/oauth_scope" }
-      }
+        "type": {
+          "$ref": "#/$defs/OAuthCredentialMethodKind"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "oauth": {
+          "$ref": "#/$defs/OAuthCredential"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "oauth"
+      ]
     },
-    "oauth_scope": {
+    "OAuthCredentialMethodKind": {
+      "type": "string",
+      "enum": [
+        "oauth"
+      ]
+    },
+    "OAuthCredential": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["delimiter", "values"],
       "properties": {
-        "delimiter": { "type": "string", "enum": ["space", "comma"] },
+        "flow": {
+          "$ref": "#/$defs/OAuthFlow"
+        },
+        "redirect_uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "endpoints": {
+          "$ref": "#/$defs/OAuthEndpoints"
+        },
+        "client": {
+          "$ref": "#/$defs/OAuthClient"
+        },
+        "scopes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OAuthScopes"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "flow",
+        "redirect_uri",
+        "endpoints",
+        "client"
+      ]
+    },
+    "OAuthFlow": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/OAuthFlowKind"
+        },
+        "pkce": {
+          "$ref": "#/$defs/OAuthPkce"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "pkce"
+      ]
+    },
+    "OAuthFlowKind": {
+      "type": "string",
+      "enum": [
+        "authorization_code"
+      ]
+    },
+    "OAuthPkce": {
+      "type": "string",
+      "enum": [
+        "required",
+        "disabled"
+      ]
+    },
+    "OAuthEndpoints": {
+      "type": "object",
+      "properties": {
+        "authorization_url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "token_url": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "authorization_url",
+        "token_url"
+      ]
+    },
+    "OAuthClient": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/OAuthClientId"
+        },
+        "secret": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OAuthClientSecret"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ]
+    },
+    "OAuthClientId": {
+      "type": "object",
+      "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "default": null
+        },
+        "input": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "OAuthClientSecret": {
+      "type": "object",
+      "properties": {
+        "input": {
+          "type": "string",
+          "minLength": 1
+        },
+        "transport": {
+          "$ref": "#/$defs/OAuthClientSecretTransport"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "input",
+        "transport"
+      ]
+    },
+    "OAuthClientSecretTransport": {
+      "type": "string",
+      "enum": [
+        "basic_auth",
+        "request_body"
+      ]
+    },
+    "OAuthScopes": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/OAuthScope"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "scope"
+      ]
+    },
+    "OAuthScope": {
+      "type": "object",
+      "properties": {
+        "delimiter": {
+          "$ref": "#/$defs/OAuthScopeDelimiter"
+        },
         "values": {
           "type": "array",
-          "minItems": 1,
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
         }
-      }
+      },
+      "additionalProperties": false,
+      "required": [
+        "delimiter",
+        "values"
+      ]
     },
-    "auth": {
+    "OAuthScopeDelimiter": {
+      "type": "string",
+      "enum": [
+        "space",
+        "comma"
+      ]
+    },
+    "Auth": {
       "oneOf": [
         {
           "type": "object",
-          "additionalProperties": false,
-          "required": ["type", "username", "password"],
           "properties": {
-            "type": { "const": "BasicAuth" },
-            "username": { "type": "string", "minLength": 1 },
-            "password": { "type": "string", "minLength": 1 }
-          }
+            "username": {
+              "type": "string",
+              "minLength": 1
+            },
+            "password": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": {
+              "type": "string",
+              "const": "BasicAuth"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "username",
+            "password"
+          ]
         },
         {
           "type": "object",
-          "additionalProperties": false,
-          "required": ["type"],
           "properties": {
-            "type": { "const": "HeaderAuth" },
             "headers": {
               "type": "array",
-              "items": { "$ref": "#/$defs/header" }
+              "items": {
+                "$ref": "#/$defs/Header"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "HeaderAuth"
             }
-          }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
         },
         {
           "type": "object",
-          "additionalProperties": true,
-          "required": ["type", "authenticator"],
           "properties": {
-            "type": { "const": "CustomAuth" },
-            "authenticator": { "type": "string", "minLength": 1 }
-          }
+            "type": {
+              "type": "string",
+              "const": "CustomAuth"
+            }
+          },
+          "$ref": "#/$defs/CustomAuth",
+          "required": [
+            "type"
+          ]
         }
       ]
     },
-    "rate_limit": {
+    "Header": {
       "type": "object",
-      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "unevaluatedProperties": false,
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "template": {
+              "type": "string"
+            },
+            "from": {
+              "type": "string",
+              "const": "template"
+            }
+          },
+          "required": [
+            "from",
+            "template"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": true,
+            "from": {
+              "type": "string",
+              "const": "literal"
+            }
+          },
+          "required": [
+            "from",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "filter"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_int"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_bool"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_split"
+            }
+          },
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_split_int"
+            }
+          },
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "arg"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_int"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_bool"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_split"
+            }
+          },
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_split_int"
+            }
+          },
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "from": {
+              "type": "string",
+              "const": "input"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "from": {
+              "type": "string",
+              "const": "state"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "seconds": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "from": {
+              "type": "string",
+              "const": "now_epoch_minus_seconds"
+            }
+          },
+          "required": [
+            "from",
+            "seconds"
+          ]
+        }
+      ]
+    },
+    "CustomAuth": {
+      "type": "object",
+      "properties": {
+        "authenticator": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "authenticator"
+      ],
+      "additionalProperties": true
+    },
+    "RateLimit": {
+      "type": "object",
       "properties": {
         "extra_statuses": {
           "type": "array",
-          "items": { "type": "integer", "minimum": 400, "maximum": 599 },
-          "uniqueItems": true
+          "items": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 400,
+            "maximum": 599
+          },
+          "default": []
         },
-        "retry_after_header": { "type": "string", "minLength": 1 },
-        "remaining_header": { "type": "string", "minLength": 1 },
-        "reset_header": { "type": "string", "minLength": 1 }
-      }
+        "retry_after_header": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "default": null
+        },
+        "remaining_header": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "default": null
+        },
+        "reset_header": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "default": null
+        }
+      },
+      "additionalProperties": false
     },
-    "http_table": {
+    "HttpTable": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "description"],
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "description": { "type": "string", "minLength": 1 },
-        "guide": { "type": "string" },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "guide": {
+          "type": "string",
+          "default": ""
+        },
         "filters": {
           "type": "array",
-          "items": { "$ref": "#/$defs/filter" }
+          "items": {
+            "$ref": "#/$defs/Filter"
+          }
         },
-        "fetch_limit_default": { "type": "integer", "minimum": 1 },
-        "search_limits": { "$ref": "#/$defs/search_limits" },
+        "fetch_limit_default": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 1,
+          "default": null
+        },
+        "search_limits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SearchLimits"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "detail_hints": {
           "type": "array",
-          "items": { "$ref": "#/$defs/detail_hint" }
+          "items": {
+            "$ref": "#/$defs/DetailHint"
+          }
         },
-        "request": { "$ref": "#/$defs/request" },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Request"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "requests": {
           "type": "array",
           "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["when_filters"],
-            "properties": {
-              "when_filters": {
-                "type": "array",
-                "items": { "type": "string", "minLength": 1 },
-                "minItems": 1
-              },
-              "method": { "type": "string", "enum": ["GET", "POST"] },
-              "path": { "type": "string", "minLength": 1 },
-              "query": {
-                "type": "array",
-                "items": { "$ref": "#/$defs/query_param" }
-              },
-              "body": { "$ref": "#/$defs/body" },
-              "headers": {
-                "type": "array",
-                "items": { "$ref": "#/$defs/header" }
-              }
-            }
+            "$ref": "#/$defs/RequestRoute"
           }
         },
-        "response": { "$ref": "#/$defs/response" },
-        "pagination": { "$ref": "#/$defs/pagination" },
-        "columns": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/column" }
-        }
-      }
-    },
-    "file_table": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "description", "source"],
-      "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "description": { "type": "string", "minLength": 1 },
-        "guide": { "type": "string" },
-        "filters": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/filter" }
-        },
-        "fetch_limit_default": { "type": "integer", "minimum": 1 },
-        "source": { "$ref": "#/$defs/source" },
-        "columns": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/column" }
-        }
-      }
-    },
-    "source": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["location"],
-      "properties": {
-        "location": { "type": "string", "minLength": 1 },
-        "glob": { "type": "string", "minLength": 1 },
-        "partitions": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/partition_column" }
-        }
-      }
-    },
-    "partition_column": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "type"],
-      "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "type": { "type": "string", "minLength": 1 }
-      }
-    },
-    "manifest_data_type": {
-      "type": "string",
-      "enum": ["Utf8", "Int64", "Boolean", "Float64", "Timestamp", "Json"]
-    },
-    "filter": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name"],
-      "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "type": { "$ref": "#/$defs/manifest_data_type" },
-        "required": { "type": "boolean" },
-        "mode": {
-          "oneOf": [
-            { "const": "equality" },
+        "response": {
+          "anyOf": [
             {
-              "const": "search",
-              "deprecated": true,
-              "description": "Compatibility-only virtual-filter marker. New provider-native search surfaces should use kind: search table functions."
+              "$ref": "#/$defs/Response"
             },
-            { "const": "contains" }
+            {
+              "type": "null"
+            }
           ]
         },
-        "description": { "type": "string" }
-      }
-    },
-    "search_limits": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["default_top_k", "max_top_k", "max_calls_per_query"],
-      "properties": {
-        "default_top_k": { "type": "integer", "minimum": 1, "maximum": 1000 },
-        "max_top_k": { "type": "integer", "minimum": 1, "maximum": 1000 },
-        "max_calls_per_query": { "type": "integer", "minimum": 1, "maximum": 100 }
-      }
-    },
-    "detail_hint": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["table", "search_result_column", "detail_filter", "purpose"],
-      "properties": {
-        "table": { "type": "string", "minLength": 1 },
-        "search_result_column": { "type": "string", "minLength": 1 },
-        "detail_filter": { "type": "string", "minLength": 1 },
-        "purpose": { "type": "string", "minLength": 1 }
-      }
-    },
-    "table_function": {
-      "type": "object",
-      "additionalProperties": false,
-      "allOf": [
-        {
-          "if": {
-            "properties": { "kind": { "const": "search" } },
-            "required": ["kind"]
-          },
-          "then": { "required": ["search_limits"] }
-        }
-      ],
-      "required": ["name", "request"],
-      "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "kind": { "type": "string", "enum": ["table", "search"] },
-        "description": { "type": "string" },
-        "fetch_limit_default": { "type": "integer", "minimum": 1 },
-        "search_limits": { "$ref": "#/$defs/search_limits" },
-        "detail_hints": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/detail_hint" }
+        "pagination": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pagination"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
-        "args": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/table_function_arg" }
-        },
-        "request": { "$ref": "#/$defs/request" },
-        "response": { "$ref": "#/$defs/response" },
-        "pagination": { "$ref": "#/$defs/pagination" },
         "columns": {
           "type": "array",
-          "items": { "$ref": "#/$defs/column" }
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
         }
-      }
-    },
-    "table_function_arg": {
-      "type": "object",
+      },
       "additionalProperties": false,
-      "required": ["name", "bind"],
+      "required": [
+        "name",
+        "description"
+      ]
+    },
+    "Filter": {
+      "type": "object",
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "required": { "type": "boolean" },
-        "values": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 },
-          "uniqueItems": true
+        "name": {
+          "type": "string",
+          "minLength": 1
         },
-        "bind": { "$ref": "#/$defs/function_binding" }
-      }
-    },
-    "function_binding": {
-      "type": "object",
+        "type": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ManifestDataType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FilterMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        }
+      },
       "additionalProperties": false,
-      "required": ["arg"],
-      "properties": {
-        "arg": { "type": "string", "minLength": 1 }
-      }
+      "required": [
+        "name"
+      ]
     },
-    "request": {
+    "ManifestDataType": {
+      "type": "string",
+      "enum": [
+        "Utf8",
+        "Int64",
+        "Boolean",
+        "Float64",
+        "Timestamp",
+        "Json"
+      ]
+    },
+    "FilterMode": {
+      "type": "string",
+      "enum": [
+        "equality",
+        "search",
+        "contains"
+      ]
+    },
+    "SearchLimits": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["path"],
       "properties": {
-        "method": { "type": "string", "enum": ["GET", "POST"] },
-        "path": { "type": "string", "minLength": 1 },
+        "default_top_k": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "max_top_k": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "max_calls_per_query": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "default_top_k",
+        "max_top_k",
+        "max_calls_per_query"
+      ]
+    },
+    "DetailHint": {
+      "type": "object",
+      "properties": {
+        "table": {
+          "type": "string",
+          "minLength": 1
+        },
+        "search_result_column": {
+          "type": "string",
+          "minLength": 1
+        },
+        "detail_filter": {
+          "type": "string",
+          "minLength": 1
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "table",
+        "search_result_column",
+        "detail_filter",
+        "purpose"
+      ]
+    },
+    "Request": {
+      "type": "object",
+      "properties": {
+        "method": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HttpMethod"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
         "query": {
           "type": "array",
-          "items": { "$ref": "#/$defs/query_param" }
+          "items": {
+            "$ref": "#/$defs/QueryParam"
+          }
         },
-        "body": { "$ref": "#/$defs/body" },
+        "body": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Body"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "headers": {
           "type": "array",
-          "items": { "$ref": "#/$defs/header" }
+          "items": {
+            "$ref": "#/$defs/Header"
+          }
         }
-      }
+      },
+      "additionalProperties": false,
+      "required": [
+        "path"
+      ]
     },
-    "body": {
+    "HttpMethod": {
+      "type": "string",
+      "enum": [
+        "GET",
+        "POST"
+      ]
+    },
+    "QueryParam": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "unevaluatedProperties": false,
       "oneOf": [
         {
-          "type": "array",
-          "items": { "$ref": "#/$defs/body_field" }
-        },
-        {
           "type": "object",
-          "additionalProperties": false,
-          "required": ["format", "fields"],
           "properties": {
-            "format": { "const": "json" },
-            "fields": {
-              "type": "array",
-              "items": { "$ref": "#/$defs/body_field" }
+            "template": {
+              "type": "string"
+            },
+            "from": {
+              "type": "string",
+              "const": "template"
             }
-          }
+          },
+          "required": [
+            "from",
+            "template"
+          ]
         },
         {
           "type": "object",
-          "additionalProperties": false,
-          "required": ["format", "content"],
           "properties": {
-            "format": { "const": "text" },
-            "content": { "$ref": "#/$defs/body_text_content" }
-          }
+            "value": true,
+            "from": {
+              "type": "string",
+              "const": "literal"
+            }
+          },
+          "required": [
+            "from",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "filter"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_int"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_bool"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_split"
+            }
+          },
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_split_int"
+            }
+          },
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "arg"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_int"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_bool"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_split"
+            }
+          },
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_split_int"
+            }
+          },
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "from": {
+              "type": "string",
+              "const": "input"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "from": {
+              "type": "string",
+              "const": "state"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "seconds": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "from": {
+              "type": "string",
+              "const": "now_epoch_minus_seconds"
+            }
+          },
+          "required": [
+            "from",
+            "seconds"
+          ]
         }
       ]
     },
-    "body_text_content": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["from"],
-      "properties": {
-        "from": { "type": "string" },
-        "template": { "type": "string" },
-        "value": {},
-        "key": { "type": "string", "minLength": 1 },
-        "keys": {
+    "Body": {
+      "anyOf": [
+        {
           "type": "array",
-          "minItems": 1,
-          "items": { "type": "string", "minLength": 1 }
+          "items": {
+            "$ref": "#/$defs/BodyField"
+          }
         },
-        "default": {},
-        "seconds": { "type": "integer" },
-        "separator": { "type": "string", "minLength": 1 },
-        "part": { "type": "integer", "minimum": 0 }
-      },
-      "allOf": [{ "$ref": "#/$defs/value_source_switch" }]
-    },
-    "query_param": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "from"],
-      "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "explode": { "type": "boolean" },
-        "from": { "type": "string" },
-        "template": { "type": "string" },
-        "value": {},
-        "key": { "type": "string", "minLength": 1 },
-        "keys": {
-          "type": "array",
-          "minItems": 1,
-          "items": { "type": "string", "minLength": 1 }
+        {
+          "$ref": "#/$defs/JsonBody"
         },
-        "default": {},
-        "seconds": { "type": "integer" },
-        "separator": { "type": "string", "minLength": 1 },
-        "part": { "type": "integer", "minimum": 0 }
-      },
-      "allOf": [{ "$ref": "#/$defs/value_source_switch" }]
+        {
+          "$ref": "#/$defs/TextBody"
+        }
+      ]
     },
-    "body_field": {
+    "BodyField": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["path", "from"],
       "properties": {
         "path": {
           "type": "array",
-          "minItems": 1,
-          "items": { "type": "string", "minLength": 1 }
-        },
-        "from": { "type": "string" },
-        "template": { "type": "string" },
-        "value": {},
-        "key": { "type": "string", "minLength": 1 },
-        "keys": {
-          "type": "array",
-          "minItems": 1,
-          "items": { "type": "string", "minLength": 1 }
-        },
-        "default": {},
-        "seconds": { "type": "integer" },
-        "separator": { "type": "string", "minLength": 1 },
-        "part": { "type": "integer", "minimum": 0 }
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        }
       },
-      "allOf": [{ "$ref": "#/$defs/value_source_switch" }]
-    },
-    "header": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "from"],
-      "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "from": { "type": "string" },
-        "template": { "type": "string" },
-        "value": {},
-        "key": { "type": "string", "minLength": 1 },
-        "keys": {
-          "type": "array",
-          "minItems": 1,
-          "items": { "type": "string", "minLength": 1 }
-        },
-        "default": {},
-        "seconds": { "type": "integer" },
-        "separator": { "type": "string", "minLength": 1 },
-        "part": { "type": "integer", "minimum": 0 }
-      },
-      "allOf": [{ "$ref": "#/$defs/value_source_switch" }]
-    },
-    "value_source_switch": {
+      "required": [
+        "path"
+      ],
+      "unevaluatedProperties": false,
       "oneOf": [
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "template" },
-            "template": { "type": "string" }
+            "template": {
+              "type": "string"
+            },
+            "from": {
+              "type": "string",
+              "const": "template"
+            }
           },
-          "required": ["template"]
+          "required": [
+            "from",
+            "template"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "literal" },
-            "value": {}
+            "value": true,
+            "from": {
+              "type": "string",
+              "const": "literal"
+            }
           },
-          "required": ["value"]
+          "required": [
+            "from",
+            "value"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "filter" },
-            "key": { "type": "string", "minLength": 1 }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "filter"
+            }
           },
-          "required": ["key"]
+          "required": [
+            "from",
+            "key"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "filter_int" },
-            "key": { "type": "string", "minLength": 1 },
-            "default": { "type": "integer" }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_int"
+            }
           },
-          "required": ["key"]
+          "required": [
+            "from",
+            "key"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "filter_bool" },
-            "key": { "type": "string", "minLength": 1 },
-            "default": { "type": "boolean" }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_bool"
+            }
           },
-          "required": ["key"]
+          "required": [
+            "from",
+            "key"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "filter_split" },
-            "key": { "type": "string", "minLength": 1 },
-            "separator": { "type": "string", "minLength": 1 },
-            "part": { "type": "integer", "minimum": 0 }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_split"
+            }
           },
-          "required": ["key", "separator", "part"]
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "filter_split_int" },
-            "key": { "type": "string", "minLength": 1 },
-            "separator": { "type": "string", "minLength": 1 },
-            "part": { "type": "integer", "minimum": 0 }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_split_int"
+            }
           },
-          "required": ["key", "separator", "part"]
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "arg" },
-            "key": { "type": "string", "minLength": 1 }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "arg"
+            }
           },
-          "required": ["key"]
+          "required": [
+            "from",
+            "key"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "arg_int" },
-            "key": { "type": "string", "minLength": 1 },
-            "default": { "type": "integer" }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_int"
+            }
           },
-          "required": ["key"]
+          "required": [
+            "from",
+            "key"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "arg_bool" },
-            "key": { "type": "string", "minLength": 1 },
-            "default": { "type": "boolean" }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_bool"
+            }
           },
-          "required": ["key"]
+          "required": [
+            "from",
+            "key"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "arg_split" },
-            "key": { "type": "string", "minLength": 1 },
-            "separator": { "type": "string", "minLength": 1 },
-            "part": { "type": "integer", "minimum": 0 }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_split"
+            }
           },
-          "required": ["key", "separator", "part"]
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "arg_split_int" },
-            "key": { "type": "string", "minLength": 1 },
-            "separator": { "type": "string", "minLength": 1 },
-            "part": { "type": "integer", "minimum": 0 }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_split_int"
+            }
           },
-          "required": ["key", "separator", "part"]
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "input" },
-            "key": { "type": "string", "minLength": 1 }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "from": {
+              "type": "string",
+              "const": "input"
+            }
           },
-          "required": ["key"]
+          "required": [
+            "from",
+            "key"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "state" },
-            "key": { "type": "string", "minLength": 1 }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "from": {
+              "type": "string",
+              "const": "state"
+            }
           },
-          "required": ["key"]
+          "required": [
+            "from",
+            "key"
+          ]
         },
         {
+          "type": "object",
           "properties": {
-            "from": { "const": "now_epoch_minus_seconds" },
-            "seconds": { "type": "integer" }
+            "seconds": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "from": {
+              "type": "string",
+              "const": "now_epoch_minus_seconds"
+            }
           },
-          "required": ["seconds"]
+          "required": [
+            "from",
+            "seconds"
+          ]
         }
       ]
     },
-    "response": {
+    "JsonBody": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
         "format": {
-          "type": "string",
-          "enum": ["json", "json_each_row"]
+          "$ref": "#/$defs/JsonBodyFormat"
         },
-        "rows_path": {
+        "fields": {
           "type": "array",
-          "items": { "type": "string", "minLength": 1 }
-        },
-        "ok_path": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 }
-        },
-        "error_path": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 }
-        },
-        "allow_404_empty": { "type": "boolean" },
-        "row_strategy": {
-          "type": "string",
-          "enum": ["direct", "series_point_list", "dict_entries"]
+          "items": {
+            "$ref": "#/$defs/BodyField"
+          }
         }
-      }
-    },
-    "pagination": {
-      "type": "object",
+      },
       "additionalProperties": false,
-      "properties": {
-        "mode": {
-          "type": "string",
-          "enum": [
-            "none",
-            "auto",
-            "cursor_query",
-            "cursor_body",
-            "page",
-            "offset",
-            "link_header"
-          ]
-        },
-        "page_size": { "$ref": "#/$defs/page_size" },
-        "cursor_param": { "type": "string", "minLength": 1 },
-        "cursor_body_path": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 }
-        },
-        "response_cursor_path": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 }
-        },
-        "page_param": { "type": "string", "minLength": 1 },
-        "page_start": { "type": "integer" },
-        "page_step": { "type": "integer", "minimum": 1 },
-        "offset_param": { "type": "string", "minLength": 1 },
-        "offset_start": { "type": "integer" },
-        "offset_step": { "type": "integer", "minimum": 1 },
-        "link_header_require_results": { "type": "boolean" },
-        "max_pages": { "type": "integer", "minimum": 1 }
-      }
+      "required": [
+        "format"
+      ]
     },
-    "page_size": {
+    "JsonBodyFormat": {
+      "type": "string",
+      "enum": [
+        "json"
+      ]
+    },
+    "TextBody": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["default", "max"],
       "properties": {
-        "default": { "type": "integer", "minimum": 1 },
-        "max": { "type": "integer", "minimum": 1 },
-        "query_param": { "type": "string", "minLength": 1 },
-        "body_path": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 }
+        "format": {
+          "$ref": "#/$defs/TextBodyFormat"
+        },
+        "content": {
+          "$ref": "#/$defs/ValueSource"
         }
-      }
-    },
-    "column": {
-      "type": "object",
+      },
       "additionalProperties": false,
-      "required": ["name", "type"],
-      "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "type": { "$ref": "#/$defs/manifest_data_type" },
-        "nullable": { "type": "boolean" },
-        "virtual": { "type": "boolean" },
-        "description": { "type": "string" },
-        "expr": { "$ref": "#/$defs/expr" }
-      }
+      "required": [
+        "format",
+        "content"
+      ]
     },
-    "expr": {
+    "TextBodyFormat": {
+      "type": "string",
+      "enum": [
+        "text"
+      ]
+    },
+    "ValueSource": {
       "oneOf": [
         {
           "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "path"],
           "properties": {
-            "kind": { "const": "path" },
-            "path": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+            "template": {
+              "type": "string"
+            },
+            "from": {
+              "type": "string",
+              "const": "template"
             }
-          }
+          },
+          "required": [
+            "from",
+            "template"
+          ]
         },
         {
           "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "exprs"],
           "properties": {
-            "kind": { "const": "coalesce" },
-            "exprs": {
-              "type": "array",
-              "minItems": 1,
-              "items": { "$ref": "#/$defs/expr" }
+            "value": true,
+            "from": {
+              "type": "string",
+              "const": "literal"
             }
-          }
+          },
+          "required": [
+            "from",
+            "value"
+          ]
         },
         {
           "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "key"],
           "properties": {
-            "kind": { "const": "from_filter" },
-            "key": { "type": "string", "minLength": 1 }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "value"],
-          "properties": {
-            "kind": { "const": "literal" },
-            "value": {}
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind"],
-          "properties": {
-            "kind": { "const": "null" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "path"],
-          "properties": {
-            "kind": { "const": "join_array" },
-            "path": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+            "key": {
+              "type": "string",
+              "minLength": 1
             },
-            "separator": { "type": "string" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "path", "item_path"],
-          "properties": {
-            "kind": { "const": "join_array_path" },
-            "path": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+            "default": {
+              "default": null
             },
-            "item_path": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 }
-            },
-            "separator": { "type": "string" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "path", "key"],
-          "properties": {
-            "kind": { "const": "tag_value" },
-            "path": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 }
-            },
-            "key": { "type": "string", "minLength": 1 },
-            "key_field": { "type": "string" },
-            "value_field": { "type": "string" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "check", "then_value"],
-          "properties": {
-            "kind": { "const": "if_present" },
-            "check": { "$ref": "#/$defs/expr" },
-            "then_value": { "type": "string" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "path", "key"],
-          "properties": {
-            "kind": { "const": "join_tag_values" },
-            "path": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 }
-            },
-            "key": { "type": "string", "minLength": 1 },
-            "key_field": { "type": "string" },
-            "value_field": { "type": "string" },
-            "separator": { "type": "string" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "path", "item_path"],
-          "properties": {
-            "kind": { "const": "first_array_item_path" },
-            "path": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 }
-            },
-            "item_path": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+            "from": {
+              "type": "string",
+              "const": "filter"
             }
-          }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
         },
         {
           "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "path", "filter_key", "item_path"],
           "properties": {
-            "kind": { "const": "object_filter_path" },
-            "path": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+            "key": {
+              "type": "string",
+              "minLength": 1
             },
-            "filter_key": { "type": "string", "minLength": 1 },
-            "item_path": {
-              "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+            "default": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_int"
             }
-          }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
         },
         {
           "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "expr", "from", "to"],
           "properties": {
-            "kind": { "const": "replace" },
-            "expr": { "$ref": "#/$defs/expr" },
-            "from": { "type": "string", "minLength": 1 },
-            "to": { "type": "string" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind"],
-          "properties": {
-            "kind": { "const": "current_row" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "expr"],
-          "properties": {
-            "kind": { "const": "format_timestamp" },
-            "expr": { "$ref": "#/$defs/expr" },
-            "input": { "type": "string", "enum": ["seconds", "milliseconds", "iso8601"] }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "expr"],
-          "properties": {
-            "kind": { "const": "base64_decode" },
-            "expr": { "$ref": "#/$defs/expr" }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["kind", "template", "values"],
-          "properties": {
-            "kind": { "const": "template" },
-            "template": { "type": "string", "minLength": 1 },
-            "values": {
-              "type": "object",
-              "additionalProperties": { "$ref": "#/$defs/expr" }
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_bool"
             }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_split"
+            }
+          },
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "filter_split_int"
+            }
+          },
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "arg"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_int"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "default": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "default": null
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_bool"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_split"
+            }
+          },
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "separator": {
+              "type": "string",
+              "minLength": 1
+            },
+            "part": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "from": {
+              "type": "string",
+              "const": "arg_split_int"
+            }
+          },
+          "required": [
+            "from",
+            "key",
+            "separator",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "from": {
+              "type": "string",
+              "const": "input"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "from": {
+              "type": "string",
+              "const": "state"
+            }
+          },
+          "required": [
+            "from",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "seconds": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "from": {
+              "type": "string",
+              "const": "now_epoch_minus_seconds"
+            }
+          },
+          "required": [
+            "from",
+            "seconds"
+          ]
+        }
+      ]
+    },
+    "RequestRoute": {
+      "type": "object",
+      "properties": {
+        "when_filters": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "method": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HttpMethod"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "query": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/QueryParam"
+          }
+        },
+        "body": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Body"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "headers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Header"
           }
         }
+      },
+      "additionalProperties": false,
+      "required": [
+        "when_filters",
+        "path"
+      ]
+    },
+    "Response": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResponseBodyFormat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rows_path": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "ok_path": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "error_path": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "allow_404_empty": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "row_strategy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RowStrategy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ResponseBodyFormat": {
+      "type": "string",
+      "enum": [
+        "json",
+        "json_each_row"
+      ]
+    },
+    "RowStrategy": {
+      "type": "string",
+      "enum": [
+        "direct",
+        "series_point_list",
+        "dict_entries"
+      ]
+    },
+    "Pagination": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PaginationMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page_size": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cursor_param": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "default": null
+        },
+        "cursor_body_path": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "response_cursor_path": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "page_param": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "default": null
+        },
+        "page_start": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "default": null
+        },
+        "page_step": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "minimum": 1,
+          "default": null
+        },
+        "offset_param": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "default": null
+        },
+        "offset_start": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "default": null
+        },
+        "offset_step": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "minimum": 1,
+          "default": null
+        },
+        "link_header_require_results": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "max_pages": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 1,
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "PaginationMode": {
+      "type": "string",
+      "enum": [
+        "none",
+        "auto",
+        "cursor_query",
+        "cursor_body",
+        "page",
+        "offset",
+        "link_header"
+      ]
+    },
+    "PageSize": {
+      "type": "object",
+      "properties": {
+        "default": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "max": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 1
+        },
+        "query_param": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "default": null
+        },
+        "body_path": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "default",
+        "max"
+      ]
+    },
+    "Column": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "$ref": "#/$defs/ManifestDataType"
+        },
+        "nullable": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "virtual": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "expr": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Expr"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type"
+      ]
+    },
+    "Expr": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "path"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "exprs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Expr"
+              },
+              "minItems": 1
+            },
+            "kind": {
+              "type": "string",
+              "const": "coalesce"
+            }
+          },
+          "required": [
+            "kind",
+            "exprs"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "kind": {
+              "type": "string",
+              "const": "from_filter"
+            }
+          },
+          "required": [
+            "kind",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "value": true,
+            "kind": {
+              "type": "string",
+              "const": "literal"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "null"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "separator": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "join_array"
+            }
+          },
+          "required": [
+            "kind",
+            "path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "item_path": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "separator": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "join_array_path"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "item_path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "key_field": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "value_field": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "tag_value"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "check": {
+              "$ref": "#/$defs/Expr"
+            },
+            "then_value": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "if_present"
+            }
+          },
+          "required": [
+            "kind",
+            "check",
+            "then_value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "key_field": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "value_field": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "separator": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "kind": {
+              "type": "string",
+              "const": "join_tag_values"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "item_path": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "first_array_item_path"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "item_path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "filter_key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "item_path": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "object_filter_path"
+            }
+          },
+          "required": [
+            "kind",
+            "path",
+            "filter_key",
+            "item_path"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "current_row"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "expr": {
+              "$ref": "#/$defs/Expr"
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TimestampInput"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "format_timestamp"
+            }
+          },
+          "required": [
+            "kind",
+            "expr"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "expr": {
+              "$ref": "#/$defs/Expr"
+            },
+            "kind": {
+              "type": "string",
+              "const": "base64_decode"
+            }
+          },
+          "required": [
+            "kind",
+            "expr"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "expr": {
+              "$ref": "#/$defs/Expr"
+            },
+            "from": {
+              "type": "string",
+              "minLength": 1
+            },
+            "to": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "replace"
+            }
+          },
+          "required": [
+            "kind",
+            "expr",
+            "from",
+            "to"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "template": {
+              "type": "string",
+              "minLength": 1
+            },
+            "values": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/Expr"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "template"
+            }
+          },
+          "required": [
+            "kind",
+            "template",
+            "values"
+          ]
+        }
+      ]
+    },
+    "TimestampInput": {
+      "type": "string",
+      "enum": [
+        "seconds",
+        "milliseconds",
+        "iso8601"
+      ]
+    },
+    "TableFunction": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SearchTableFunction"
+        },
+        {
+          "$ref": "#/$defs/ExplicitTableFunction"
+        },
+        {
+          "$ref": "#/$defs/DefaultTableFunction"
+        }
+      ]
+    },
+    "SearchTableFunction": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "$ref": "#/$defs/SearchTableFunctionKind"
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "fetch_limit_default": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 1,
+          "default": null
+        },
+        "search_limits": {
+          "$ref": "#/$defs/SearchLimits"
+        },
+        "detail_hints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DetailHint"
+          }
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableFunctionArg"
+          }
+        },
+        "request": {
+          "$ref": "#/$defs/Request"
+        },
+        "response": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Response"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pagination": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pagination"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "search_limits",
+        "request"
+      ]
+    },
+    "SearchTableFunctionKind": {
+      "type": "string",
+      "enum": [
+        "search"
+      ]
+    },
+    "TableFunctionArg": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "default": null
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "bind": {
+          "$ref": "#/$defs/FunctionBinding"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "bind"
+      ]
+    },
+    "FunctionBinding": {
+      "type": "object",
+      "properties": {
+        "arg": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "arg"
+      ]
+    },
+    "ExplicitTableFunction": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "$ref": "#/$defs/ExplicitTableFunctionKind"
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "fetch_limit_default": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 1,
+          "default": null
+        },
+        "search_limits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SearchLimits"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail_hints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DetailHint"
+          }
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableFunctionArg"
+          }
+        },
+        "request": {
+          "$ref": "#/$defs/Request"
+        },
+        "response": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Response"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pagination": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pagination"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind",
+        "request"
+      ]
+    },
+    "ExplicitTableFunctionKind": {
+      "type": "string",
+      "enum": [
+        "table"
+      ]
+    },
+    "DefaultTableFunction": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "fetch_limit_default": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 1,
+          "default": null
+        },
+        "search_limits": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SearchLimits"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "detail_hints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/DetailHint"
+          }
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableFunctionArg"
+          }
+        },
+        "request": {
+          "$ref": "#/$defs/Request"
+        },
+        "response": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Response"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pagination": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Pagination"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "request"
+      ]
+    },
+    "HttpManifestWithTables": {
+      "type": "object",
+      "properties": {
+        "dsl_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 3,
+          "maximum": 3
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "test_queries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "backend": {
+          "$ref": "#/$defs/HttpBackend"
+        },
+        "inputs": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Input"
+          }
+        },
+        "base_url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "auth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Auth"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_headers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Header"
+          }
+        },
+        "rate_limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateLimit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HttpTable"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "dsl_version",
+        "name",
+        "version",
+        "backend",
+        "base_url",
+        "tables"
+      ]
+    },
+    "HttpManifestWithFunctions": {
+      "type": "object",
+      "properties": {
+        "dsl_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 3,
+          "maximum": 3
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "test_queries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "backend": {
+          "$ref": "#/$defs/HttpBackend"
+        },
+        "inputs": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Input"
+          }
+        },
+        "base_url": {
+          "type": "string",
+          "minLength": 1
+        },
+        "auth": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Auth"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_headers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Header"
+          }
+        },
+        "rate_limit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateLimit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "functions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableFunction"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "dsl_version",
+        "name",
+        "version",
+        "backend",
+        "base_url",
+        "functions"
+      ]
+    },
+    "FileManifest": {
+      "type": "object",
+      "properties": {
+        "dsl_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 3,
+          "maximum": 3
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "test_queries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "backend": {
+          "$ref": "#/$defs/ParquetBackend"
+        },
+        "inputs": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Input"
+          }
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileTable"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "dsl_version",
+        "name",
+        "version",
+        "backend",
+        "tables"
+      ]
+    },
+    "ParquetBackend": {
+      "type": "string",
+      "enum": [
+        "parquet"
+      ]
+    },
+    "FileTable": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "guide": {
+          "type": "string",
+          "default": ""
+        },
+        "filters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Filter"
+          }
+        },
+        "fetch_limit_default": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 1,
+          "default": null
+        },
+        "source": {
+          "$ref": "#/$defs/FileSource"
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Column"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "source"
+      ]
+    },
+    "FileSource": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string",
+          "minLength": 1
+        },
+        "glob": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "default": null
+        },
+        "partitions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PartitionColumn"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "location"
+      ]
+    },
+    "PartitionColumn": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "$ref": "#/$defs/ManifestDataType"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type"
+      ]
+    },
+    "FileManifest2": {
+      "type": "object",
+      "properties": {
+        "dsl_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 3,
+          "maximum": 3
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "default": ""
+        },
+        "test_queries": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": []
+        },
+        "backend": {
+          "$ref": "#/$defs/JsonlBackend"
+        },
+        "inputs": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "$ref": "#/$defs/Input"
+          }
+        },
+        "tables": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FileTable"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "dsl_version",
+        "name",
+        "version",
+        "backend",
+        "tables"
+      ]
+    },
+    "JsonlBackend": {
+      "type": "string",
+      "enum": [
+        "jsonl"
       ]
     }
   }

@@ -81,8 +81,8 @@ tables:
     assert!(!output.status.success(), "expected non-zero exit status");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("\"backend\" is a required property"),
-        "expected missing-backend schema error, got: {stderr}"
+        stderr.contains("is not valid under any of the schemas listed in the 'anyOf' keyword"),
+        "expected generated schema error, got: {stderr}"
     );
 }
 

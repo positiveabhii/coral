@@ -8,6 +8,7 @@
 //!     (the regression gate for the SOURCE-465 manifest cleanup).
 //!   - `export-skills` exports installable agent skills from the canonical
 //!     plugin tree into a distribution checkout.
+//!   - `generate-source-schema` regenerates the source manifest JSON Schema.
 
 #![allow(
     clippy::print_stderr,
@@ -21,7 +22,9 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
-use coral_spec::{ValidatedSourceManifest, parse_source_manifest_yaml};
+use coral_spec::{
+    ValidatedSourceManifest, parse_source_manifest_yaml, source_manifest_schema_json,
+};
 
 mod detect;
 mod nav;
@@ -43,6 +46,8 @@ enum Command {
     DetectTruncations(DetectArgs),
     /// Export installable skills from plugins/coral/skills.
     ExportSkills(ExportSkillsArgs),
+    /// Regenerate the source manifest JSON Schema from Rust schema types.
+    GenerateSourceSchema(GenerateSourceSchemaArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -109,6 +114,21 @@ struct ExportSkillsArgs {
     dest: PathBuf,
 }
 
+#[derive(Debug, clap::Args)]
+struct GenerateSourceSchemaArgs {
+    /// Path to the checked-in source manifest JSON Schema.
+    #[arg(
+        long,
+        default_value = "crates/coral-spec/src/schema/source_manifest.schema.json"
+    )]
+    output: PathBuf,
+
+    /// Render in memory and diff against disk instead of writing.
+    /// Exits non-zero if the generated schema differs from its on-disk copy.
+    #[arg(long)]
+    check: bool,
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match run(&cli.command) {
@@ -135,6 +155,22 @@ fn run(command: &Command) -> Result<bool> {
             detect::run(&paths, args.verbose)
         }
         Command::ExportSkills(args) => skills::export(&args.dest),
+        Command::GenerateSourceSchema(args) => generate_source_schema(args),
+    }
+}
+
+fn generate_source_schema(args: &GenerateSourceSchemaArgs) -> Result<bool> {
+    let schema = source_manifest_schema_json().context("serializing source manifest schema")?;
+    let output = GeneratedFile {
+        path: args.output.clone(),
+        body: schema,
+    };
+
+    if args.check {
+        Ok(check_mode(&[output]))
+    } else {
+        write_mode(&[output])?;
+        Ok(true)
     }
 }
 

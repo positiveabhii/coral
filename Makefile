@@ -1,4 +1,4 @@
-.PHONY: install ui-build rust-checks license-check lint-proto lint-sources fix-sources docs-generate docs-check
+.PHONY: install ui-build rust-checks license-check lint-proto lint-sources fix-sources docs-generate docs-check source-schema-generate source-schema-check
 
 install: ui-build
 	cargo install --path crates/coral-cli --locked
@@ -75,4 +75,22 @@ docs-check:
 	  --community-sources-dir sources/community \
 	  --community-index docs/reference/community-sources.mdx \
 	  --docs-json docs/docs.json \
+	  --check
+
+# ----------------------------------------------------------------------------
+# Source manifest JSON Schema generation
+# ----------------------------------------------------------------------------
+# Regenerates the checked-in source manifest JSON Schema from Rust schema types
+# in coral-spec via the xtask binary.
+#
+#   make source-schema-generate   # write/refresh the generated JSON Schema
+#   make source-schema-check      # CI freshness check: non-zero exit if stale
+
+source-schema-generate:
+	cargo run --locked -p xtask -- generate-source-schema \
+	  --output crates/coral-spec/src/schema/source_manifest.schema.json
+
+source-schema-check:
+	cargo run --locked -p xtask -- generate-source-schema \
+	  --output crates/coral-spec/src/schema/source_manifest.schema.json \
 	  --check
