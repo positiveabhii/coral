@@ -1,6 +1,6 @@
 //! HTTP client used by HTTP-backed source tables.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -17,6 +17,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use crate::RequestAuthenticator;
 use crate::backends::http::ProviderQueryError;
 use crate::backends::http::auth::{resolve_auth_headers, validate_auth_inputs};
+use crate::backends::http::filter_usage::{HttpRequestFilterUsage, http_request_filter_names};
 use crate::backends::http::rate_limit::{RateLimitDecision, check_rate_limit};
 use crate::backends::http::target::HttpFetchTarget;
 use crate::backends::shared::json_path::get_path_value;
@@ -110,6 +111,14 @@ struct HttpRequestSite<'a> {
 }
 
 impl HttpSourceClient {
+    pub(crate) fn request_filter_names(&self, request: &ManifestRequestSpec) -> HashSet<String> {
+        http_request_filter_names(&self.base_url, &self.request_headers, request)
+    }
+
+    pub(crate) fn filter_usage(&self) -> HttpRequestFilterUsage {
+        HttpRequestFilterUsage::new(self.base_url.clone(), self.request_headers.clone())
+    }
+
     pub(crate) fn max_concurrency(&self) -> Option<usize> {
         self.rate_limit.max_concurrency
     }
