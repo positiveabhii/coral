@@ -282,11 +282,23 @@ impl HttpSourceClient {
             };
 
             // Determine whether this table has an active TTL cache policy.
-            let cache_key: Option<(String, usize, u64)> = target
+            let cache_key: Option<(String, usize, Duration)> = target
                 .cache()
                 .filter(|p| p.mode == HttpCacheMode::Ttl)
+                .filter(|policy| {
+                    policy
+                        .max_pages
+                        .is_none_or(|max_cache_pages| page_count <= max_cache_pages)
+                })
                 .map(|policy| {
                     let body_hash = body.as_ref().map(hash_request_body);
+                    let vary_headers = cache_vary_header_hashes(
+                        &self.request_headers,
+                        &active_request.headers,
+                        body.as_ref(),
+                        &render_context,
+                        &policy.vary_headers,
+                    )?;
                     let key = build_cache_key(
                         &self.source_schema,
                         &self.source_version,
@@ -295,15 +307,16 @@ impl HttpSourceClient {
                         &url,
                         &query_pairs,
                         body_hash,
-                        &policy.vary_headers,
+                        &vary_headers,
                         policy.ttl.as_secs(),
                     );
                     let max_entry = policy.max_entry_bytes.unwrap_or(usize::MAX);
-                    (key, max_entry, policy.ttl.as_secs())
-                });
+                    Ok::<_, DataFusionError>((key, max_entry, policy.ttl))
+                })
+                .transpose()?;
 
             // Check the cache before issuing the outbound request.
-            let page = if let Some((ref key, max_entry_bytes, ttl_secs)) = cache_key {
+            let page = if let Some((ref key, max_entry_bytes, ttl)) = cache_key {
                 if let Some(entry) = self.cache.get(key).await {
                     tracing::trace!(
                         source = %self.source_schema,
@@ -359,7 +372,7 @@ impl HttpSourceClient {
                                     HttpCacheEntry {
                                         payload: payload.clone(),
                                         next_url: next_url.clone(),
-                                        ttl: Duration::from_secs(ttl_secs),
+                                        ttl,
                                         estimated_bytes,
                                     },
                                 )
@@ -702,33 +715,9 @@ async fn execute_request(
         let method_label = http_method_label(method);
         let mut request = build_http_request(http, method, url);
 
-        let mut header_map = HeaderMap::new();
-        for header in request_headers.iter().chain(table_headers.iter()) {
-            if let Some(value) = resolve_value_source(&header.value, &render_context)? {
-                let name = HeaderName::try_from(header.name.as_str()).map_err(|error| {
-                    DataFusionError::Execution(format!(
-                        "invalid request header name '{}': {error}",
-                        header.name
-                    ))
-                })?;
-                let value =
-                    HeaderValue::try_from(value_to_string(&value).as_str()).map_err(|error| {
-                        DataFusionError::Execution(format!(
-                            "invalid request header value for '{}': {error}",
-                            header.name
-                        ))
-                    })?;
-                header_map.insert(name, value);
-            }
-        }
-        if matches!(body, Some(RequestBody::Text(_)))
-            && !header_map.contains_key(reqwest::header::CONTENT_TYPE)
-        {
-            header_map.insert(
-                reqwest::header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain"),
-            );
-        }
+        let mut header_map =
+            build_declared_header_map(request_headers, table_headers, &render_context)?;
+        apply_implicit_content_type(&mut header_map, body);
         let logged_url = build_logged_url(url, query_pairs);
 
         let request_id = NEXT_HTTP_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
@@ -1150,6 +1139,74 @@ fn build_http_request(
     }
 }
 
+fn build_declared_header_map(
+    request_headers: &[HeaderSpec],
+    table_headers: &[HeaderSpec],
+    render_context: &RenderContext<'_>,
+) -> Result<HeaderMap> {
+    let mut header_map = HeaderMap::new();
+    for header in request_headers.iter().chain(table_headers.iter()) {
+        if let Some(value) = resolve_value_source(&header.value, render_context)? {
+            let name = HeaderName::try_from(header.name.as_str()).map_err(|error| {
+                DataFusionError::Execution(format!(
+                    "invalid request header name '{}': {error}",
+                    header.name
+                ))
+            })?;
+            let value =
+                HeaderValue::try_from(value_to_string(&value).as_str()).map_err(|error| {
+                    DataFusionError::Execution(format!(
+                        "invalid request header value for '{}': {error}",
+                        header.name
+                    ))
+                })?;
+            header_map.insert(name, value);
+        }
+    }
+    Ok(header_map)
+}
+
+fn apply_implicit_content_type(header_map: &mut HeaderMap, body: Option<&RequestBody>) {
+    if matches!(body, Some(RequestBody::Text(_)))
+        && !header_map.contains_key(reqwest::header::CONTENT_TYPE)
+    {
+        header_map.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("text/plain"),
+        );
+    }
+}
+
+fn cache_vary_header_hashes(
+    request_headers: &[HeaderSpec],
+    table_headers: &[HeaderSpec],
+    body: Option<&RequestBody>,
+    render_context: &RenderContext<'_>,
+    vary_headers: &[String],
+) -> Result<Vec<(String, Option<u64>)>> {
+    if vary_headers.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut header_map = build_declared_header_map(request_headers, table_headers, render_context)?;
+    apply_implicit_content_type(&mut header_map, body);
+
+    vary_headers
+        .iter()
+        .map(|header| {
+            let name = HeaderName::try_from(header.as_str()).map_err(|error| {
+                DataFusionError::Execution(format!(
+                    "invalid cache vary header name '{header}': {error}"
+                ))
+            })?;
+            let value_hash = header_map
+                .get(&name)
+                .map(|value| hash_cache_bytes(value.as_bytes()));
+            Ok((name.as_str().to_string(), value_hash))
+        })
+        .collect()
+}
+
 fn build_query_pairs(
     request: &coral_spec::RequestSpec,
     render_context: &RenderContext<'_>,
@@ -1510,19 +1567,20 @@ fn extract_rows(target: &HttpFetchTarget, payload: &Value) -> Vec<Value> {
 }
 
 fn hash_request_body(body: &RequestBody) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
     match body {
         RequestBody::Json(value) => {
-            serde_json::to_string(value)
-                .unwrap_or_default()
-                .hash(&mut hasher);
+            hash_cache_bytes(serde_json::to_string(value).unwrap_or_default().as_bytes())
         }
-        RequestBody::Text(text) => {
-            text.hash(&mut hasher);
-        }
+        RequestBody::Text(text) => hash_cache_bytes(text.as_bytes()),
     }
+}
+
+fn hash_cache_bytes(value: &[u8]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash as _, Hasher as _};
+
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -2921,6 +2979,13 @@ mod tests {
         .expect("test client should build")
     }
 
+    fn first_table(manifest: &HttpSourceManifest) -> &HttpTableSpec {
+        manifest
+            .tables
+            .first()
+            .expect("manifest should have a table")
+    }
+
     async fn fetch_table(
         client: &HttpSourceClient,
         table: &HttpTableSpec,
@@ -2953,7 +3018,7 @@ mod tests {
 
         let manifest = cached_users_manifest(&server.uri());
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
         let filters = HashMap::new();
 
         let rows1 = fetch_table(&client, table, &filters, None)
@@ -3009,7 +3074,7 @@ mod tests {
             .await;
 
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
 
         let rows_open = fetch_table(
             &client,
@@ -3030,6 +3095,73 @@ mod tests {
 
         assert_ne!(rows_open, rows_closed);
         // Both mocks have .expect(1) — verified on drop
+    }
+
+    #[tokio::test]
+    async fn cache_miss_on_different_vary_header_values() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": server.uri(),
+            "tables": [{
+                "name": "items",
+                "description": "Items",
+                "filters": [{ "name": "mode" }],
+                "request": {
+                    "path": "/api/items",
+                    "headers": [{ "name": "X-Mode", "from": "filter", "key": "mode" }]
+                },
+                "cache": {
+                    "mode": "ttl",
+                    "ttl": "1h",
+                    "vary": { "headers": ["X-Mode"] }
+                },
+                "columns": [{ "name": "id", "type": "Int64" }]
+            }]
+        }));
+
+        Mock::given(method("GET"))
+            .and(path("/api/items"))
+            .and(header("X-Mode", "alpha"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": 1 }])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/items"))
+            .and(header("X-Mode", "beta"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": 2 }])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = build_test_client(&manifest);
+        let table = first_table(&manifest);
+
+        let rows_alpha = fetch_table(
+            &client,
+            table,
+            &HashMap::from([("mode".into(), "alpha".into())]),
+            None,
+        )
+        .await
+        .expect("alpha fetch");
+        let rows_beta = fetch_table(
+            &client,
+            table,
+            &HashMap::from([("mode".into(), "beta".into())]),
+            None,
+        )
+        .await
+        .expect("beta fetch");
+
+        assert_ne!(rows_alpha, rows_beta);
     }
 
     #[tokio::test]
@@ -3066,7 +3198,7 @@ mod tests {
             .await;
 
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
         let filters = HashMap::from([("status".to_string(), "open".to_string())]);
 
         let r1 = fetch_table(&client, table, &filters, None)
@@ -3097,7 +3229,7 @@ mod tests {
 
         let manifest = cached_users_manifest(&server.uri());
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
         let filters = HashMap::new();
 
         assert!(
@@ -3143,7 +3275,7 @@ mod tests {
         }));
 
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
         let filters = HashMap::new();
 
         fetch_table(&client, table, &filters, None)
@@ -3189,7 +3321,7 @@ mod tests {
         }));
 
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
         let filters = HashMap::new();
 
         fetch_table(&client, table, &filters, None)
@@ -3226,7 +3358,7 @@ mod tests {
             }]
         }));
 
-        let cache = manifest.tables[0]
+        let cache = first_table(&manifest)
             .cache
             .as_ref()
             .expect("cache policy should be set");
@@ -3235,6 +3367,32 @@ mod tests {
         assert_eq!(cache.vary_headers, vec!["Accept"]);
         assert_eq!(cache.max_pages, Some(50));
         assert_eq!(cache.max_entry_bytes, Some(1_048_576));
+    }
+
+    #[test]
+    fn parse_manifest_rejects_overflowing_cache_ttl() {
+        let error = parse_source_manifest_value(json!({
+            "dsl_version": 3,
+            "name": "alpha",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": "https://api.example.com",
+            "tables": [{
+                "name": "items",
+                "description": "items",
+                "request": { "path": "/items" },
+                "cache": { "mode": "ttl", "ttl": "18446744073709551615h" },
+                "columns": [{ "name": "id", "type": "Utf8" }]
+            }]
+        }))
+        .expect_err("overflowing ttl should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("cache ttl '18446744073709551615h' overflows u64 seconds"),
+            "unexpected ttl overflow error: {error}"
+        );
     }
 
     #[test]
@@ -3253,7 +3411,7 @@ mod tests {
             }]
         }));
 
-        assert!(manifest.tables[0].cache.is_none());
+        assert!(first_table(&manifest).cache.is_none());
     }
 
     #[tokio::test]
@@ -3298,7 +3456,7 @@ mod tests {
             .await;
 
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
 
         let rows_open = fetch_table(
             &client,
@@ -3371,7 +3529,7 @@ mod tests {
             .await;
 
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
 
         // First call: limit=2 → fetches page 1 (2 rows = limit), stops.
         let rows1 = fetch_table(&client, table, &HashMap::new(), Some(2))
@@ -3434,7 +3592,7 @@ mod tests {
             .await;
 
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
 
         // First run: fetches both pages from server
         let rows1 = fetch_table(&client, table, &HashMap::new(), None)
@@ -3448,6 +3606,63 @@ mod tests {
             .expect("second fetch");
         assert_eq!(rows2, rows1);
         // expect(1) per page verified on mock drop
+    }
+
+    #[tokio::test]
+    async fn cache_max_pages_limits_cached_pages_per_fetch() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let manifest = parse_http_manifest(json!({
+            "dsl_version": 3,
+            "name": "demo",
+            "version": "0.1.0",
+            "backend": "http",
+            "base_url": server.uri(),
+            "tables": [{
+                "name": "items",
+                "description": "Items",
+                "pagination": {
+                    "mode": "page",
+                    "page_param": "page",
+                    "page_start": 1,
+                    "page_size": { "default": 2, "max": 100, "query_param": "per_page" }
+                },
+                "request": { "path": "/api/items" },
+                "cache": { "mode": "ttl", "ttl": "1h", "max_pages": 1 },
+                "columns": [{ "name": "id", "type": "Int64" }]
+            }]
+        }));
+
+        Mock::given(method("GET"))
+            .and(path("/api/items"))
+            .and(query_param("page", "1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([{ "id": 1 }, { "id": 2 }])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/items"))
+            .and(query_param("page", "2"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "id": 3 }])))
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let client = build_test_client(&manifest);
+        let table = first_table(&manifest);
+
+        let rows1 = fetch_table(&client, table, &HashMap::new(), None)
+            .await
+            .expect("first fetch");
+        let rows2 = fetch_table(&client, table, &HashMap::new(), None)
+            .await
+            .expect("second fetch");
+
+        assert_eq!(rows2, rows1);
     }
 
     #[tokio::test]
@@ -3478,7 +3693,7 @@ mod tests {
 
         let manifest = cached_users_manifest(&server.uri());
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
         let filters = HashMap::new();
 
         assert!(
@@ -3509,7 +3724,7 @@ mod tests {
 
         let manifest = cached_users_manifest(&server.uri());
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
         let filters = HashMap::new();
 
         assert!(
@@ -3538,7 +3753,7 @@ mod tests {
 
         let manifest = cached_users_manifest(&server.uri());
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
         let filters = HashMap::new();
 
         assert!(
@@ -3582,7 +3797,7 @@ mod tests {
         }));
 
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
         let filters = HashMap::new();
 
         let rows1 = fetch_table(&client, table, &filters, None)
@@ -3635,7 +3850,7 @@ mod tests {
         }));
 
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
         let filters = HashMap::new();
 
         let rows1 = fetch_table(&client, table, &filters, None)
@@ -3690,7 +3905,7 @@ mod tests {
         }));
 
         let client = build_test_client(&manifest);
-        let table = &manifest.tables[0];
+        let table = first_table(&manifest);
         let filters = HashMap::new();
 
         assert!(

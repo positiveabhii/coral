@@ -395,7 +395,16 @@
         },
         "max_pages": { "type": "integer", "minimum": 1 },
         "max_entry_bytes": { "type": "integer", "minimum": 1 }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "mode": { "const": "ttl" } },
+            "required": ["mode"]
+          },
+          "then": { "required": ["ttl"] }
+        }
+      ]
     },
     "source": {
       "type": "object",

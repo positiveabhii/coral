@@ -139,20 +139,24 @@ fn parse_ttl_duration(s: &str) -> std::result::Result<Duration, String> {
         return Err("cache ttl must not be empty".to_string());
     }
     let mut total_secs = 0u64;
-    let mut digit_start: Option<usize> = None;
+    let mut current_number: Option<u64> = None;
 
-    for (i, ch) in s.char_indices() {
+    for ch in s.chars() {
         if ch.is_ascii_digit() {
-            if digit_start.is_none() {
-                digit_start = Some(i);
-            }
+            let digit = u64::from(
+                ch.to_digit(10)
+                    .ok_or_else(|| format!("invalid cache ttl '{s}': unexpected '{ch}'"))?,
+            );
+            let base = current_number.unwrap_or(0u64);
+            current_number = Some(
+                base.checked_mul(10)
+                    .and_then(|value| value.checked_add(digit))
+                    .ok_or_else(|| format!("cache ttl '{s}' overflows u64 seconds"))?,
+            );
         } else {
-            let start =
-                digit_start.ok_or_else(|| format!("invalid cache ttl '{s}': unexpected '{ch}'"))?;
-            let n: u64 = s[start..i]
-                .parse()
-                .map_err(|_| format!("invalid cache ttl '{s}'"))?;
-            digit_start = None;
+            let n = current_number
+                .take()
+                .ok_or_else(|| format!("invalid cache ttl '{s}': unexpected '{ch}'"))?;
             let multiplier = match ch {
                 'h' => 3600u64,
                 'm' => 60u64,
@@ -164,12 +168,15 @@ fn parse_ttl_duration(s: &str) -> std::result::Result<Duration, String> {
                 }
             };
             total_secs = total_secs
-                .checked_add(n.saturating_mul(multiplier))
+                .checked_add(
+                    n.checked_mul(multiplier)
+                        .ok_or_else(|| format!("cache ttl '{s}' overflows u64 seconds"))?,
+                )
                 .ok_or_else(|| format!("cache ttl '{s}' overflows u64 seconds"))?;
         }
     }
 
-    if digit_start.is_some() {
+    if current_number.is_some() {
         return Err(format!(
             "invalid cache ttl '{s}': trailing digits without a unit (h, m, or s)"
         ));

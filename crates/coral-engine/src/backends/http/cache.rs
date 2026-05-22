@@ -2,8 +2,8 @@
 //!
 //! Cache entries are keyed by a stable canonical string derived from all
 //! request-determining material: source identity, table, rendered URL, query
-//! params, body hash, vary headers, and the declared TTL.  Secret values are
-//! never included in keys, values, or trace events.
+//! params, body hash, hashed vary header values, and the declared TTL. Secret
+//! values are never included in keys, values, or trace events.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,11 +54,11 @@ impl Expiry<String, HttpCacheEntry> for EntryExpiry {
     fn expire_after_update(
         &self,
         _key: &String,
-        _value: &HttpCacheEntry,
+        value: &HttpCacheEntry,
         _current_time: std::time::Instant,
-        current_duration: Option<Duration>,
+        _current_duration: Option<Duration>,
     ) -> Option<Duration> {
-        current_duration
+        Some(value.ttl)
     }
 }
 
@@ -76,7 +76,7 @@ impl HttpResponseCache {
         let inner = Cache::builder()
             .max_capacity(DEFAULT_CACHE_MAX_BYTES)
             .weigher(|_key: &String, value: &HttpCacheEntry| {
-                #[allow(
+                #[expect(
                     clippy::cast_possible_truncation,
                     reason = "Saturating at u32::MAX is the correct moka weigher clamp"
                 )]
@@ -106,7 +106,7 @@ impl HttpResponseCache {
 ///
 /// `body_hash` is a pre-computed hash of the serialized request body, allowing
 /// callers to hash the body without exposing its type to this module.
-#[allow(
+#[expect(
     clippy::too_many_arguments,
     reason = "All parameters are distinct key dimensions; introducing a struct would add noise"
 )]
@@ -118,14 +118,14 @@ pub(crate) fn build_cache_key(
     url: &str,
     query_pairs: &[(String, String)],
     body_hash: Option<u64>,
-    vary_headers: &[String],
+    vary_headers: &[(String, Option<u64>)],
     ttl_secs: u64,
 ) -> String {
     let mut sorted_qs = query_pairs.to_vec();
     sorted_qs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
     let mut vary_sorted = vary_headers.to_vec();
-    vary_sorted.sort_unstable();
+    vary_sorted.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
     format!(
         "v{CACHE_FORMAT_VERSION}\t{source_name}\t{source_version}\t{table_name}\t{method}\t{url}\t{sorted_qs:?}\t{body_hash:?}\t{vary_sorted:?}\t{ttl_secs}"
@@ -281,6 +281,66 @@ mod tests {
             300,
         );
         assert_ne!(key1, key2);
+    }
+
+    #[test]
+    fn cache_key_differs_for_different_vary_header_values() {
+        let key1 = build_cache_key(
+            "demo",
+            "0.1.0",
+            "users",
+            "GET",
+            "https://api.example.com/users",
+            &[],
+            None,
+            &[("accept".to_string(), Some(1))],
+            300,
+        );
+        let key2 = build_cache_key(
+            "demo",
+            "0.1.0",
+            "users",
+            "GET",
+            "https://api.example.com/users",
+            &[],
+            None,
+            &[("accept".to_string(), Some(2))],
+            300,
+        );
+        assert_ne!(key1, key2);
+    }
+
+    #[tokio::test]
+    async fn updating_entry_resets_ttl() {
+        let cache = HttpResponseCache::new();
+        let key = "ttl-refresh".to_string();
+        cache
+            .put(
+                key.clone(),
+                HttpCacheEntry {
+                    payload: json!({"version": 1}),
+                    next_url: None,
+                    ttl: Duration::from_secs(1),
+                    estimated_bytes: 1,
+                },
+            )
+            .await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        cache
+            .put(
+                key.clone(),
+                HttpCacheEntry {
+                    payload: json!({"version": 2}),
+                    next_url: None,
+                    ttl: Duration::from_secs(1),
+                    estimated_bytes: 1,
+                },
+            )
+            .await;
+        tokio::time::sleep(Duration::from_millis(700)).await;
+
+        let entry = cache.get(&key).await.expect("updated entry should remain");
+        assert_eq!(entry.payload, json!({"version": 2}));
     }
 
     #[test]
