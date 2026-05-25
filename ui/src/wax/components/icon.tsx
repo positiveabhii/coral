@@ -1,5 +1,5 @@
 import classnames from 'classnames'
-import { Activity, Loader } from 'lucide-react'
+import { Activity, Check, CircleCheck, Loader, Plug, Plus, RefreshCw } from 'lucide-react'
 
 import { customIcons, isCustomIcon } from '@/wax/components/icon/custom-icons/custom-icons'
 import { iconContainer } from '@/wax/components/icon.css'
@@ -20,11 +20,16 @@ export type IconName =
   | 'Activity'
   | 'ArrowDown'
   | 'ArrowUp'
+  | 'Check'
   | 'ChevronDown'
   | 'ChevronRight'
   | 'CircleAlert'
+  | 'CircleCheck'
   | 'Coral'
   | 'Loader'
+  | 'Plug'
+  | 'Plus'
+  | 'RefreshCw'
   | 'Search'
   | 'X'
 export interface IconProps {
@@ -37,7 +42,12 @@ export type IconSize = '14' | '16' | '18' | '20' | '24' | '30'
 
 const lucideIcons = {
   Activity,
+  Check,
+  CircleCheck,
   Loader,
+  Plug,
+  Plus,
+  RefreshCw,
 } as const
 
 export function Icon({ className, color = 'primary', name, size = '20' }: IconProps) {
