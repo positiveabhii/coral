@@ -66,7 +66,7 @@ pub(crate) fn resolve_installed_manifest(
 ) -> Result<InstalledSourceManifest, AppError> {
     let manifest_yaml = match source.origin {
         SourceOrigin::Bundled => load_bundled_source(&source.name)?.manifest_yaml,
-        SourceOrigin::Imported => {
+        SourceOrigin::Imported | SourceOrigin::Community => {
             std::fs::read_to_string(layout.manifest_file(workspace_name, &source.name))?
         }
     };

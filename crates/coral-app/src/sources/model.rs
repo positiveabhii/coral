@@ -44,6 +44,10 @@ pub(crate) struct InstalledSource {
 pub(crate) enum SourceOrigin {
     Bundled,
     Imported,
+    /// Resolved from the in-repo community catalog. Installed sources persist
+    /// the manifest YAML on disk like `Imported` ones, but discovery surfaces
+    /// them via the community catalog flow.
+    Community,
 }
 
 impl SourceOrigin {
@@ -51,6 +55,7 @@ impl SourceOrigin {
         match self {
             Self::Bundled => "bundled",
             Self::Imported => "imported",
+            Self::Community => "community",
         }
     }
 }

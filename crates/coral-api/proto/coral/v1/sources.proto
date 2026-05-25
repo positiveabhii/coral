@@ -13,6 +13,9 @@ enum SourceOrigin {
   SOURCE_ORIGIN_BUNDLED = 1;
   // Source was imported from a user-supplied manifest.
   SOURCE_ORIGIN_IMPORTED = 2;
+  // Source was installed from Coral's community catalog. On disk the
+  // manifest is persisted the same way as an imported source.
+  SOURCE_ORIGIN_COMMUNITY = 3;
 }
 
 // One configured non-secret source variable.
@@ -238,6 +241,41 @@ message DiscoverSourcesResponse {
   repeated SourceInfo sources = 1;
 }
 
+// Lists all community sources available for one workspace.
+//
+// Returns lightweight summaries — name, description, version, installed flag.
+// The full input schema is resolved lazily via `GetCommunitySourceInfo` so
+// the catalog payload stays small and we avoid fetching every community
+// manifest up front.
+message DiscoverCommunitySourcesRequest {
+  // Workspace used to mark which community sources are already installed.
+  Workspace workspace = 1;
+}
+
+// Returns all community source summary records.
+message DiscoverCommunitySourcesResponse {
+  // Community sources known to this Coral build.
+  repeated SourceInfo sources = 1;
+}
+
+// Resolves a community source manifest and returns both parsed metadata and
+// the raw YAML the caller can hand back to `ImportSource` on install.
+message GetCommunitySourceInfoRequest {
+  // Workspace used to mark whether the source is already installed.
+  Workspace workspace = 1;
+  // Canonical community source name.
+  string name = 2;
+}
+
+// Returns full community source info plus the manifest YAML to be imported.
+message GetCommunitySourceInfoResponse {
+  // Parsed source metadata, with inputs populated.
+  SourceInfo source_info = 1;
+  // Raw manifest YAML pinned to this build's commit, to be passed to
+  // `ImportSource` when the user proceeds with installation.
+  string manifest_yaml = 2;
+}
+
 // Installs one bundled source by name.
 message CreateBundledSourceRequest {
   // Owning workspace resource.
@@ -457,6 +495,13 @@ message ValidateSourceResponse {
 service SourceService {
   // Lists bundled sources available for installation.
   rpc DiscoverSources(DiscoverSourcesRequest) returns (DiscoverSourcesResponse);
+  // Lists community sources available for installation.
+  rpc DiscoverCommunitySources(DiscoverCommunitySourcesRequest)
+      returns (DiscoverCommunitySourcesResponse);
+  // Resolves one community source manifest, returning parsed inputs and the
+  // raw YAML the client should pass to `ImportSource` to install.
+  rpc GetCommunitySourceInfo(GetCommunitySourceInfoRequest)
+      returns (GetCommunitySourceInfoResponse);
   // Lists all registered sources.
   rpc ListSources(ListSourcesRequest) returns (ListSourcesResponse);
   // Fetches one registered source.
