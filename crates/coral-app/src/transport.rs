@@ -335,6 +335,8 @@ pub(crate) fn table_function_to_proto(
                 description: column.description,
             })
             .collect(),
+        kind: function.kind,
+        search_limits_json: function.search_limits_json.unwrap_or_default(),
     }
 }
 

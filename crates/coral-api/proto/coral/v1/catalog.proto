@@ -115,6 +115,10 @@ message TableFunction {
   repeated TableFunctionArgument arguments = 5;
   // Columns returned by the function.
   repeated TableFunctionResultColumn result_columns = 6;
+  // Function role. "search" marks provider-native retrieval.
+  string kind = 7;
+  // JSON-encoded provider search limit metadata, when declared by the source.
+  string search_limits_json = 8;
 }
 
 // Catalog item kind filter for unified discovery.
