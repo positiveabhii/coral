@@ -467,10 +467,10 @@ fn parse_oauth(
         .map(|value| parse_redirect_uri_port_mode(input_key, value))
         .transpose()?
         .unwrap_or_else(|| {
-            redirect_uri
-                .as_deref()
-                .map(default_redirect_uri_port_mode)
-                .unwrap_or(ManifestOAuthRedirectUriPortMode::Fixed)
+            redirect_uri.as_deref().map_or(
+                ManifestOAuthRedirectUriPortMode::Fixed,
+                default_redirect_uri_port_mode,
+            )
         });
     let endpoints = oauth
         .get("endpoints")

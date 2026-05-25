@@ -10,6 +10,7 @@ use coral_api::v1::{
     CreateBundledSourceWithOAuthResponse, CredentialMetadata, DeleteSourceRequest,
     DeleteSourceResponse, DiscoverSourcesRequest, DiscoverSourcesResponse, GetSourceInfoRequest,
     GetSourceInfoResponse, GetSourceRequest, GetSourceResponse, ImportSourceRequest,
+<<<<<<< HEAD
     ImportSourceResponse, ListSourcesRequest, ListSourcesResponse,
     OAuthAuthorizationCodeCredentialMethod, OAuthCredentialAuthorization, OAuthCredentialClient,
     OAuthCredentialClientId, OAuthCredentialClientSecret, OAuthCredentialCompleted,
@@ -19,6 +20,17 @@ use coral_api::v1::{
     SourceCredentialStorage as ProtoSourceCredentialStorage, SourceInfo, SourceInputSpec,
     SourceOrigin as ProtoSourceOrigin, SourceSecret, SourceSecretInput, SourceVariable,
     SourceVariableInput, ValidateSourceRequest, ValidateSourceResponse,
+=======
+    ImportSourceResponse, ListSourcesRequest, ListSourcesResponse, OAuthCredentialAuthorization,
+    OAuthCredentialClient, OAuthCredentialClientId, OAuthCredentialClientSecret,
+    OAuthCredentialCompleted, OAuthCredentialEndpoints, OAuthCredentialInput,
+    OAuthCredentialMethod, OAuthCredentialRetrieval, OAuthCredentialScope, OAuthCredentialScopes,
+    OauthCredentialClientSecretTransport, OauthCredentialFlowType, OauthCredentialPkceMode,
+    OauthCredentialRedirectUriPortMode, OauthCredentialScopeDelimiter, Source,
+    SourceConfigCredentialMethod, SourceCredential, SourceCredentialMethod, SourceInfo,
+    SourceInputSpec, SourceOrigin as ProtoSourceOrigin, SourceSecret, SourceSecretInput,
+    SourceVariable, SourceVariableInput, ValidateSourceRequest, ValidateSourceResponse,
+>>>>>>> 4e9a264d (fix(credentials): clean up OAuth transport shape)
     create_bundled_source_with_o_auth_response, import_source_response,
     source_credential_method::Method as ProtoCredentialMethod,
     source_input_spec::Input as ProtoSourceInput,
@@ -588,9 +600,9 @@ fn credential_method_to_proto(
         ManifestCredentialMethodKind::SourceConfig => {
             ProtoCredentialMethod::SourceConfig(SourceConfigCredentialMethod {})
         }
-        ManifestCredentialMethodKind::OAuth => ProtoCredentialMethod::OauthAuthorizationCode(
+        ManifestCredentialMethodKind::OAuth => ProtoCredentialMethod::Oauth(Box::new(
             method.oauth.map(oauth_to_proto).unwrap_or_default(),
-        ),
+        )),
     };
     SourceCredentialMethod {
         label: method.label.unwrap_or_default(),
@@ -599,8 +611,8 @@ fn credential_method_to_proto(
     }
 }
 
-fn oauth_to_proto(oauth: ManifestOAuthCredentialSpec) -> OAuthAuthorizationCodeCredentialMethod {
-    OAuthAuthorizationCodeCredentialMethod {
+fn oauth_to_proto(oauth: ManifestOAuthCredentialSpec) -> OAuthCredentialMethod {
+    OAuthCredentialMethod {
         redirect_uri: oauth.redirect_uri.unwrap_or_default(),
         endpoints: Some(OAuthCredentialEndpoints {
             authorization_url: oauth.authorization_url.unwrap_or_default(),
@@ -747,7 +759,7 @@ mod tests {
         let credential = secret.credential.expect("credential");
         assert_eq!(credential.methods.len(), 2);
         match credential.methods[0].method.as_ref().expect("method") {
-            ProtoCredentialMethod::OauthAuthorizationCode(oauth) => {
+            ProtoCredentialMethod::Oauth(oauth) => {
                 assert_eq!(oauth.redirect_uri, "http://127.0.0.1:53682/oauth/callback");
                 assert_eq!(
                     OauthCredentialRedirectUriPortMode::try_from(oauth.redirect_uri_port_mode)

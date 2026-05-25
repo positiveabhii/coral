@@ -111,8 +111,8 @@ message SourceCredentialMethod {
   oneof method {
     // Secret value is supplied through the source configuration path.
     SourceConfigCredentialMethod source_config = 3;
-    // Coral retrieves the secret through an OAuth authorization-code flow.
-    OAuthAuthorizationCodeCredentialMethod oauth_authorization_code = 4;
+    // Coral retrieves the secret through an OAuth flow.
+    OAuthCredentialMethod oauth = 4;
   }
 }
 
@@ -120,8 +120,8 @@ message SourceCredentialMethod {
 message SourceConfigCredentialMethod {
 }
 
-// OAuth authorization-code credential retrieval configuration.
-message OAuthAuthorizationCodeCredentialMethod {
+// OAuth credential retrieval configuration.
+message OAuthCredentialMethod {
   // Loopback callback URI Coral binds during the OAuth session.
   string redirect_uri = 1;
   // Provider OAuth endpoints.
@@ -140,8 +140,8 @@ message OAuthAuthorizationCodeCredentialMethod {
 
 // Supported OAuth credential flow kinds.
 enum OauthCredentialFlowType {
-  // Flow kind is unspecified. This is invalid for OAuth credential methods;
-  // clients must reject it instead of inferring a default flow.
+  // Flow kind is unspecified. Producers should set an explicit flow. Clients
+  // may interpret omitted legacy values as authorization-code credentials.
   OAUTH_CREDENTIAL_FLOW_TYPE_UNSPECIFIED = 0;
   // OAuth authorization-code flow.
   OAUTH_CREDENTIAL_FLOW_TYPE_AUTHORIZATION_CODE = 1;

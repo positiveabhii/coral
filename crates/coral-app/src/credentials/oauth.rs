@@ -1369,7 +1369,7 @@ mod tests {
                 )],
             },
             move |authorization| async move {
-                authorization_tx.send(authorization).map_err(|_| {
+                authorization_tx.send(authorization).map_err(|_error| {
                     crate::bootstrap::AppError::FailedPrecondition(
                         "authorization receiver closed".to_string(),
                     )
