@@ -127,6 +127,11 @@ async fn fetch_manifest(entry: &CommunityCatalogEntry) -> Result<String, AppErro
 
 #[cfg(test)]
 mod tests {
+    #![expect(
+        clippy::indexing_slicing,
+        reason = "summary ordering assertions intentionally fail loudly in tests"
+    )]
+
     use super::*;
 
     #[test]

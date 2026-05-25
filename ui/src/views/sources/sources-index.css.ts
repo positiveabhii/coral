@@ -361,7 +361,7 @@ export const tileDesc = style({
   display: '-webkit-box',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
-  WebkitBoxOrient: 'vertical' as 'vertical',
+  WebkitBoxOrient: 'vertical' as const,
   WebkitLineClamp: 2,
 })
 

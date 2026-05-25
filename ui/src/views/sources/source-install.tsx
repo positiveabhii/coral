@@ -67,35 +67,34 @@ export function SourceInstall({
   const icon = providerIcon(name)
   const busy = progress.kind !== 'idle' && progress.kind !== 'oauth-completed'
 
-  // For each secret, the user's chosen method (defaulting to index 0).
-  const effectiveChoice = (input: SourceInputSpec): number =>
-    methodChoices[input.key] ?? 0
-
   const canSubmit = useMemo(() => {
     if (!resolved) return false
-    return inputs.every((input) => {
+    return resolved.info.inputs.every((input) => {
       if (!input.required) return true
+      const choice = methodChoices[input.key] ?? 0
       if (input.input.case === 'variable') {
         const def = input.input.value.defaultValue
         return (values[input.key] ?? def).trim().length > 0
       }
       if (input.input.case === 'secret') {
-        const method = input.input.value.credential?.methods[effectiveChoice(input)]
+        const method = input.input.value.credential?.methods[choice]
         if (!method) {
-          // No credential metadata -> behave like a plain paste field.
           return (values[input.key] ?? '').trim().length > 0
         }
         if (method.method.case === 'sourceConfig') {
           return (values[input.key] ?? '').trim().length > 0
         }
         if (method.method.case === 'oauthAuthorizationCode') {
-          // OAuth method: any required OAuth-side inputs (CLIENT_ID etc.) must be filled.
           return oauthMethodReady(method.method.value, values)
         }
       }
       return true
     })
-  }, [resolved, inputs, values, methodChoices])
+  }, [resolved, values, methodChoices])
+
+  // For each secret, the user's chosen method (defaulting to index 0).
+  const effectiveChoice = (input: SourceInputSpec): number =>
+    methodChoices[input.key] ?? 0
 
   async function submit() {
     if (!resolved) return

@@ -7,11 +7,12 @@
 use std::fs;
 
 use coral_api::v1::{
-    CreateBundledSourceRequest, DeleteSourceRequest, DiscoverSourcesRequest, ExecuteSqlRequest,
-    ExplainSqlRequest, GetSourceInfoRequest, GetSourceRequest, ImportSourceRequest,
-    ListCatalogRequest, PaginationRequest, QueryTestFailure, QueryTestSuccess, SourceOrigin,
-    SourceSecret, SourceVariable, ValidateSourceRequest, Workspace, catalog_item,
-    import_source_response, query_test_result, source_input_spec::Input as ProtoSourceInput,
+    CreateBundledSourceRequest, DeleteSourceRequest, DiscoverCommunitySourcesRequest,
+    DiscoverSourcesRequest, ExecuteSqlRequest, ExplainSqlRequest, GetCommunitySourceInfoRequest,
+    GetSourceInfoRequest, GetSourceRequest, ImportSourceRequest, ListCatalogRequest,
+    PaginationRequest, QueryTestFailure, QueryTestSuccess, SourceOrigin, SourceSecret,
+    SourceVariable, ValidateSourceRequest, Workspace, catalog_item, import_source_response,
+    query_test_result, source_input_spec::Input as ProtoSourceInput,
 };
 use coral_client::default_workspace;
 use tempfile::TempDir;
@@ -786,6 +787,95 @@ async fn discover_bundled_sources_returns_catalog_and_marks_installed_sources() 
         .find(|source| source.name == "github")
         .expect("github bundled source after install");
     assert!(github.installed);
+}
+
+#[tokio::test]
+async fn discover_community_sources_returns_summaries_and_marks_installed() {
+    let harness = GrpcHarness::new().await;
+
+    let discovered = harness
+        .source_client()
+        .discover_community_sources(Request::new(DiscoverCommunitySourcesRequest {
+            workspace: Some(default_workspace()),
+        }))
+        .await
+        .expect("discover community sources")
+        .into_inner()
+        .sources;
+    assert!(!discovered.is_empty(), "community catalog must not be empty");
+    let hn = discovered
+        .iter()
+        .find(|source| source.name == "hn")
+        .expect("hn community source");
+    assert_eq!(hn.origin, SourceOrigin::Community as i32);
+    assert!(!hn.installed);
+    // Summaries are lightweight and intentionally omit inputs; full inputs are
+    // resolved on demand via get_community_source_info.
+    assert!(hn.inputs.is_empty());
+}
+
+#[tokio::test]
+async fn get_community_source_info_returns_inputs_and_manifest_yaml() {
+    let harness = GrpcHarness::new().await;
+
+    let response = harness
+        .source_client()
+        .get_community_source_info(Request::new(GetCommunitySourceInfoRequest {
+            workspace: Some(default_workspace()),
+            name: "hn".to_string(),
+        }))
+        .await
+        .expect("get community source info")
+        .into_inner();
+    let info = response.source_info.expect("source info");
+    assert_eq!(info.name, "hn");
+    assert_eq!(info.origin, SourceOrigin::Community as i32);
+    assert!(
+        !response.manifest_yaml.is_empty(),
+        "community info should carry the raw manifest YAML"
+    );
+    assert!(response.manifest_yaml.contains("name: hn"));
+}
+
+#[tokio::test]
+async fn community_source_install_round_trips_through_import_source() {
+    let harness = GrpcHarness::new().await;
+
+    let resolved = harness
+        .source_client()
+        .get_community_source_info(Request::new(GetCommunitySourceInfoRequest {
+            workspace: Some(default_workspace()),
+            name: "hn".to_string(),
+        }))
+        .await
+        .expect("get community source info")
+        .into_inner();
+
+    let imported = harness
+        .import_source(resolved.manifest_yaml, Vec::new(), Vec::new())
+        .await;
+    assert_eq!(imported.name, "hn");
+    // Imported sources persist as Imported regardless of where the YAML came
+    // from — the community origin is a discovery-time marker, not a storage one.
+    assert_eq!(imported.origin, SourceOrigin::Imported as i32);
+
+    let rediscovered = harness
+        .source_client()
+        .discover_community_sources(Request::new(DiscoverCommunitySourcesRequest {
+            workspace: Some(default_workspace()),
+        }))
+        .await
+        .expect("rediscover community sources")
+        .into_inner()
+        .sources;
+    let hn = rediscovered
+        .iter()
+        .find(|source| source.name == "hn")
+        .expect("hn community source after install");
+    assert!(
+        hn.installed,
+        "community catalog should mark hn as installed after import"
+    );
 }
 
 #[tokio::test]
