@@ -2,6 +2,7 @@ import { Shell } from '@/components/shell'
 import { ToastHost } from '@/components/toast'
 import { useRouter } from '@/lib/router'
 import { TracesPage } from '@/views/TracesPage'
+import { SourceDetail } from '@/views/sources/source-detail'
 import { SourceInstall } from '@/views/sources/source-install'
 import { SourcesIndex } from '@/views/sources/sources-index'
 import { useThemeClassOnBody } from '@/wax/theme/theme-provider'
@@ -23,8 +24,10 @@ function renderRoute(route: ReturnType<typeof useRouter>['location']['route']) {
   if (route.kind === 'source-install') {
     return <SourceInstall name={route.name} origin={route.origin} />
   }
-  if (route.kind === 'sources' || route.kind === 'source-detail') {
-    // Detail surface lands in M6; for now the index handles the click-through.
+  if (route.kind === 'source-detail') {
+    return <SourceDetail name={route.name} />
+  }
+  if (route.kind === 'sources') {
     return <SourcesIndex />
   }
   return <TracesPage />

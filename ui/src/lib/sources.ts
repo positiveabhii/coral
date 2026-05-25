@@ -8,6 +8,7 @@ import {
   DiscoverSourcesRequestSchema,
   GetCommunitySourceInfoRequestSchema,
   GetSourceInfoRequestSchema,
+  GetSourceRequestSchema,
   ImportSourceRequestSchema,
   ListSourcesRequestSchema,
   SourceOrigin,
@@ -110,6 +111,14 @@ export async function getCommunitySourceInfo(name: string): Promise<ResolvedSour
     throw new Error(`community source '${name}' has no info`)
   }
   return { info: resp.sourceInfo, manifestYaml: resp.manifestYaml }
+}
+
+export async function getInstalledSource(name: string): Promise<Source> {
+  const resp = await sourceClient.getSource(
+    create(GetSourceRequestSchema, { workspace: WORKSPACE, name }),
+  )
+  if (!resp.source) throw new Error(`source '${name}' not found`)
+  return resp.source
 }
 
 export async function deleteSource(name: string): Promise<void> {
