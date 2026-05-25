@@ -86,45 +86,12 @@ The prototype on `ludo-sources-review-v2` is a UX skeleton with patchy backend i
 
 ---
 
-## 4. Open architectural decisions (need your input)
+## 4. Architectural decisions (locked)
 
-### Q1 — How do community sources reach users in v1?
-
-We have 75 community manifests in-repo that are not bundled. To install one today, a user has to clone the repo and run `coral source add --file path/to/manifest.yaml`. To make them installable from the UI we need one of:
-
-| Option | Effort | UX | Trade-off |
-| --- | --- | --- | --- |
-| **A. Bundle community sources too** | Low | Same as core | Binary size grows; release rhythm couples to community PRs |
-| **B. Fetch manifests from GitHub raw on install** | Medium | Smooth | Runtime network dependency; needs caching / pinning to a release tag |
-| **C. Ship a static catalog JSON, lazy-fetch manifest on install** | Medium | Smooth | Two roundtrips, but smaller catalog payload and pinned manifests |
-| **D. v1 UI only browses; install of community still goes through CLI** | Lowest | Worst | Defeats much of the point |
-
-My recommendation: **C**. Generate `community_catalog.json` at build time (name, version, description, icon hint, manifest URL pinned to current commit/tag), ship it in the binary, fetch the manifest YAML on install. Adds one new RPC: `DiscoverCommunitySources` and a thin server-side fetcher.
-
-### Q2 — Where does the OAuth "open browser" happen?
-
-The streaming RPC emits `oauth_authorization { authorize_url, state }`. Options for the UI:
-
-| Option | Notes |
-| --- | --- |
-| **A. UI calls `window.open(url)`** | Standard browser UX. Requires UI to be the foreground tab when the event arrives. |
-| **B. App opens the system browser via the existing CLI mechanism** | Backend already does this in CLI mode. Could reuse if the app process can spawn the browser regardless of UI. |
-| **C. UI shows the URL with "Open in browser" button + copy** | Always works; one extra click. Good fallback. |
-
-Recommendation: **A with C as fallback** (auto-open + show button if popup blocked). Mirrors common SaaS OAuth UX.
-
-### Q3 — OAuth token refresh: merge first or build alongside?
-
-Refresh lives on `codex/oauth-token-refresh`. v1 is incomplete without it (Slack OAuth tokens expire). Two options:
-
-- **A.** Get that branch merged to main first, rebase `sources-management-v1` on top.
-- **B.** Cherry-pick the three commits onto this branch and own getting them merged together.
-
-Recommendation: **A** — that work is its own concern and should land independently. We can develop the UI assuming it's there; integration testing waits for the merge.
-
-### Q4 — Browser-driven OAuth: any redirect to the UI?
-
-Today the loopback listener serves a small completion HTML page. For the UI flow we might want it to also include a deep link back to the Coral UI tab ("Return to Coral"). Worth a small backend tweak. Low priority.
+- **Community sources (Q1) → Option C.** Build-time `community_catalog.json` with metadata; manifest YAML fetched on install. New RPC `DiscoverCommunitySources`. Dev: read from local FS; release: fetch from GitHub raw pinned to the build's commit SHA.
+- **OAuth browser open (Q2) → same path as CLI.** App spawns the system browser (don't introduce `window.open` in the UI). UI still shows the URL as a copy-able fallback if open fails.
+- **OAuth token refresh (Q3) → cherry-picked onto this branch.** Commits `0abf2fa`, `432a1b8`, `89f4936` are already on `sources-management-v1` (as `3328047`, `a4d322a`, `b80a3b5`). When `codex/oauth-token-refresh` merges to main upstream, this branch will rebase clean.
+- **Loopback completion redirect (Q4) → skip for v1.** Current completion page is fine.
 
 ---
 
@@ -226,11 +193,4 @@ UI (to be authored on this branch — lifting selectively from `ludo-sources-rev
 
 ---
 
-## 9. What I need from you before starting code
-
-1. **Q1** — community sources strategy (recommend C).
-2. **Q2** — OAuth open-browser mechanism (recommend A + C).
-3. **Q3** — OAuth refresh merge timing (recommend A).
-4. **Q4** — UI deep-link back from loopback callback (skip for v1?).
-5. Confirm out-of-scope list (esp. dropping the custom-source authoring flow).
-6. Branch name OK as `sources-management-v1`?
+## 9. Decisions confirmed — see Section 4.
