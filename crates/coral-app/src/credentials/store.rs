@@ -44,6 +44,24 @@ impl CredentialStore {
         Ok(())
     }
 
+    pub(crate) fn update_material<F, R>(
+        &self,
+        workspace_name: &WorkspaceName,
+        credential_set_id: &CredentialSetId,
+        update: F,
+    ) -> Result<R, AppError>
+    where
+        F: FnOnce(BTreeMap<String, String>) -> Result<(BTreeMap<String, String>, R), AppError>,
+    {
+        let path = self.material_file(workspace_name, credential_set_id)?;
+        tracing::trace!(%credential_set_id, "updating credential material");
+        let _lock = FileLock::exclusive(self.layout.state_lock())?;
+        let current = load_file(&path)?;
+        let (next, result) = update(current)?;
+        save_values_unlocked(&path, &next)?;
+        Ok(result)
+    }
+
     pub(crate) fn read_material(
         &self,
         workspace_name: &WorkspaceName,
