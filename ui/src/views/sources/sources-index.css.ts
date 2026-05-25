@@ -60,6 +60,31 @@ export const categorySection = style({
   gap: 16,
 })
 
+export const sectionHead = style({
+  alignItems: 'baseline',
+  display: 'flex',
+  gap: 8,
+})
+
+export const sectionCount = style({
+  alignItems: 'center',
+  background: theme.surface.onMainContent,
+  border: `1px solid ${theme.stroke.secondary}`,
+  borderRadius: 999,
+  color: theme.content.secondary,
+  display: 'inline-flex',
+  fontSize: 11,
+  fontWeight: 600,
+  height: 18,
+  justifyContent: 'center',
+  minWidth: 22,
+  padding: '0 6px',
+})
+
+export const searchBar = style({
+  maxWidth: 360,
+})
+
 export const cardGrid = style({
   display: 'grid',
   gap: 16,

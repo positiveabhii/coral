@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { Icon } from '@/wax/components/icon'
+import { TextInput } from '@/wax/components/inputs/text'
 import { Typography } from '@/wax/components/typography'
 
 import { ErrorBanner } from '@/components/error-banner'
 import { providerIcon } from '@/lib/provider-icons'
 import { useRouter } from '@/lib/router'
-import { categoriseSources, type CategoryDef } from '@/lib/source-categories'
 import {
   discoverBundled,
   discoverCommunity,
@@ -27,6 +27,7 @@ export function SourcesIndex() {
   const [community, setCommunity] = useState<CatalogEntry[] | null>(null)
   const [installed, setInstalled] = useState<InstalledSource[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     let cancelled = false
@@ -54,7 +55,7 @@ export function SourcesIndex() {
 
   const loading = installed === null && bundled === null && community === null && !error
 
-  const entries = useMemo<IndexEntry[]>(() => {
+  const allEntries = useMemo<IndexEntry[]>(() => {
     const installedByName = new Map((installed ?? []).map((s) => [s.name, s]))
     const merged: IndexEntry[] = [...(bundled ?? []), ...(community ?? [])].map((entry) => ({
       ...entry,
@@ -65,7 +66,27 @@ export function SourcesIndex() {
     return merged
   }, [bundled, community, installed])
 
-  const sections = useMemo(() => categoriseSources(entries), [entries])
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return allEntries
+    return allEntries.filter(
+      (entry) =>
+        entry.name.toLowerCase().includes(q) || entry.description.toLowerCase().includes(q),
+    )
+  }, [allEntries, search])
+
+  const connected = useMemo(() => filtered.filter((entry) => entry.installed), [filtered])
+  const available = useMemo(() => filtered.filter((entry) => !entry.installed), [filtered])
+
+  const onPick = (entry: IndexEntry) => {
+    if (entry.installed) {
+      navigate({ route: { kind: 'source-detail', name: entry.name } })
+    } else {
+      navigate({
+        route: { kind: 'source-install', name: entry.name, origin: entry.origin },
+      })
+    }
+  }
 
   return (
     <div className={styles.root}>
@@ -76,6 +97,15 @@ export function SourcesIndex() {
             Connect external systems to query their data from Coral. Click a source to install or
             inspect it.
           </Typography.Body>
+        </div>
+
+        <div className={styles.searchBar}>
+          <TextInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Search sources…"
+            icon="Search"
+          />
         </div>
 
         {error ? (
@@ -93,7 +123,7 @@ export function SourcesIndex() {
           </div>
         ) : null}
 
-        {!loading && !error && entries.length === 0 ? (
+        {!loading && !error && allEntries.length === 0 ? (
           <div className={styles.emptyState}>
             <Icon name="Plug" size="24" color="tertiary" />
             <Typography.Body variant="secondary">
@@ -102,44 +132,56 @@ export function SourcesIndex() {
           </div>
         ) : null}
 
-        {sections.map((section) => (
-          <CategorySection
-            key={section.category.key}
-            category={section.category}
-            entries={section.entries}
-            onPick={(entry) => {
-              if (entry.installed) {
-                navigate({ route: { kind: 'source-detail', name: entry.name } })
-              } else {
-                navigate({
-                  route: { kind: 'source-install', name: entry.name, origin: entry.origin },
-                })
-              }
-            }}
-          />
-        ))}
+        {connected.length > 0 ? (
+          <Section title="Connected" count={connected.length}>
+            <div className={styles.cardGrid}>
+              {connected.map((entry) => (
+                <SourceCard
+                  key={`${entry.origin}:${entry.name}`}
+                  entry={entry}
+                  onClick={() => onPick(entry)}
+                />
+              ))}
+            </div>
+          </Section>
+        ) : null}
+
+        {available.length > 0 ? (
+          <Section title="Available" count={available.length}>
+            <div className={styles.cardGrid}>
+              {available.map((entry) => (
+                <SourceCard
+                  key={`${entry.origin}:${entry.name}`}
+                  entry={entry}
+                  onClick={() => onPick(entry)}
+                />
+              ))}
+            </div>
+          </Section>
+        ) : !loading && !error && allEntries.length > 0 ? (
+          <Typography.BodySmall variant="tertiary">No sources match your search.</Typography.BodySmall>
+        ) : null}
       </div>
     </div>
   )
 }
 
-function CategorySection({
-  category,
-  entries,
-  onPick,
+function Section({
+  title,
+  count,
+  children,
 }: {
-  category: CategoryDef
-  entries: IndexEntry[]
-  onPick: (entry: IndexEntry) => void
+  title: string
+  count: number
+  children: React.ReactNode
 }) {
   return (
     <div className={styles.categorySection}>
-      <Typography.HeadingXSmall as="h2">{category.label}</Typography.HeadingXSmall>
-      <div className={styles.cardGrid}>
-        {entries.map((entry) => (
-          <SourceCard key={`${entry.origin}:${entry.name}`} entry={entry} onClick={() => onPick(entry)} />
-        ))}
+      <div className={styles.sectionHead}>
+        <Typography.HeadingXSmall as="h2">{title}</Typography.HeadingXSmall>
+        <span className={styles.sectionCount}>{count}</span>
       </div>
+      {children}
     </div>
   )
 }
