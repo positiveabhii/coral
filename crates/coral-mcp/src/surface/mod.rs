@@ -4,6 +4,7 @@ mod catalog;
 mod discovery;
 mod errors;
 mod resources;
+mod search;
 mod tools;
 mod values;
 
@@ -18,9 +19,10 @@ pub(crate) use resources::{
     guide_resource, guide_resource_content, initial_instructions, tables_resource,
     tables_resource_content,
 };
+pub(crate) use search::search_value;
 pub(crate) use tools::{
     CatalogToolKind, build_tool_result, describe_table_arguments, describe_table_tool,
     feedback_tool, list_catalog_arguments, list_catalog_tool, list_columns_arguments,
-    list_columns_tool, required_string_argument, search_catalog_arguments, search_catalog_tool,
-    sql_tool,
+    list_columns_tool, required_string_argument, search_arguments, search_catalog_arguments,
+    search_catalog_tool, search_tool, sql_tool,
 };

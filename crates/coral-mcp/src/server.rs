@@ -3,12 +3,12 @@
 use coral_api::v1::{
     CatalogItemKind as ProtoCatalogItemKind, DescribeTableRequest, DescribeTableResponse,
     ExecuteSqlRequest, ListCatalogRequest, ListCatalogResponse, ListColumnsRequest,
-    ListSourcesRequest, PaginationRequest, SearchCatalogRequest, Source, SubmitFeedbackRequest,
-    TableSummary as ProtoTableSummary, catalog_item,
+    ListSourcesRequest, PaginationRequest, SearchCatalogRequest, SearchRequest, Source,
+    SubmitFeedbackRequest, TableSummary as ProtoTableSummary, catalog_item,
 };
 use coral_client::{
-    AppClient, CatalogClient, FeedbackClient, QueryClient, SourceClient, batches_to_json_rows,
-    decode_execute_sql_response, default_workspace,
+    AppClient, CatalogClient, FeedbackClient, QueryClient, SearchClient, SourceClient,
+    batches_to_json_rows, decode_execute_sql_response, default_workspace,
 };
 use rmcp::{
     ErrorData, ServerHandler,
@@ -30,9 +30,9 @@ use crate::{
         describe_table_value, feedback_tool, guide_resource, guide_resource_content,
         initial_instructions, internal_status, list_catalog_arguments, list_catalog_tool,
         list_catalog_value, list_columns_arguments, list_columns_tool, list_columns_value,
-        required_string_argument, search_catalog_arguments, search_catalog_tool,
-        search_catalog_value, sql_tool, status_to_error_data, tables_resource,
-        tables_resource_content, tool_error_from_status, tool_error_result,
+        required_string_argument, search_arguments, search_catalog_arguments, search_catalog_tool,
+        search_catalog_value, search_tool, search_value, sql_tool, status_to_error_data,
+        tables_resource, tables_resource_content, tool_error_from_status, tool_error_result,
     },
     telemetry,
 };
@@ -82,6 +82,7 @@ pub(crate) struct CoralMcpServer {
     source: SourceClient,
     catalog: CatalogClient,
     query: QueryClient,
+    search: SearchClient,
     feedback: FeedbackClient,
     options: McpOptions,
 }
@@ -92,6 +93,7 @@ impl CoralMcpServer {
             source: app.source_client(),
             catalog: app.catalog_client(),
             query: app.query_client(),
+            search: app.search_client(),
             feedback: app.feedback_client(),
             options,
         }
@@ -317,6 +319,32 @@ impl CoralMcpServer {
         }
     }
 
+    async fn search_tool_result(
+        &self,
+        request_arguments: Option<&Map<String, Value>>,
+    ) -> Result<ToolCallOutcome, ErrorData> {
+        let arguments = search_arguments(request_arguments)?;
+        let mut search_client = self.search.clone();
+        match search_client
+            .search(Request::new(SearchRequest {
+                workspace: Some(default_workspace()),
+                query: arguments.query,
+                limit: 0,
+            }))
+            .await
+            .map(|response| search_value(&response.into_inner()))
+        {
+            Ok(value) => Ok(ToolCallOutcome::Success(value)),
+            Err(status) if status.code() == tonic::Code::InvalidArgument => {
+                Err(status_to_error_data(&status))
+            }
+            Err(status) => Ok(ToolCallOutcome::ToolError {
+                operation: "Search",
+                status,
+            }),
+        }
+    }
+
     async fn list_catalog_tool_result(
         &self,
         request_arguments: Option<&Map<String, Value>>,
@@ -374,6 +402,7 @@ impl CoralMcpServer {
                     self.execute_sql_value(&sql).await,
                 ))
             }
+            "search" => self.search_tool_result(request.arguments.as_ref()).await,
             "list_catalog" => {
                 self.list_catalog_tool_result(request.arguments.as_ref())
                     .await
@@ -486,6 +515,7 @@ impl ServerHandler for CoralMcpServer {
                 .map_err(|status| status_to_error_data(&status))?;
             let mut tools = vec![
                 sql_tool(&sources, visible_table_count),
+                search_tool(visible_table_count, visible_function_count),
                 list_catalog_tool(visible_table_count, visible_function_count),
                 search_catalog_tool(visible_table_count, visible_function_count),
                 describe_table_tool(),

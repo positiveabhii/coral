@@ -236,6 +236,7 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             .collect::<Vec<_>>(),
         vec![
             "sql",
+            "search",
             "list_catalog",
             "search_catalog",
             "describe_table",
@@ -253,11 +254,18 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
         tools[1]
             .description
             .as_deref()
-            .expect("list_catalog description")
+            .expect("search description")
             .contains("3 table(s) and 0 table function(s) are currently visible")
     );
     assert!(
         tools[2]
+            .description
+            .as_deref()
+            .expect("list_catalog description")
+            .contains("3 table(s) and 0 table function(s) are currently visible")
+    );
+    assert!(
+        tools[3]
             .description
             .as_deref()
             .expect("search_catalog description")
@@ -307,6 +315,7 @@ async fn mcp_stdio_enable_feedback_lists_feedback_tool() -> Result<(), Box<dyn s
             .collect::<Vec<_>>(),
         vec![
             "sql",
+            "search",
             "list_catalog",
             "search_catalog",
             "describe_table",

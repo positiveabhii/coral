@@ -8,6 +8,8 @@ Treat Coral like a read-only SQL database. The MCP discovery tools are catalog h
 
 Prefer one SQL statement with `JOIN`, `CROSS JOIN`, CTEs, subqueries, aggregates, or window functions over fetching rows and combining them in the agent. Use `CROSS JOIN` explicitly when the query needs every combination of rows from two relations. Call table functions from `FROM` with named arguments, for example `github.search_issues(q => 'repo:withcoral/coral deploy failure')`.
 
+Use the `search` tool when you have a clue such as an identifier, service name, issue phrase, or partial intent but do not yet know which Coral surface to query. Treat `search` results as routing hints, not evidence. Verify every hint with ordinary SQL or table-function calls before answering.
+
 ```sql
 -- List visible tables, descriptions, and required filters
 SELECT schema_name, table_name, description, required_filters FROM coral.tables ORDER BY schema_name, table_name;
@@ -72,6 +74,7 @@ WHERE json_get_str(rules, 0, 'clauses', 0, 'values', 0) = 'phoebe-org';
 - Joins across schemas work with standard SQL after table scans complete.
 - Use `LIKE` or `ILIKE` for SQL wildcard matching with `%` and `_`. `SIMILAR TO` uses regex-shaped patterns, so write `.*` instead of `%`, `.` instead of `_`, or escape literal percent/underscore characters as `\%` and `\_`.
 - Regex operators such as `~` and `~*` treat `%` and `_` as ordinary literal characters.
+- `search` routes a clue to typed hints across catalog metadata, columns/filters, and native search paths. It accepts only `query` in this version; do not invent `scope`, provider, source, or type filters.
 - `list_catalog` shows queryable tables and parameterized table functions in pages; pass `schema`, `kind`, `limit`, and `offset` to narrow large catalogs. Omit `kind` or pass `null` to list all item kinds.
 - `search_catalog` searches table and table-function names, descriptions, arguments, result columns, guides, and required filters with a Rust regex; use it before broad SQL metadata scans when you know part of the catalog item you need.
 - `describe_table` returns one compact table detail with guide text, required filters, and column count; use `coral.columns` when you need full column details.

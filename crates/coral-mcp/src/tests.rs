@@ -126,6 +126,11 @@ functions:
         type: Utf8
         description: Issue title
   - name: search_issues
+    kind: search
+    search_limits:
+      default_top_k: 10
+      max_top_k: 100
+      max_calls_per_query: 1
     description: Search issues
     args:
       - name: q
@@ -299,6 +304,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .collect::<Vec<_>>(),
         vec![
             "sql",
+            "search",
             "list_catalog",
             "search_catalog",
             "describe_table",
@@ -311,6 +317,13 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .as_deref()
             .expect("sql description")
             .contains("No user tables are currently visible")
+    );
+    assert!(
+        tool_by_name(&initial_tools, "search")
+            .description
+            .as_deref()
+            .expect("search description")
+            .contains("Results are hints")
     );
     for tool in &initial_tools {
         let Some(output_schema) = &tool.output_schema else {
@@ -357,6 +370,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     add_demo_source(&mut session.source_client, manifest_yaml).await;
 
     let updated_tools = client.list_all_tools().await.expect("updated tools");
+    let search_tool = tool_by_name(&updated_tools, "search");
     let list_catalog_tool = tool_by_name(&updated_tools, "list_catalog");
     let search_catalog_tool = tool_by_name(&updated_tools, "search_catalog");
     let list_columns_tool = tool_by_name(&updated_tools, "list_columns");
@@ -368,17 +382,24 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .contains("3 table(s) are currently visible")
     );
     assert!(
-        updated_tools[1]
+        list_catalog_tool
             .description
             .as_deref()
             .expect("catalog description")
             .contains("3 table(s) and 0 table function(s) are currently visible")
     );
     assert!(
-        updated_tools[2]
+        search_catalog_tool
             .description
             .as_deref()
             .expect("catalog search description")
+            .contains("3 table(s) and 0 table function(s) are currently visible")
+    );
+    assert!(
+        search_tool
+            .description
+            .as_deref()
+            .expect("search description")
             .contains("3 table(s) and 0 table function(s) are currently visible")
     );
 
@@ -785,6 +806,10 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "This end-to-end test keeps table-function listing, catalog search, and universal search assertions under one fixture."
+)]
 async fn list_catalog_surfaces_table_functions() {
     let temp = TempDir::new().expect("temp dir");
     let manifest_path = write_function_fixture_manifest(temp.path());
@@ -806,6 +831,7 @@ async fn list_catalog_surfaces_table_functions() {
     assert!(tools.iter().all(|tool| tool.name != "search_tables"));
 
     let catalog_tool = tool_by_name(&tools, "list_catalog");
+    let universal_search_tool = tool_by_name(&tools, "search");
     let search_tool = tool_by_name(&tools, "search_catalog");
     let catalog = client
         .call_tool(CallToolRequestParams::new("list_catalog"))
@@ -879,6 +905,54 @@ async fn list_catalog_surfaces_table_functions() {
     );
     assert_matches_output_schema(search_tool, &search);
 
+    let universal_search = client
+        .call_tool(
+            CallToolRequestParams::new("search").with_arguments(json_object(&json!({
+                "query": "issue search title"
+            }))),
+        )
+        .await
+        .expect("universal search")
+        .structured_content
+        .expect("structured universal search");
+    assert!(
+        universal_search["provider_statuses"]
+            .as_array()
+            .expect("provider statuses")
+            .iter()
+            .any(|status| status["provider"] == "catalog_metadata"
+                && status["state"] == "results_found")
+    );
+    assert!(
+        universal_search["provider_statuses"]
+            .as_array()
+            .expect("provider statuses")
+            .iter()
+            .any(|status| status["provider"] == "observed_values"
+                && status["state"] == "not_enabled")
+    );
+    assert!(
+        universal_search["results"]
+            .as_array()
+            .expect("search results")
+            .iter()
+            .any(|result| result["type"] == "native_search_path"
+                && result["name"] == "searchy.search_issues"
+                && result["sql_call_example"]
+                    .as_str()
+                    .is_some_and(|example| example.contains("q => '<q>'")))
+    );
+    assert!(
+        universal_search["results"]
+            .as_array()
+            .expect("search results")
+            .iter()
+            .any(|result| result["type"] == "column_hint"
+                && result["surface_name"] == "search_issues"
+                && result["name"] == "title")
+    );
+    assert_matches_output_schema(universal_search_tool, &universal_search);
+
     session.shutdown().await;
 }
 
@@ -903,6 +977,7 @@ async fn mcp_feedback_tool_persists_blocked_agent_report() {
             .collect::<Vec<_>>(),
         vec![
             "sql",
+            "search",
             "list_catalog",
             "search_catalog",
             "describe_table",
@@ -910,7 +985,7 @@ async fn mcp_feedback_tool_persists_blocked_agent_report() {
             "feedback"
         ]
     );
-    let feedback_annotations = tools[5].annotations.as_ref().expect("feedback annotations");
+    let feedback_annotations = tools[6].annotations.as_ref().expect("feedback annotations");
     assert_eq!(feedback_annotations.read_only_hint, Some(false));
     assert_eq!(feedback_annotations.destructive_hint, Some(false));
     assert_eq!(feedback_annotations.idempotent_hint, Some(false));

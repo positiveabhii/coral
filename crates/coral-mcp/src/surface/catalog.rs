@@ -111,7 +111,7 @@ pub(crate) fn list_catalog_value(response: &ListCatalogResponse) -> Value {
     paged_collection_value("items", items, &pagination)
 }
 
-fn catalog_item_value(item: &coral_api::v1::CatalogItem) -> Option<Value> {
+pub(crate) fn catalog_item_value(item: &coral_api::v1::CatalogItem) -> Option<Value> {
     match item.item.as_ref()? {
         catalog_item::Item::Table(table) => {
             serde_json::to_value(CatalogTableItemValue::from(table)).ok()

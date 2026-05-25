@@ -7,6 +7,7 @@ use rmcp::{
 };
 use serde_json::{Map, Value, json};
 
+use super::search::search_output_schema;
 use super::{Pagination, parse_pagination, parse_pagination_with_limits};
 
 pub(crate) struct ListCatalogArguments {
@@ -21,6 +22,10 @@ pub(crate) struct SearchCatalogArguments {
     pub(crate) kind: Option<CatalogToolKind>,
     pub(crate) ignore_case: bool,
     pub(crate) pagination: Pagination,
+}
+
+pub(crate) struct SearchArguments {
+    pub(crate) query: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,6 +117,34 @@ pub(crate) fn list_catalog_tool(visible_table_count: usize, visible_function_cou
     .with_raw_output_schema(list_catalog_output_schema())
     .with_annotations(
         ToolAnnotations::with_title("List Catalog")
+            .read_only(true)
+            .destructive(false)
+            .idempotent(true)
+            .open_world(false),
+    )
+}
+
+pub(crate) fn search_tool(visible_table_count: usize, visible_function_count: usize) -> Tool {
+    Tool::new(
+        "search",
+        format!(
+            "Route a clue to likely Coral catalog items, columns, filters, and native search paths. {visible_table_count} table(s) and {visible_function_count} table function(s) are currently visible. Results are hints; verify them with ordinary Coral SQL."
+        ),
+        json_object_schema(&json!({
+            "type": "object",
+            "required": ["query"],
+            "additionalProperties": false,
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Clue, identifier, phrase, or partial intent to route to likely Coral surfaces."
+                }
+            }
+        })),
+    )
+    .with_raw_output_schema(search_output_schema())
+    .with_annotations(
+        ToolAnnotations::with_title("Search")
             .read_only(true)
             .destructive(false)
             .idempotent(true)
@@ -330,6 +363,14 @@ pub(crate) fn search_catalog_arguments(
         kind: optional_catalog_kind_argument(arguments)?,
         ignore_case: optional_bool_argument(arguments, "ignore_case", true)?,
         pagination: parse_pagination_with_limits(arguments, 20, 100)?,
+    })
+}
+
+pub(crate) fn search_arguments(
+    arguments: Option<&Map<String, Value>>,
+) -> Result<SearchArguments, ErrorData> {
+    Ok(SearchArguments {
+        query: required_string_argument(arguments, "query")?,
     })
 }
 
