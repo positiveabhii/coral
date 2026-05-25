@@ -813,7 +813,9 @@ When users provide their own OAuth client ID, they must configure the matching
 loopback redirect behavior in the OAuth app. For OAuth methods, Coral starts
 the loopback flow and returns the provider authorization URL. After the
 callback, Coral exchanges the code, stores the access token as the source
-secret, and stores any refresh token as internal credential metadata.
+secret, and stores refresh metadata internally. When the provider issues a
+refresh token, Coral refreshes expired or near-expired OAuth access tokens
+transparently before source validation, catalog discovery, or query execution.
 
 `flow.type` and `pkce` are required. Unspecified protobuf enum values are
 invalid and are rejected rather than treated as defaults. `pkce` is either
@@ -821,12 +823,14 @@ invalid and are rejected rather than treated as defaults. `pkce` is either
 `client.id.default`, `client.id.input`, or both; an interactive `input` value
 overrides `default`. Confidential clients add `client.secret.input` and a
 required `transport` of `basic_auth` or `request_body`. Client secrets are sent
-only to the token endpoint and are never included in the authorization URL.
+only to the token endpoint, are never included in the authorization URL, and may
+be stored as internal credential metadata so Coral can refresh the access token
+without prompting the user again.
 
 Scopes are declared under `scopes.scope`; `delimiter: space` represents
-`scope=a b`, and `delimiter: comma` represents `scope=a,b`. Coral may store
-refresh tokens and OAuth metadata alongside the source secret, but automatic
-token refresh is not implemented yet.
+`scope=a b`, and `delimiter: comma` represents `scope=a,b`. Coral stores OAuth
+metadata alongside the source secret and preserves rotated refresh tokens when
+the provider returns a new one during refresh.
 
 At runtime, installed source inputs are also surfaced through `coral.inputs`.
 This is useful when agents or scripts need to inspect non-secret source config
