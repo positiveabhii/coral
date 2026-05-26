@@ -8,5 +8,7 @@ export interface BackdropProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 export function Backdrop({ className, ref, ...props }: BackdropProps) {
-  return <BaseDialog.Backdrop className={classNames(styles.backdrop, className)} ref={ref} {...props} />
+  return (
+    <BaseDialog.Backdrop className={classNames(styles.backdrop, className)} ref={ref} {...props} />
+  )
 }

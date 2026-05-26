@@ -13,7 +13,11 @@ export interface DescriptionProps
 
 export function Description({ children, className, ref, ...props }: DescriptionProps) {
   return (
-    <BaseDialog.Description className={classNames(styles.description, className)} ref={ref} {...props}>
+    <BaseDialog.Description
+      className={classNames(styles.description, className)}
+      ref={ref}
+      {...props}
+    >
       {children}
     </BaseDialog.Description>
   )

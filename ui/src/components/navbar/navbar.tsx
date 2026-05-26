@@ -84,10 +84,7 @@ export function Navbar() {
     },
     [toggleSidebar],
   )
-  const onSelect = useCallback(
-    (target: Route) => navigate({ route: target }),
-    [navigate],
-  )
+  const onSelect = useCallback((target: Route) => navigate({ route: target }), [navigate])
 
   return (
     <nav className={styles.navbar({ isCollapsed })} aria-label="Coral">

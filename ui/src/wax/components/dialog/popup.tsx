@@ -14,7 +14,11 @@ export type PopupSize = 'l' | 'm' | 'xl'
 
 export function Popup({ children, className, ref, size = 'm', ...props }: PopupProps) {
   return (
-    <BaseDialog.Popup className={classNames(styles.popup, styles.popupSize[size], className)} ref={ref} {...props}>
+    <BaseDialog.Popup
+      className={classNames(styles.popup, styles.popupSize[size], className)}
+      ref={ref}
+      {...props}
+    >
       {children}
     </BaseDialog.Popup>
   )

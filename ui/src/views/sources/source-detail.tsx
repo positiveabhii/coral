@@ -126,8 +126,8 @@ function SourceDetailDialogContent({
       <>
         <Dialog.Title>Remove {name}?</Dialog.Title>
         <Dialog.Description>
-          This deletes the source configuration and stored credentials from this workspace. You
-          can reinstall later, but you'll need to re-supply any secrets.
+          This deletes the source configuration and stored credentials from this workspace. You can
+          reinstall later, but you'll need to re-supply any secrets.
         </Dialog.Description>
         <Dialog.Actions>
           <ButtonContainer
@@ -167,9 +167,7 @@ function SourceDetailDialogContent({
             <Typography.HeadingMedium as="span" className={styles.headerTitle}>
               {name}
             </Typography.HeadingMedium>
-            {origin ? (
-              <span className={styles.headerPill}>{originBadgeLabel(origin)}</span>
-            ) : null}
+            {origin ? <span className={styles.headerPill}>{originBadgeLabel(origin)}</span> : null}
           </Dialog.Title>
           <Dialog.Description render={<div />}>
             <Typography.BodySmall variant="secondary">
@@ -233,13 +231,7 @@ function Bindings({ source }: { source: Source }) {
   )
 }
 
-function Validation({
-  state,
-  onValidate,
-}: {
-  state: ValidationState
-  onValidate: () => void
-}) {
+function Validation({ state, onValidate }: { state: ValidationState; onValidate: () => void }) {
   return (
     <section className={styles.section}>
       <div className={styles.sectionHead}>

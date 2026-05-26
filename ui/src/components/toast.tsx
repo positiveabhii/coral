@@ -47,7 +47,13 @@ export function ToastHost() {
       {items.map((t) => (
         <div key={t.id} className={styles.toast({ kind: t.kind })} role="status">
           <Icon
-            name={t.kind === 'success' ? 'CircleCheck' : t.kind === 'error' ? 'CircleAlert' : 'CircleAlert'}
+            name={
+              t.kind === 'success'
+                ? 'CircleCheck'
+                : t.kind === 'error'
+                  ? 'CircleAlert'
+                  : 'CircleAlert'
+            }
             size="16"
             color={t.kind === 'success' ? 'success' : t.kind === 'error' ? 'error' : 'info'}
           />

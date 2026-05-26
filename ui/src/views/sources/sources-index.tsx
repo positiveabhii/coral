@@ -165,7 +165,9 @@ export function SourcesIndex() {
             </div>
           </Section>
         ) : !loading && !error && allEntries.length > 0 ? (
-          <Typography.BodySmall variant="tertiary">No sources match your search.</Typography.BodySmall>
+          <Typography.BodySmall variant="tertiary">
+            No sources match your search.
+          </Typography.BodySmall>
         ) : null}
       </div>
 

@@ -100,8 +100,7 @@ function SourceInstallDialogContent({
   const icon = providerIcon(name)
   const busy = progress.kind !== 'idle' && progress.kind !== 'oauth-completed'
 
-  const effectiveChoice = (input: SourceInputSpec): number =>
-    methodChoices[input.key] ?? 0
+  const effectiveChoice = (input: SourceInputSpec): number => methodChoices[input.key] ?? 0
 
   const canSubmit = useMemo(() => {
     if (!resolved) return false
@@ -235,9 +234,7 @@ function SourceInstallDialogContent({
                   values={values}
                   disabled={busy}
                   onValueChange={(key, value) => setValues((p) => ({ ...p, [key]: value }))}
-                  onMethodChange={(key, index) =>
-                    setMethodChoices((p) => ({ ...p, [key]: index }))
-                  }
+                  onMethodChange={(key, index) => setMethodChoices((p) => ({ ...p, [key]: index }))}
                 />
               ))}
             </div>

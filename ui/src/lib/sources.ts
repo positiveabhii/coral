@@ -96,9 +96,7 @@ export async function getInstalledSource(name: string): Promise<Source> {
 }
 
 export async function deleteSource(name: string): Promise<void> {
-  await sourceClient.deleteSource(
-    create(DeleteSourceRequestSchema, { workspace: WORKSPACE, name }),
-  )
+  await sourceClient.deleteSource(create(DeleteSourceRequestSchema, { workspace: WORKSPACE, name }))
 }
 
 export async function validateSource(name: string) {
@@ -113,10 +111,7 @@ function splitBindings(inputs: InstallInput[]) {
   return { variables, secrets }
 }
 
-export async function createBundledSource(
-  name: string,
-  inputs: InstallInput[],
-): Promise<Source> {
+export async function createBundledSource(name: string, inputs: InstallInput[]): Promise<Source> {
   const { variables, secrets } = splitBindings(inputs)
   const resp = await sourceClient.createBundledSource(
     create(CreateBundledSourceRequestSchema, {
@@ -131,7 +126,11 @@ export async function createBundledSource(
 }
 
 export interface OAuthFlowCallbacks {
-  onAuthorization?: (event: { inputKey: string; authorizationUrl: string; expiresInSeconds: bigint }) => void
+  onAuthorization?: (event: {
+    inputKey: string
+    authorizationUrl: string
+    expiresInSeconds: bigint
+  }) => void
   onCompleted?: (event: { inputKey: string; metadata: Map<string, string> }) => void
 }
 
