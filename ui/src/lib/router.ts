@@ -3,7 +3,6 @@ import { useCallback, useSyncExternalStore } from 'react'
 export type Route =
   | { kind: 'traces' }
   | { kind: 'sources' }
-  | { kind: 'source-install'; name: string }
   | { kind: 'source-detail'; name: string }
 
 export interface ParsedLocation {
@@ -15,9 +14,6 @@ function parseHash(): ParsedLocation {
   const segments = raw.split('?')[0].split('/').filter(Boolean)
 
   if (segments[0] === 'sources') {
-    if (segments[1] === 'install' && segments[2]) {
-      return { route: { kind: 'source-install', name: decodeURIComponent(segments[2]) } }
-    }
     if (segments[1] === 'detail' && segments[2]) {
       return { route: { kind: 'source-detail', name: decodeURIComponent(segments[2]) } }
     }
@@ -35,7 +31,6 @@ function serialise(parsed: ParsedLocation): string {
   const r = parsed.route
   if (r.kind === 'traces') return '#/traces'
   if (r.kind === 'sources') return '#/sources'
-  if (r.kind === 'source-install') return `#/sources/install/${encodeURIComponent(r.name)}`
   return `#/sources/detail/${encodeURIComponent(r.name)}`
 }
 

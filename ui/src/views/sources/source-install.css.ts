@@ -2,28 +2,10 @@ import { style } from '@vanilla-extract/css'
 
 import { theme } from '@/wax/theme/theme.css'
 
-export const root = style({
-  display: 'flex',
-  flexDirection: 'column',
-  height: '100%',
-  overflow: 'auto',
-  paddingBlock: 32,
-  paddingInline: 24,
-})
-
-export const container = style({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 24,
-  marginInline: 'auto',
-  maxWidth: 720,
-  width: '100%',
-})
-
 export const header = style({
   alignItems: 'flex-start',
   display: 'flex',
-  gap: 16,
+  gap: 12,
 })
 
 export const headerLogo = style({
@@ -32,16 +14,16 @@ export const headerLogo = style({
   borderRadius: '50%',
   display: 'flex',
   flexShrink: 0,
-  height: 44,
+  height: 40,
   justifyContent: 'center',
   overflow: 'hidden',
-  width: 44,
+  width: 40,
 })
 
 export const headerLogoImg = style({
-  height: 28,
+  height: 24,
   objectFit: 'contain',
-  width: 28,
+  width: 24,
 })
 
 export const headerText = style({
@@ -49,12 +31,14 @@ export const headerText = style({
   flexDirection: 'column',
   flexGrow: 1,
   gap: 4,
+  minWidth: 0,
 })
 
 export const headerTitleRow = style({
   alignItems: 'center',
   display: 'flex',
   gap: 10,
+  marginInlineEnd: 24,
 })
 
 export const headerTitle = style({
@@ -73,12 +57,6 @@ export const headerPill = style({
   letterSpacing: '0.02em',
   padding: '2px 8px',
   textTransform: 'uppercase',
-})
-
-export const form = style({
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 16,
 })
 
 export const fieldGroup = style({
@@ -158,11 +136,4 @@ export const alertError = style({
   background: theme.pill.red.background,
   border: `1px solid ${theme.pill.red.stroke}`,
   color: theme.pill.red.color,
-})
-
-export const saveRow = style({
-  alignItems: 'center',
-  display: 'flex',
-  gap: 8,
-  justifyContent: 'flex-end',
 })

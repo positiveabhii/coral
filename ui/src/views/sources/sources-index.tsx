@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { Icon } from '@/wax/components/icon'
 import { TextInput } from '@/wax/components/inputs/text'
@@ -15,6 +15,7 @@ import {
   type InstalledSource,
 } from '@/lib/sources'
 
+import { SourceInstallDialog } from './source-install'
 import * as styles from './sources-index.css'
 
 interface IndexEntry extends CatalogEntry {
@@ -27,28 +28,24 @@ export function SourcesIndex() {
   const [installed, setInstalled] = useState<InstalledSource[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [installingName, setInstallingName] = useState<string | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const [installedRes, bundledRes] = await Promise.all([
-          listInstalledSources(),
-          discoverBundled(),
-        ])
-        if (cancelled) return
-        setInstalled(installedRes)
-        setBundled(bundledRes)
-      } catch (e) {
-        if (cancelled) return
-        setError(e instanceof Error ? e.message : String(e))
-      }
-    }
-    void load()
-    return () => {
-      cancelled = true
+  const refresh = useCallback(async () => {
+    try {
+      const [installedRes, bundledRes] = await Promise.all([
+        listInstalledSources(),
+        discoverBundled(),
+      ])
+      setInstalled(installedRes)
+      setBundled(bundledRes)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
     }
   }, [])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
 
   const loading = installed === null && bundled === null && !error
 
@@ -79,9 +76,18 @@ export function SourcesIndex() {
     if (entry.installed) {
       navigate({ route: { kind: 'source-detail', name: entry.name } })
     } else {
-      navigate({ route: { kind: 'source-install', name: entry.name } })
+      setInstallingName(entry.name)
     }
   }
+
+  const onInstalled = useCallback(
+    (name: string) => {
+      setInstallingName(null)
+      void refresh()
+      navigate({ route: { kind: 'source-detail', name } })
+    },
+    [navigate, refresh],
+  )
 
   return (
     <div className={styles.root}>
@@ -157,6 +163,15 @@ export function SourcesIndex() {
           <Typography.BodySmall variant="tertiary">No sources match your search.</Typography.BodySmall>
         ) : null}
       </div>
+
+      <SourceInstallDialog
+        name={installingName}
+        open={installingName !== null}
+        onOpenChange={(open) => {
+          if (!open) setInstallingName(null)
+        }}
+        onInstalled={onInstalled}
+      />
     </div>
   )
 }

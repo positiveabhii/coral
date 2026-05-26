@@ -12,14 +12,13 @@ import {
 import { Container as ButtonContainer } from '@/wax/components/button/container'
 import { Icon as ButtonIcon } from '@/wax/components/button/icon'
 import { Text as ButtonText } from '@/wax/components/button/text'
+import * as Dialog from '@/wax/components/dialog'
 import { Icon } from '@/wax/components/icon'
 import { TextInput } from '@/wax/components/inputs/text'
 import { Typography } from '@/wax/components/typography'
 
-import { ErrorBanner } from '@/components/error-banner'
 import { showToast } from '@/components/toast'
 import { providerIcon } from '@/lib/provider-icons'
-import { useRouter } from '@/lib/router'
 import {
   createBundledSource,
   createBundledSourceWithOAuth,
@@ -41,8 +40,44 @@ function formatFieldName(key: string): string {
   return toSentenceCase(key.replace(/_/g, ' '))
 }
 
-export function SourceInstall({ name }: { name: string }) {
-  const { navigate } = useRouter()
+export function SourceInstallDialog({
+  name,
+  open,
+  onOpenChange,
+  onInstalled,
+}: {
+  name: string | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onInstalled: (name: string) => void
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Backdrop />
+        <Dialog.Popup size="l">
+          {name ? (
+            <SourceInstallDialogContent
+              name={name}
+              onCancel={() => onOpenChange(false)}
+              onInstalled={onInstalled}
+            />
+          ) : null}
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  )
+}
+
+function SourceInstallDialogContent({
+  name,
+  onCancel,
+  onInstalled,
+}: {
+  name: string
+  onCancel: () => void
+  onInstalled: (name: string) => void
+}) {
   const [resolved, setResolved] = useState<ResolvedSourceInfo | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [values, setValues] = useState<Record<string, string>>({})
@@ -144,7 +179,7 @@ export function SourceInstall({ name }: { name: string }) {
       }
 
       showToast('success', `Installed ${name}`)
-      navigate({ route: { kind: 'source-detail', name } })
+      onInstalled(name)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setProgress({ kind: 'idle' })
@@ -152,104 +187,100 @@ export function SourceInstall({ name }: { name: string }) {
   }
 
   return (
-    <div className={styles.root}>
-      <div className={styles.container}>
-        <div className={styles.header}>
-          <div className={styles.headerLogo}>
-            {icon ? (
-              <img alt="" className={styles.headerLogoImg} src={icon} />
-            ) : (
-              <Icon name="Plug" size="22" color="secondary" />
-            )}
-          </div>
-          <div className={styles.headerText}>
-            <div className={styles.headerTitleRow}>
-              <Typography.HeadingMedium as="h1" className={styles.headerTitle}>
-                {name}
-              </Typography.HeadingMedium>
-              <span className={styles.headerPill}>Core</span>
-            </div>
-            {resolved?.info.description ? (
-              <Typography.Body variant="secondary">{resolved.info.description}</Typography.Body>
-            ) : (
-              <Typography.Body variant="secondary">Officially supported by Coral.</Typography.Body>
-            )}
-          </div>
+    <>
+      <div className={styles.header}>
+        <div className={styles.headerLogo}>
+          {icon ? (
+            <img alt="" className={styles.headerLogoImg} src={icon} />
+          ) : (
+            <Icon name="Plug" size="22" color="secondary" />
+          )}
         </div>
-
-        {loadError ? <ErrorBanner title="Couldn't load source" message={loadError} /> : null}
-
-        {resolved === null && !loadError ? (
-          <Typography.BodySmall variant="tertiary">Loading…</Typography.BodySmall>
-        ) : !resolved ? null : (
-          <div className={styles.form}>
-            {inputs.length === 0 ? (
-              <Typography.BodySmall variant="tertiary">
-                No configuration needed — click Install to add the source.
-              </Typography.BodySmall>
-            ) : (
-              <div className={styles.fieldGroup}>
-                {inputs.map((input) => (
-                  <InputRow
-                    key={input.key}
-                    input={input}
-                    methodIndex={effectiveChoice(input)}
-                    values={values}
-                    disabled={busy}
-                    onValueChange={(key, value) => setValues((p) => ({ ...p, [key]: value }))}
-                    onMethodChange={(key, index) =>
-                      setMethodChoices((p) => ({ ...p, [key]: index }))
-                    }
-                  />
-                ))}
-              </div>
-            )}
-
-            {progress.kind === 'awaiting-oauth' ? (
-              <OAuthProgress
-                authorizationUrl={progress.authorizationUrl}
-                inputKey={progress.inputKey}
-              />
-            ) : null}
-            {progress.kind === 'oauth-completed' ? (
-              <div className={styles.oauthBox}>
-                <Icon name="CircleCheck" size="16" color="success" />
-                <Typography.BodySmall variant="primary">
-                  {progress.inputKey} authorized. Finishing install…
-                </Typography.BodySmall>
-              </div>
-            ) : null}
-
-            {error ? (
-              <div className={classNames(styles.alertBox, styles.alertError)}>
-                <Icon color="inherit" name="CircleAlert" size="14" />
-                <Typography.BodySmall>{error}</Typography.BodySmall>
-              </div>
-            ) : null}
-
-            <div className={styles.saveRow}>
-              <ButtonContainer
-                disabled={busy}
-                onClick={() => navigate({ route: { kind: 'sources' } })}
-                size="32"
-                variant="bare"
-              >
-                <ButtonText>Cancel</ButtonText>
-              </ButtonContainer>
-              <ButtonContainer
-                disabled={busy || !canSubmit}
-                onClick={() => void submit()}
-                size="32"
-                variant="primary"
-              >
-                {busy ? <ButtonIcon name="Loader" /> : null}
-                <ButtonText>{busyLabel(progress)}</ButtonText>
-              </ButtonContainer>
-            </div>
-          </div>
-        )}
+        <div className={styles.headerText}>
+          <Dialog.Title className={styles.headerTitleRow}>
+            <Typography.HeadingMedium as="span" className={styles.headerTitle}>
+              {name}
+            </Typography.HeadingMedium>
+            <span className={styles.headerPill}>Core</span>
+          </Dialog.Title>
+          <Dialog.Description>
+            {resolved?.info.description ?? 'Officially supported by Coral.'}
+          </Dialog.Description>
+        </div>
       </div>
-    </div>
+
+      {loadError ? (
+        <div className={classNames(styles.alertBox, styles.alertError)}>
+          <Icon color="inherit" name="CircleAlert" size="14" />
+          <Typography.BodySmall>{loadError}</Typography.BodySmall>
+        </div>
+      ) : null}
+
+      {resolved === null && !loadError ? (
+        <Typography.BodySmall variant="tertiary">Loading…</Typography.BodySmall>
+      ) : !resolved ? null : (
+        <>
+          {inputs.length === 0 ? (
+            <Typography.BodySmall variant="tertiary">
+              No configuration needed — click Save to add the source.
+            </Typography.BodySmall>
+          ) : (
+            <div className={styles.fieldGroup}>
+              {inputs.map((input) => (
+                <InputRow
+                  key={input.key}
+                  input={input}
+                  methodIndex={effectiveChoice(input)}
+                  values={values}
+                  disabled={busy}
+                  onValueChange={(key, value) => setValues((p) => ({ ...p, [key]: value }))}
+                  onMethodChange={(key, index) =>
+                    setMethodChoices((p) => ({ ...p, [key]: index }))
+                  }
+                />
+              ))}
+            </div>
+          )}
+
+          {progress.kind === 'awaiting-oauth' ? (
+            <OAuthProgress
+              authorizationUrl={progress.authorizationUrl}
+              inputKey={progress.inputKey}
+            />
+          ) : null}
+          {progress.kind === 'oauth-completed' ? (
+            <div className={styles.oauthBox}>
+              <Icon name="CircleCheck" size="16" color="success" />
+              <Typography.BodySmall variant="primary">
+                {progress.inputKey} authorized. Finishing install…
+              </Typography.BodySmall>
+            </div>
+          ) : null}
+
+          {error ? (
+            <div className={classNames(styles.alertBox, styles.alertError)}>
+              <Icon color="inherit" name="CircleAlert" size="14" />
+              <Typography.BodySmall>{error}</Typography.BodySmall>
+            </div>
+          ) : null}
+
+          <Dialog.Actions>
+            <ButtonContainer disabled={busy} onClick={onCancel} size="32" variant="bare">
+              <ButtonText>Cancel</ButtonText>
+            </ButtonContainer>
+            <ButtonContainer
+              disabled={busy || !canSubmit}
+              onClick={() => void submit()}
+              size="32"
+              variant="primary"
+            >
+              {busy ? <ButtonIcon name="Loader" /> : null}
+              <ButtonText>{busyLabel(progress)}</ButtonText>
+            </ButtonContainer>
+          </Dialog.Actions>
+        </>
+      )}
+    </>
   )
 }
 
