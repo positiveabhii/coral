@@ -67,7 +67,7 @@ function SourceDetailDialogContent({
   const [source, setSource] = useState<Source | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [validation, setValidation] = useState<ValidationState>({ kind: 'idle' })
-  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmingRemove, setConfirmingRemove] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
@@ -110,7 +110,7 @@ function SourceDetailDialogContent({
     try {
       await deleteSource(name)
       showToast('success', `Removed ${name}`)
-      setConfirmOpen(false)
+      setConfirmingRemove(false)
       onRemoved(name)
     } catch (e) {
       showToast('error', e instanceof Error ? e.message : String(e))
@@ -120,6 +120,37 @@ function SourceDetailDialogContent({
 
   const icon = providerIcon(name)
   const origin = source ? originLabel(source.origin) : null
+
+  if (confirmingRemove) {
+    return (
+      <>
+        <Dialog.Title>Remove {name}?</Dialog.Title>
+        <Dialog.Description>
+          This deletes the source configuration and stored credentials from this workspace. You
+          can reinstall later, but you'll need to re-supply any secrets.
+        </Dialog.Description>
+        <Dialog.Actions>
+          <ButtonContainer
+            variant="secondary"
+            size="32"
+            onClick={() => setConfirmingRemove(false)}
+            disabled={deleting}
+          >
+            <ButtonText>Cancel</ButtonText>
+          </ButtonContainer>
+          <ButtonContainer
+            variant="primary"
+            size="32"
+            onClick={() => void onDelete()}
+            disabled={deleting}
+          >
+            {deleting ? <ButtonIcon name="Loader" /> : null}
+            <ButtonText>{deleting ? 'Removing…' : 'Remove'}</ButtonText>
+          </ButtonContainer>
+        </Dialog.Actions>
+      </>
+    )
+  }
 
   return (
     <>
@@ -165,50 +196,13 @@ function SourceDetailDialogContent({
       )}
 
       <Dialog.Actions>
-        <ButtonContainer
-          variant="bare"
-          size="32"
-          onClick={() => setConfirmOpen(true)}
-          disabled={deleting}
-        >
+        <ButtonContainer variant="bare" size="32" onClick={() => setConfirmingRemove(true)}>
           <ButtonText>Remove</ButtonText>
         </ButtonContainer>
         <ButtonContainer variant="primary" size="32" onClick={onClose}>
           <ButtonText>Close</ButtonText>
         </ButtonContainer>
       </Dialog.Actions>
-
-      <Dialog.Root open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <Dialog.Portal>
-          <Dialog.Backdrop />
-          <Dialog.Popup size="m">
-            <Dialog.Title>Remove {name}?</Dialog.Title>
-            <Dialog.Description>
-              This deletes the source configuration and stored credentials from this workspace.
-              You can reinstall later, but you'll need to re-supply any secrets.
-            </Dialog.Description>
-            <Dialog.Actions>
-              <ButtonContainer
-                variant="secondary"
-                size="32"
-                onClick={() => setConfirmOpen(false)}
-                disabled={deleting}
-              >
-                <ButtonText>Cancel</ButtonText>
-              </ButtonContainer>
-              <ButtonContainer
-                variant="primary"
-                size="32"
-                onClick={() => void onDelete()}
-                disabled={deleting}
-              >
-                {deleting ? <ButtonIcon name="Loader" /> : null}
-                <ButtonText>{deleting ? 'Removing…' : 'Remove'}</ButtonText>
-              </ButtonContainer>
-            </Dialog.Actions>
-          </Dialog.Popup>
-        </Dialog.Portal>
-      </Dialog.Root>
     </>
   )
 }
