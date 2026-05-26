@@ -9,7 +9,6 @@ import { providerIcon } from '@/lib/provider-icons'
 import { useRouter } from '@/lib/router'
 import {
   discoverBundled,
-  discoverCommunity,
   listInstalledSources,
   type CatalogEntry,
   type InstalledSource,
@@ -24,7 +23,6 @@ interface IndexEntry extends CatalogEntry {
 export function SourcesIndex() {
   const { navigate } = useRouter()
   const [bundled, setBundled] = useState<CatalogEntry[] | null>(null)
-  const [community, setCommunity] = useState<CatalogEntry[] | null>(null)
   const [installed, setInstalled] = useState<InstalledSource[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -33,15 +31,13 @@ export function SourcesIndex() {
     let cancelled = false
     async function load() {
       try {
-        const [installedRes, bundledRes, communityRes] = await Promise.all([
+        const [installedRes, bundledRes] = await Promise.all([
           listInstalledSources(),
           discoverBundled(),
-          discoverCommunity(),
         ])
         if (cancelled) return
         setInstalled(installedRes)
         setBundled(bundledRes)
-        setCommunity(communityRes)
       } catch (e) {
         if (cancelled) return
         setError(e instanceof Error ? e.message : String(e))
@@ -53,18 +49,18 @@ export function SourcesIndex() {
     }
   }, [])
 
-  const loading = installed === null && bundled === null && community === null && !error
+  const loading = installed === null && bundled === null && !error
 
   const allEntries = useMemo<IndexEntry[]>(() => {
     const installedByName = new Map((installed ?? []).map((s) => [s.name, s]))
-    const merged: IndexEntry[] = [...(bundled ?? []), ...(community ?? [])].map((entry) => ({
+    const merged: IndexEntry[] = (bundled ?? []).map((entry) => ({
       ...entry,
       installed: entry.installed || installedByName.has(entry.name),
       installedVersion: installedByName.get(entry.name)?.version,
     }))
     merged.sort((a, b) => a.name.localeCompare(b.name))
     return merged
-  }, [bundled, community, installed])
+  }, [bundled, installed])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -82,9 +78,7 @@ export function SourcesIndex() {
     if (entry.installed) {
       navigate({ route: { kind: 'source-detail', name: entry.name } })
     } else {
-      navigate({
-        route: { kind: 'source-install', name: entry.name, origin: entry.origin },
-      })
+      navigate({ route: { kind: 'source-install', name: entry.name } })
     }
   }
 
@@ -207,9 +201,7 @@ function SourceCard({ entry, onClick }: { entry: IndexEntry; onClick: () => void
             Connected
           </span>
         ) : (
-          <span className={styles.originPill} data-origin={entry.origin}>
-            {entry.origin === 'bundled' ? 'Core' : 'Community'}
-          </span>
+          <span className={styles.originPill}>Core</span>
         )}
       </div>
       {entry.description ? (

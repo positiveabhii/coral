@@ -575,7 +575,6 @@ pub(crate) fn source_origin_label(origin: i32) -> &'static str {
     match SourceOrigin::try_from(origin) {
         Ok(SourceOrigin::Bundled) => "bundled",
         Ok(SourceOrigin::Imported) => "imported",
-        Ok(SourceOrigin::Community) => "community",
         Ok(SourceOrigin::Unspecified) | Err(_) => "unknown",
     }
 }

@@ -15,9 +15,6 @@ use crate::sources::SourceName;
 use crate::sources::catalog::{
     describe_manifest, list_bundled_sources, load_bundled_source, resolve_installed_manifest,
 };
-use crate::sources::community::{
-    ResolvedCommunitySource, list_community_summaries, resolve_community_source,
-};
 use crate::sources::model::{CandidateSource, InstalledSource, SourceOrigin};
 use crate::state::{AppStateLayout, ConfigStore};
 use crate::storage::fs;
@@ -217,29 +214,6 @@ impl SourceManager {
         list_bundled_sources(&installed)
     }
 
-    pub(crate) fn discover_community_sources(
-        &self,
-        workspace_name: &WorkspaceName,
-    ) -> Result<Vec<CandidateSource>, AppError> {
-        let installed = self
-            .config_store
-            .list_workspace_sources(workspace_name)?
-            .into_iter()
-            .map(|source| source.name)
-            .collect::<BTreeSet<_>>();
-        list_community_summaries(&installed)
-    }
-
-    pub(crate) async fn get_community_source_info(
-        &self,
-        workspace_name: &WorkspaceName,
-        source_name: &SourceName,
-    ) -> Result<ResolvedCommunitySource, AppError> {
-        let mut resolved = resolve_community_source(source_name).await?;
-        resolved.candidate.installed = self.source_exists(workspace_name, source_name)?;
-        Ok(resolved)
-    }
-
     pub(crate) fn create_bundled_source(
         &self,
         workspace_name: &WorkspaceName,
@@ -383,7 +357,7 @@ impl SourceManager {
             source: stored,
             manifest_yaml: match removed.origin {
                 SourceOrigin::Bundled => None,
-                SourceOrigin::Imported | SourceOrigin::Community => Some(std::fs::read_to_string(
+                SourceOrigin::Imported => Some(std::fs::read_to_string(
                     self.layout.manifest_file(workspace_name, source_name),
                 )?),
             },
@@ -479,9 +453,7 @@ impl SourceManager {
 
         let persisted_version = match request.origin {
             SourceOrigin::Bundled => None,
-            SourceOrigin::Imported | SourceOrigin::Community => {
-                Some(request.candidate.version.clone())
-            }
+            SourceOrigin::Imported => Some(request.candidate.version.clone()),
         };
         let stored = InstalledSource {
             name: source_name.clone(),
@@ -692,7 +664,7 @@ impl SourceManager {
         Ok(Some(SourceRollbackState {
             manifest_yaml: match source.origin {
                 SourceOrigin::Bundled => None,
-                SourceOrigin::Imported | SourceOrigin::Community => Some(std::fs::read_to_string(
+                SourceOrigin::Imported => Some(std::fs::read_to_string(
                     self.layout.manifest_file(workspace_name, source_name),
                 )?),
             },

@@ -8,15 +8,13 @@ use coral_api::v1::source_service_server::SourceService as SourceServiceApi;
 use coral_api::v1::{
     CreateBundledSourceRequest, CreateBundledSourceResponse, CreateBundledSourceWithOAuthRequest,
     CreateBundledSourceWithOAuthResponse, CredentialMetadata, DeleteSourceRequest,
-    DeleteSourceResponse, DiscoverCommunitySourcesRequest, DiscoverCommunitySourcesResponse,
-    DiscoverSourcesRequest, DiscoverSourcesResponse, GetCommunitySourceInfoRequest,
-    GetCommunitySourceInfoResponse, GetSourceInfoRequest, GetSourceInfoResponse, GetSourceRequest,
-    GetSourceResponse, ImportSourceRequest, ImportSourceResponse, ListSourcesRequest,
-    ListSourcesResponse, OAuthAuthorizationCodeCredentialMethod, OAuthCredentialAuthorization,
-    OAuthCredentialClient, OAuthCredentialClientId, OAuthCredentialClientSecret,
-    OAuthCredentialCompleted, OAuthCredentialEndpoints, OAuthCredentialInput,
-    OAuthCredentialRetrieval, OAuthCredentialScope, OAuthCredentialScopes,
-    OauthCredentialClientSecretTransport, OauthCredentialPkceMode,
+    DeleteSourceResponse, DiscoverSourcesRequest, DiscoverSourcesResponse, GetSourceInfoRequest,
+    GetSourceInfoResponse, GetSourceRequest, GetSourceResponse, ImportSourceRequest,
+    ImportSourceResponse, ListSourcesRequest, ListSourcesResponse,
+    OAuthAuthorizationCodeCredentialMethod, OAuthCredentialAuthorization, OAuthCredentialClient,
+    OAuthCredentialClientId, OAuthCredentialClientSecret, OAuthCredentialCompleted,
+    OAuthCredentialEndpoints, OAuthCredentialInput, OAuthCredentialRetrieval, OAuthCredentialScope,
+    OAuthCredentialScopes, OauthCredentialClientSecretTransport, OauthCredentialPkceMode,
     OauthCredentialRedirectUriPortMode, OauthCredentialScopeDelimiter, Source,
     SourceConfigCredentialMethod, SourceCredential, SourceCredentialMethod, SourceInfo,
     SourceInputSpec, SourceOrigin as ProtoSourceOrigin, SourceSecret, SourceSecretInput,
@@ -87,48 +85,6 @@ impl SourceServiceApi for SourceService {
                 .map(candidate_source_to_proto)
                 .collect();
             Ok(Response::new(DiscoverSourcesResponse { sources }))
-        })
-        .await
-    }
-
-    async fn discover_community_sources(
-        &self,
-        request: Request<DiscoverCommunitySourcesRequest>,
-    ) -> Result<Response<DiscoverCommunitySourcesResponse>, Status> {
-        let span = grpc_span(&request);
-        let sources = self.sources.clone();
-        instrument_grpc(span, async move {
-            let request = request.into_inner();
-            let workspace_name = workspace_name_from_proto(request.workspace.as_ref())?;
-            let sources = sources
-                .discover_community_sources(&workspace_name)
-                .map_err(app_status)?
-                .into_iter()
-                .map(candidate_source_to_proto)
-                .collect();
-            Ok(Response::new(DiscoverCommunitySourcesResponse { sources }))
-        })
-        .await
-    }
-
-    async fn get_community_source_info(
-        &self,
-        request: Request<GetCommunitySourceInfoRequest>,
-    ) -> Result<Response<GetCommunitySourceInfoResponse>, Status> {
-        let span = grpc_span(&request);
-        let sources = self.sources.clone();
-        instrument_grpc(span, async move {
-            let request = request.into_inner();
-            let workspace_name = workspace_name_from_proto(request.workspace.as_ref())?;
-            let source_name = SourceName::parse(&request.name).map_err(app_status)?;
-            let resolved = sources
-                .get_community_source_info(&workspace_name, &source_name)
-                .await
-                .map_err(app_status)?;
-            Ok(Response::new(GetCommunitySourceInfoResponse {
-                source_info: Some(candidate_source_to_proto(resolved.candidate)),
-                manifest_yaml: resolved.manifest_yaml,
-            }))
         })
         .await
     }
@@ -560,7 +516,6 @@ fn proto_source_origin(origin: SourceOrigin) -> ProtoSourceOrigin {
     match origin {
         SourceOrigin::Bundled => ProtoSourceOrigin::Bundled,
         SourceOrigin::Imported => ProtoSourceOrigin::Imported,
-        SourceOrigin::Community => ProtoSourceOrigin::Community,
     }
 }
 

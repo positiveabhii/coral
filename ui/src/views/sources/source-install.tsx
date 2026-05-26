@@ -24,9 +24,6 @@ import {
   createBundledSource,
   createBundledSourceWithOAuth,
   getBundledSourceInfo,
-  getCommunitySourceInfo,
-  importCommunitySource,
-  importCommunitySourceWithOAuth,
   type InstallInput,
   type ResolvedSourceInfo,
 } from '@/lib/sources'
@@ -44,13 +41,7 @@ function formatFieldName(key: string): string {
   return toSentenceCase(key.replace(/_/g, ' '))
 }
 
-export function SourceInstall({
-  name,
-  origin,
-}: {
-  name: string
-  origin: 'bundled' | 'community'
-}) {
+export function SourceInstall({ name }: { name: string }) {
   const { navigate } = useRouter()
   const [resolved, setResolved] = useState<ResolvedSourceInfo | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -61,14 +52,13 @@ export function SourceInstall({
 
   useEffect(() => {
     let cancelled = false
-    const fetcher = origin === 'community' ? getCommunitySourceInfo : getBundledSourceInfo
-    fetcher(name)
+    getBundledSourceInfo(name)
       .then((info) => !cancelled && setResolved(info))
       .catch((e) => !cancelled && setLoadError(e instanceof Error ? e.message : String(e)))
     return () => {
       cancelled = true
     }
-  }, [name, origin])
+  }, [name])
 
   const inputs: SourceInputSpec[] = resolved?.info.inputs ?? []
   const icon = providerIcon(name)
@@ -147,26 +137,10 @@ export function SourceInstall({
         },
       }
 
-      if (origin === 'bundled') {
-        if (retrievalProtos.length === 0) {
-          await createBundledSource(name, bindings)
-        } else {
-          await createBundledSourceWithOAuth(name, bindings, retrievalProtos, callbacks)
-        }
+      if (retrievalProtos.length === 0) {
+        await createBundledSource(name, bindings)
       } else {
-        if (!resolved.manifestYaml) {
-          throw new Error('community install requires a resolved manifest YAML')
-        }
-        if (retrievalProtos.length === 0) {
-          await importCommunitySource(resolved.manifestYaml, bindings)
-        } else {
-          await importCommunitySourceWithOAuth(
-            resolved.manifestYaml,
-            bindings,
-            retrievalProtos,
-            callbacks,
-          )
-        }
+        await createBundledSourceWithOAuth(name, bindings, retrievalProtos, callbacks)
       }
 
       showToast('success', `Installed ${name}`)
@@ -193,13 +167,13 @@ export function SourceInstall({
               <Typography.HeadingMedium as="h1" className={styles.headerTitle}>
                 {name}
               </Typography.HeadingMedium>
-              <span className={styles.headerPill}>
-                {origin === 'bundled' ? 'Core' : 'Community'}
-              </span>
+              <span className={styles.headerPill}>Core</span>
             </div>
             {resolved?.info.description ? (
               <Typography.Body variant="secondary">{resolved.info.description}</Typography.Body>
-            ) : null}
+            ) : (
+              <Typography.Body variant="secondary">Officially supported by Coral.</Typography.Body>
+            )}
           </div>
         </div>
 

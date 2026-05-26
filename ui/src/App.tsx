@@ -22,7 +22,7 @@ export function App() {
 
 function renderRoute(route: ReturnType<typeof useRouter>['location']['route']) {
   if (route.kind === 'source-install') {
-    return <SourceInstall name={route.name} origin={route.origin} />
+    return <SourceInstall name={route.name} />
   }
   if (route.kind === 'source-detail') {
     return <SourceDetail name={route.name} />

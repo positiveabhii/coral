@@ -4,17 +4,12 @@ import {
   CreateBundledSourceRequestSchema,
   CreateBundledSourceWithOAuthRequestSchema,
   DeleteSourceRequestSchema,
-  DiscoverCommunitySourcesRequestSchema,
   DiscoverSourcesRequestSchema,
-  GetCommunitySourceInfoRequestSchema,
   GetSourceInfoRequestSchema,
   GetSourceRequestSchema,
-  ImportSourceRequestSchema,
   ListSourcesRequestSchema,
   SourceOrigin,
   ValidateSourceRequestSchema,
-  type CreateBundledSourceWithOAuthResponse,
-  type ImportSourceResponse,
   type OAuthCredentialRetrieval,
   type Source,
   type SourceInfo,
@@ -22,7 +17,7 @@ import {
 
 import { sourceClient, WORKSPACE } from './coral-clients'
 
-export type SourceOriginLabel = 'bundled' | 'imported' | 'community' | 'unknown'
+export type SourceOriginLabel = 'bundled' | 'imported' | 'unknown'
 
 export interface InstalledSource {
   name: string
@@ -35,14 +30,11 @@ export interface CatalogEntry {
   description: string
   version: string
   installed: boolean
-  origin: 'bundled' | 'community'
-  hint?: string
+  origin: 'bundled'
 }
 
 export interface ResolvedSourceInfo {
   info: SourceInfo
-  /** Raw manifest YAML for community sources; null for bundled. */
-  manifestYaml: string | null
 }
 
 export interface InstallInput {
@@ -54,7 +46,6 @@ export interface InstallInput {
 function originLabel(origin: SourceOrigin): SourceOriginLabel {
   if (origin === SourceOrigin.BUNDLED) return 'bundled'
   if (origin === SourceOrigin.IMPORTED) return 'imported'
-  if (origin === SourceOrigin.COMMUNITY) return 'community'
   return 'unknown'
 }
 
@@ -69,13 +60,13 @@ export async function listInstalledSources(): Promise<InstalledSource[]> {
   return resp.sources.map(toInstalled)
 }
 
-function toCatalogEntry(s: SourceInfo, origin: 'bundled' | 'community'): CatalogEntry {
+function toCatalogEntry(s: SourceInfo): CatalogEntry {
   return {
     name: s.name,
     description: s.description,
     version: s.version,
     installed: s.installed,
-    origin,
+    origin: 'bundled',
   }
 }
 
@@ -83,14 +74,7 @@ export async function discoverBundled(): Promise<CatalogEntry[]> {
   const resp = await sourceClient.discoverSources(
     create(DiscoverSourcesRequestSchema, { workspace: WORKSPACE }),
   )
-  return resp.sources.map((s) => toCatalogEntry(s, 'bundled'))
-}
-
-export async function discoverCommunity(): Promise<CatalogEntry[]> {
-  const resp = await sourceClient.discoverCommunitySources(
-    create(DiscoverCommunitySourcesRequestSchema, { workspace: WORKSPACE }),
-  )
-  return resp.sources.map((s) => toCatalogEntry(s, 'community'))
+  return resp.sources.map(toCatalogEntry)
 }
 
 export async function getBundledSourceInfo(name: string): Promise<ResolvedSourceInfo> {
@@ -100,17 +84,7 @@ export async function getBundledSourceInfo(name: string): Promise<ResolvedSource
   if (!resp.sourceInfo) {
     throw new Error(`source '${name}' has no info`)
   }
-  return { info: resp.sourceInfo, manifestYaml: null }
-}
-
-export async function getCommunitySourceInfo(name: string): Promise<ResolvedSourceInfo> {
-  const resp = await sourceClient.getCommunitySourceInfo(
-    create(GetCommunitySourceInfoRequestSchema, { workspace: WORKSPACE, name }),
-  )
-  if (!resp.sourceInfo) {
-    throw new Error(`community source '${name}' has no info`)
-  }
-  return { info: resp.sourceInfo, manifestYaml: resp.manifestYaml }
+  return { info: resp.sourceInfo }
 }
 
 export async function getInstalledSource(name: string): Promise<Source> {
@@ -156,26 +130,6 @@ export async function createBundledSource(
   return resp.source
 }
 
-/** Install a community source by handing the resolved YAML back to ImportSource. */
-export async function importCommunitySource(
-  manifestYaml: string,
-  inputs: InstallInput[],
-): Promise<Source> {
-  const { variables, secrets } = splitBindings(inputs)
-  const stream = sourceClient.importSource(
-    create(ImportSourceRequestSchema, {
-      workspace: WORKSPACE,
-      manifestYaml,
-      variables,
-      secrets,
-    }),
-  )
-  for await (const response of stream) {
-    if (response.event.case === 'source') return response.event.value
-  }
-  throw new Error(`importSource stream ended without a source event`)
-}
-
 export interface OAuthFlowCallbacks {
   onAuthorization?: (event: { inputKey: string; authorizationUrl: string; expiresInSeconds: bigint }) => void
   onCompleted?: (event: { inputKey: string; metadata: Map<string, string> }) => void
@@ -198,33 +152,6 @@ export async function createBundledSourceWithOAuth(
       oauthCredentialRetrievals: oauthRetrievals,
     }),
   )
-  return handleOAuthStream(stream, callbacks)
-}
-
-/** Run the community-source OAuth install stream (via ImportSource). */
-export async function importCommunitySourceWithOAuth(
-  manifestYaml: string,
-  inputs: InstallInput[],
-  oauthRetrievals: OAuthCredentialRetrieval[],
-  callbacks: OAuthFlowCallbacks = {},
-): Promise<Source> {
-  const { variables, secrets } = splitBindings(inputs)
-  const stream = sourceClient.importSource(
-    create(ImportSourceRequestSchema, {
-      workspace: WORKSPACE,
-      manifestYaml,
-      variables,
-      secrets,
-      oauthCredentialRetrievals: oauthRetrievals,
-    }),
-  )
-  return handleOAuthStream(stream, callbacks)
-}
-
-async function handleOAuthStream(
-  stream: AsyncIterable<CreateBundledSourceWithOAuthResponse | ImportSourceResponse>,
-  callbacks: OAuthFlowCallbacks,
-): Promise<Source> {
   for await (const response of stream) {
     const event = response.event
     if (event.case === 'source') return event.value

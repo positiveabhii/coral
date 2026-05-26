@@ -3,7 +3,7 @@ import { useCallback, useSyncExternalStore } from 'react'
 export type Route =
   | { kind: 'traces' }
   | { kind: 'sources' }
-  | { kind: 'source-install'; name: string; origin: 'bundled' | 'community' }
+  | { kind: 'source-install'; name: string }
   | { kind: 'source-detail'; name: string }
 
 export interface ParsedLocation {
@@ -12,20 +12,11 @@ export interface ParsedLocation {
 
 function parseHash(): ParsedLocation {
   const raw = window.location.hash.replace(/^#\/?/, '')
-  const [pathStr, queryStr = ''] = raw.split('?')
-  const segments = pathStr.split('/').filter(Boolean)
-  const query = new URLSearchParams(queryStr)
+  const segments = raw.split('?')[0].split('/').filter(Boolean)
 
   if (segments[0] === 'sources') {
     if (segments[1] === 'install' && segments[2]) {
-      const origin = query.get('origin') === 'community' ? 'community' : 'bundled'
-      return {
-        route: {
-          kind: 'source-install',
-          name: decodeURIComponent(segments[2]),
-          origin,
-        },
-      }
+      return { route: { kind: 'source-install', name: decodeURIComponent(segments[2]) } }
     }
     if (segments[1] === 'detail' && segments[2]) {
       return { route: { kind: 'source-detail', name: decodeURIComponent(segments[2]) } }
@@ -44,10 +35,7 @@ function serialise(parsed: ParsedLocation): string {
   const r = parsed.route
   if (r.kind === 'traces') return '#/traces'
   if (r.kind === 'sources') return '#/sources'
-  if (r.kind === 'source-install') {
-    const base = `#/sources/install/${encodeURIComponent(r.name)}`
-    return r.origin === 'community' ? `${base}?origin=community` : base
-  }
+  if (r.kind === 'source-install') return `#/sources/install/${encodeURIComponent(r.name)}`
   return `#/sources/detail/${encodeURIComponent(r.name)}`
 }
 

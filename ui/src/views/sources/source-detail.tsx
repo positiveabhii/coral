@@ -272,13 +272,11 @@ function originLabel(origin: number): SourceOriginLabel {
   // Mirrors the conversion in lib/sources but keeps this component self-contained.
   if (origin === 1) return 'bundled'
   if (origin === 2) return 'imported'
-  if (origin === 3) return 'community'
   return 'unknown'
 }
 
 function originBadgeLabel(origin: SourceOriginLabel): string {
   if (origin === 'bundled') return 'Core'
-  if (origin === 'community') return 'Community'
   if (origin === 'imported') return 'Imported'
   return '—'
 }
