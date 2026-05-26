@@ -223,7 +223,8 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             "list_tables",
             "search_tables",
             "describe_table",
-            "list_columns"
+            "list_columns",
+            "search_values"
         ]
     );
     assert!(
@@ -279,6 +280,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     let list_tables_tool = tool_by_name(&updated_tools, "list_tables");
     let search_tables_tool = tool_by_name(&updated_tools, "search_tables");
     let list_columns_tool = tool_by_name(&updated_tools, "list_columns");
+    let search_values_tool = tool_by_name(&updated_tools, "search_values");
     assert!(
         updated_tools[0]
             .description
@@ -680,6 +682,16 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         .expect("structured content");
     assert_eq!(missing_columns_with_bad_pattern["found"], false);
     assert_matches_output_schema(list_columns_tool, &missing_columns_with_bad_pattern);
+    assert_matches_output_schema(
+        search_values_tool,
+        &json!({
+            "matches": [],
+            "total": 0,
+            "limit": 20,
+            "offset": 0,
+            "has_more": false
+        }),
+    );
 
     client
         .call_tool(
@@ -720,10 +732,11 @@ async fn mcp_feedback_tool_persists_blocked_agent_report() {
             "search_tables",
             "describe_table",
             "list_columns",
+            "search_values",
             "feedback"
         ]
     );
-    let feedback_annotations = tools[5].annotations.as_ref().expect("feedback annotations");
+    let feedback_annotations = tools[6].annotations.as_ref().expect("feedback annotations");
     assert_eq!(feedback_annotations.read_only_hint, Some(false));
     assert_eq!(feedback_annotations.destructive_hint, Some(false));
     assert_eq!(feedback_annotations.idempotent_hint, Some(false));

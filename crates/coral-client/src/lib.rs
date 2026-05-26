@@ -33,7 +33,7 @@ use serde_json::Value;
 
 pub use client::{
     AppClient, CatalogClient, DEFAULT_WORKSPACE_ID, FeedbackClient, QueryClient, SourceClient,
-    default_workspace,
+    ValueClient, default_workspace,
 };
 pub use error::{ClientError, QueryResultError};
 pub use status_error::{

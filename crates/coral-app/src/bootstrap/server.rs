@@ -19,6 +19,7 @@ use coral_api::v1::feedback_service_server::FeedbackServiceServer;
 use coral_api::v1::query_service_server::QueryServiceServer;
 use coral_api::v1::source_service_server::SourceServiceServer;
 use coral_api::v1::trace_service_server::TraceServiceServer;
+use coral_api::v1::value_service_server::ValueServiceServer;
 use coral_api::{
     CATALOG_RESPONSE_MAX_MESSAGE_SIZE, HTTP2_MAX_HEADER_LIST_SIZE, QUERY_RESPONSE_MAX_MESSAGE_SIZE,
     TRACE_RESPONSE_MAX_MESSAGE_SIZE,
@@ -51,6 +52,7 @@ use crate::state::{AppStateLayout, ConfigStore, SecretStore};
 use crate::telemetry::TelemetryConfig;
 use crate::telemetry::service::TraceService;
 use crate::transport::GrpcMethodAnnotatedService;
+use crate::values::{ValueMemoryManager, ValueMemoryRecorder, ValueService};
 
 /// A static asset (e.g., a built SPA file) served on the same port as
 /// gRPC-Web.
@@ -265,12 +267,15 @@ impl ServerBuilder {
             SourceManager::new(config_store.clone(), secret_store.clone(), layout.clone());
         let feedback_manager =
             FeedbackManager::with_publisher(layout.clone(), self.config.feedback_publisher);
+        let value_memory_recorder = ValueMemoryRecorder::new(layout.clone());
+        let value_memory_manager = ValueMemoryManager::new(layout.clone());
         let query_manager = QueryManager::new(
             config_store,
             secret_store,
             env.query_runtime_context(),
             layout,
             self.config.engine_extensions_providers,
+            value_memory_recorder,
         );
         let trace_service = if telemetry_config.trace_history.enabled {
             installed_trace_store.map(|store| TraceService::new(store.dir, store.retention))
@@ -281,6 +286,7 @@ impl ServerBuilder {
             source_manager,
             query_manager,
             feedback_manager,
+            value_memory_manager,
             trace_service,
             self.config.mode,
         )
@@ -362,6 +368,7 @@ async fn start_server(
     source_manager: SourceManager,
     query_manager: QueryManager,
     feedback_manager: FeedbackManager,
+    value_memory_manager: ValueMemoryManager,
     trace_service: Option<TraceService>,
     mode: ServerMode,
 ) -> Result<RunningServer, AppError> {
@@ -369,6 +376,7 @@ async fn start_server(
     let catalog_service = CatalogService::new(query_manager.clone());
     let query_service = QueryService::new(query_manager);
     let feedback_service = FeedbackService::new(feedback_manager);
+    let value_service = ValueService::new(value_memory_manager);
     let mut routes = Routes::default()
         .add_service(GrpcMethodAnnotatedService::new(SourceServiceServer::new(
             source_service,
@@ -379,6 +387,9 @@ async fn start_server(
         ))
         .add_service(GrpcMethodAnnotatedService::new(FeedbackServiceServer::new(
             feedback_service,
+        )))
+        .add_service(GrpcMethodAnnotatedService::new(ValueServiceServer::new(
+            value_service,
         )))
         .add_service(GrpcMethodAnnotatedService::new(
             QueryServiceServer::new(query_service)
@@ -630,6 +641,7 @@ mod tests {
     use crate::state::{AppStateLayout, ConfigStore, SecretStore};
     use crate::telemetry::service::TraceService;
     use crate::transport::workspace_to_proto;
+    use crate::values::{ValueMemoryManager, ValueMemoryRecorder};
     use crate::workspaces::WorkspaceName;
     use crate::{AwsEngineExtensionsProvider, NoopEngineExtensionsProvider};
 
@@ -691,12 +703,15 @@ enabled = false
         let source_manager =
             SourceManager::new(config_store.clone(), secret_store.clone(), layout.clone());
         let feedback_manager = FeedbackManager::new(layout.clone());
+        let value_memory_recorder = ValueMemoryRecorder::new(layout.clone());
+        let value_memory_manager = ValueMemoryManager::new(layout.clone());
         let query_manager = QueryManager::new(
             config_store,
             secret_store,
             QueryRuntimeContext::default(),
             layout,
             vec![Arc::new(NoopEngineExtensionsProvider)],
+            value_memory_recorder,
         );
         let trace_service =
             TraceService::new(temp.path().join("trace-store"), Duration::from_mins(1));
@@ -704,6 +719,7 @@ enabled = false
             source_manager,
             query_manager,
             feedback_manager,
+            value_memory_manager,
             Some(trace_service),
             ServerMode::NativeGrpc,
         )
@@ -970,6 +986,8 @@ enabled = false
             layout.clone(),
         );
         let feedback_manager = FeedbackManager::new(layout.clone());
+        let value_memory_recorder = ValueMemoryRecorder::new(layout.clone());
+        let value_memory_manager = ValueMemoryManager::new(layout.clone());
         let query_manager = QueryManager::new(
             ConfigStore::new(layout.clone()),
             SecretStore::new(layout.clone()),
@@ -978,11 +996,13 @@ enabled = false
             },
             layout,
             vec![Arc::new(NoopEngineExtensionsProvider)],
+            value_memory_recorder,
         );
         let running = start_server(
             source_manager,
             query_manager,
             feedback_manager,
+            value_memory_manager,
             None,
             ServerMode::NativeGrpc,
         )
@@ -1055,17 +1075,21 @@ tables:
             layout.clone(),
         );
         let feedback_manager = FeedbackManager::new(layout.clone());
+        let value_memory_recorder = ValueMemoryRecorder::new(layout.clone());
+        let value_memory_manager = ValueMemoryManager::new(layout.clone());
         let query_manager = QueryManager::new(
             ConfigStore::new(layout.clone()),
             SecretStore::new(layout.clone()),
             QueryRuntimeContext::default(),
             layout,
             vec![Arc::new(NoopEngineExtensionsProvider)],
+            value_memory_recorder,
         );
         let running = start_server(
             source_manager,
             query_manager,
             feedback_manager,
+            value_memory_manager,
             None,
             ServerMode::NativeGrpc,
         )
@@ -1150,17 +1174,21 @@ tables:
             layout.clone(),
         );
         let feedback_manager = FeedbackManager::new(layout.clone());
+        let value_memory_recorder = ValueMemoryRecorder::new(layout.clone());
+        let value_memory_manager = ValueMemoryManager::new(layout.clone());
         let query_manager = QueryManager::new(
             ConfigStore::new(layout.clone()),
             SecretStore::new(layout.clone()),
             QueryRuntimeContext::default(),
             layout,
             vec![Arc::new(NoopEngineExtensionsProvider)],
+            value_memory_recorder,
         );
         let running = start_server(
             source_manager,
             query_manager,
             feedback_manager,
+            value_memory_manager,
             None,
             ServerMode::NativeGrpc,
         )

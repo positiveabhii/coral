@@ -3,11 +3,12 @@
 use coral_api::v1::{
     DescribeTableRequest, DescribeTableResponse, ExecuteSqlRequest, ListColumnsRequest,
     ListSourcesRequest, ListTablesRequest, ListTablesResponse, PaginationRequest,
-    SearchTablesRequest, Source, SubmitFeedbackRequest, TableSummary as ProtoTableSummary,
+    SearchTablesRequest, SearchValuesRequest, Source, SubmitFeedbackRequest,
+    TableSummary as ProtoTableSummary,
 };
 use coral_client::{
-    AppClient, CatalogClient, FeedbackClient, QueryClient, SourceClient, batches_to_json_rows,
-    decode_execute_sql_response, default_workspace,
+    AppClient, CatalogClient, FeedbackClient, QueryClient, SourceClient, ValueClient,
+    batches_to_json_rows, decode_execute_sql_response, default_workspace,
 };
 use rmcp::{
     ErrorData, ServerHandler,
@@ -28,9 +29,9 @@ use crate::{
         feedback_tool, guide_resource, guide_resource_content, initial_instructions,
         internal_status, list_columns_arguments, list_columns_tool, list_columns_value,
         list_tables_arguments, list_tables_tool, list_tables_value, required_string_argument,
-        search_tables_arguments, search_tables_tool, search_tables_value, sql_tool,
-        status_to_error_data, tables_resource, tables_resource_content, tool_error_from_status,
-        tool_error_result,
+        search_tables_arguments, search_tables_tool, search_tables_value, search_values_arguments,
+        search_values_tool, sql_tool, status_to_error_data, tables_resource,
+        tables_resource_content, tool_error_from_status, tool_error_result, value_search_value,
     },
     telemetry,
 };
@@ -68,6 +69,7 @@ pub(crate) struct CoralMcpServer {
     catalog: CatalogClient,
     query: QueryClient,
     feedback: FeedbackClient,
+    value: ValueClient,
     options: McpOptions,
 }
 
@@ -78,6 +80,7 @@ impl CoralMcpServer {
             catalog: app.catalog_client(),
             query: app.query_client(),
             feedback: app.feedback_client(),
+            value: app.value_client(),
             options,
         }
     }
@@ -254,6 +257,38 @@ impl CoralMcpServer {
         }
     }
 
+    async fn search_values_tool_result(
+        &self,
+        request_arguments: Option<&Map<String, Value>>,
+    ) -> Result<ToolCallOutcome, ErrorData> {
+        let arguments = search_values_arguments(request_arguments)?;
+        let mut value_client = self.value.clone();
+        match value_client
+            .search_values(Request::new(SearchValuesRequest {
+                workspace: Some(default_workspace()),
+                term: arguments.term,
+                schema_name: arguments.schema.unwrap_or_default(),
+                table_name: arguments.table.unwrap_or_default(),
+                column_path: arguments.column.unwrap_or_default(),
+                pagination: Some(PaginationRequest {
+                    limit: arguments.pagination.limit,
+                    offset: arguments.pagination.offset,
+                }),
+            }))
+            .await
+            .map(|response| value_search_value(&response.into_inner()))
+        {
+            Ok(value) => Ok(ToolCallOutcome::Success(value)),
+            Err(status) if status.code() == tonic::Code::InvalidArgument => {
+                Err(status_to_error_data(&status))
+            }
+            Err(status) => Ok(ToolCallOutcome::ToolError {
+                operation: "Value search",
+                status,
+            }),
+        }
+    }
+
     async fn describe_table_tool_result(
         &self,
         request_arguments: Option<&Map<String, Value>>,
@@ -305,6 +340,10 @@ impl CoralMcpServer {
             }
             "search_tables" => {
                 self.search_tables_tool_result(request.arguments.as_ref())
+                    .await
+            }
+            "search_values" => {
+                self.search_values_tool_result(request.arguments.as_ref())
                     .await
             }
             "describe_table" => {
@@ -415,6 +454,7 @@ impl ServerHandler for CoralMcpServer {
                 search_tables_tool(visible_table_count),
                 describe_table_tool(),
                 list_columns_tool(),
+                search_values_tool(),
             ];
             if self.options.feedback_enabled {
                 tools.push(feedback_tool());

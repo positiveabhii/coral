@@ -43,6 +43,7 @@ mod state;
 mod storage;
 pub mod telemetry;
 mod transport;
+mod values;
 mod workspaces;
 
 pub use bootstrap::{

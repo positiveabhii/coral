@@ -19,5 +19,7 @@ pub(crate) use resources::{
 pub(crate) use tools::{
     build_tool_result, describe_table_arguments, describe_table_tool, feedback_tool,
     list_columns_arguments, list_columns_tool, list_tables_arguments, list_tables_tool,
-    required_string_argument, search_tables_arguments, search_tables_tool, sql_tool,
+    required_string_argument, search_tables_arguments, search_tables_tool, search_values_arguments,
+    search_values_tool, sql_tool,
 };
+pub(crate) use values::value_search_value;

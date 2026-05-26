@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package coral.v1;
+
+import "coral/v1/catalog.proto";
+import "coral/v1/resources.proto";
+
+// Searches values observed in previous successful query results.
+message SearchValuesRequest {
+  // Workspace whose observed values should be searched.
+  Workspace workspace = 1;
+  // Search term matched against observed value text.
+  string term = 2;
+  // Optional exact schema/source name.
+  string schema_name = 3;
+  // Optional exact table name.
+  string table_name = 4;
+  // Optional exact observed column path.
+  string column_path = 5;
+  // Optional page request. Missing or zero limit applies the search default.
+  PaginationRequest pagination = 6;
+}
+
+// One fielded value candidate observed in prior query results.
+message ValueSearchResult {
+  // Workspace that scopes this candidate.
+  Workspace workspace = 1;
+  // Source schema inferred from the query surface.
+  string schema_name = 2;
+  // Table or table function inferred from the query surface.
+  string table_name = 3;
+  // Result field path where the value was observed.
+  string column_path = 4;
+  // Display value capped for transport and agent context.
+  string value = 5;
+  // Whether `value` is a preview rather than the complete raw scalar.
+  bool value_truncated = 6;
+  // Number of result rows where this field/value pair has appeared.
+  uint64 seen_count = 7;
+  // RFC3339 timestamp when this field/value pair was first observed.
+  string first_seen_at = 8;
+  // RFC3339 timestamp when this field/value pair was most recently observed.
+  string last_seen_at = 9;
+  // Number of matching value candidates for this observed field.
+  uint32 field_total_count = 10;
+}
+
+// Returns observed value candidates for one search.
+message SearchValuesResponse {
+  // Matching value candidates for the requested page.
+  repeated ValueSearchResult values = 1;
+  // Page metadata for the value search.
+  PaginationResponse pagination = 2;
+}
+
+// Observed value discovery APIs.
+service ValueService {
+  // Searches values learned from prior successful query results.
+  rpc SearchValues(SearchValuesRequest) returns (SearchValuesResponse);
+}

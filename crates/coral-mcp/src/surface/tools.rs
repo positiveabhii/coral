@@ -36,6 +36,14 @@ pub(crate) struct ListColumnsArguments {
     pub(crate) pagination: Pagination,
 }
 
+pub(crate) struct SearchValuesArguments {
+    pub(crate) term: String,
+    pub(crate) schema: Option<String>,
+    pub(crate) table: Option<String>,
+    pub(crate) column: Option<String>,
+    pub(crate) pagination: Pagination,
+}
+
 pub(crate) fn sql_tool(sources: &[Source], visible_table_count: usize) -> Tool {
     Tool::new(
         "sql",
@@ -228,6 +236,57 @@ pub(crate) fn list_columns_tool() -> Tool {
     )
 }
 
+pub(crate) fn search_values_tool() -> Tool {
+    Tool::new(
+        "search_values",
+        "Search fielded values learned from prior successful SQL results.",
+        json_object_schema(&json!({
+            "type": "object",
+            "required": ["term"],
+            "properties": {
+                "term": {
+                    "type": "string",
+                    "description": "Value text to search for, such as a service, pod, repo, channel, status, or error phrase."
+                },
+                "schema": {
+                    "type": "string",
+                    "description": "Optional exact schema/source name to search."
+                },
+                "table": {
+                    "type": "string",
+                    "description": "Optional exact table or table-function name to search."
+                },
+                "column": {
+                    "type": "string",
+                    "description": "Optional exact observed result field path to search."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum value candidates to return, from 1 to 100. Defaults to 20.",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "default": 20
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of matching value candidates to skip. Defaults to 0.",
+                    "minimum": 0,
+                    "maximum": u32::MAX,
+                    "default": 0
+                }
+            }
+        })),
+    )
+    .with_raw_output_schema(search_values_output_schema())
+    .with_annotations(
+        ToolAnnotations::with_title("Search Values")
+            .read_only(true)
+            .destructive(false)
+            .idempotent(true)
+            .open_world(false),
+    )
+}
+
 pub(crate) fn feedback_tool() -> Tool {
     Tool::new(
         "feedback",
@@ -319,6 +378,18 @@ pub(crate) fn list_columns_arguments(
     })
 }
 
+pub(crate) fn search_values_arguments(
+    arguments: Option<&Map<String, Value>>,
+) -> Result<SearchValuesArguments, ErrorData> {
+    Ok(SearchValuesArguments {
+        term: required_string_argument(arguments, "term")?,
+        schema: optional_string_argument(arguments, "schema")?,
+        table: optional_string_argument(arguments, "table")?,
+        column: optional_string_argument(arguments, "column")?,
+        pagination: parse_pagination_with_limits(arguments, 20, 100)?,
+    })
+}
+
 pub(crate) fn build_tool_result(value: Value) -> Result<CallToolResult, ErrorData> {
     let pretty = serde_json::to_string_pretty(&value)
         .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
@@ -350,6 +421,60 @@ fn search_tables_description(visible_table_count: usize) -> String {
     format!(
         "Search queryable table metadata with a Rust regex. {visible_table_count} table(s) are currently visible."
     )
+}
+
+fn search_values_output_schema() -> Arc<Map<String, Value>> {
+    json_object_schema(&json!({
+        "type": "object",
+        "required": ["matches", "total", "limit", "offset", "has_more"],
+        "additionalProperties": false,
+        "properties": {
+            "matches": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["field", "values", "total"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "field": {
+                            "type": "string",
+                            "description": "Observed field path, formatted as schema.table.column_path."
+                        },
+                        "values": {
+                            "type": "array",
+                            "description": "Matching values from the current page for this field.",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        "total": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Number of matching values for this field before pagination."
+                        }
+                    }
+                }
+            },
+            "total": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Number of matching values across all fields before pagination."
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0
+            },
+            "has_more": { "type": "boolean" },
+            "next_offset": {
+                "type": "integer",
+                "minimum": 0
+            }
+        }
+    }))
 }
 
 fn list_tables_output_schema() -> Arc<Map<String, Value>> {

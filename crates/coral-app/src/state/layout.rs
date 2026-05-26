@@ -82,6 +82,15 @@ impl AppStateLayout {
         self.feedback_dir(workspace_name).join("reports.jsonl")
     }
 
+    pub(crate) fn value_memory_dir(&self, workspace_name: &WorkspaceName) -> PathBuf {
+        self.workspace_dir(workspace_name).join("values")
+    }
+
+    pub(crate) fn value_memory_file(&self, workspace_name: &WorkspaceName) -> PathBuf {
+        self.value_memory_dir(workspace_name)
+            .join("value-memory.sqlite")
+    }
+
     pub(crate) fn source_dir(
         &self,
         workspace_name: &WorkspaceName,
@@ -142,6 +151,10 @@ mod tests {
         assert_eq!(
             layout.local_trace_store_dir(),
             std::path::Path::new("/tmp/coral-config/telemetry/traces")
+        );
+        assert_eq!(
+            layout.value_memory_file(&workspace_name),
+            std::path::Path::new("/tmp/coral-config/workspaces/default/values/value-memory.sqlite")
         );
     }
 }

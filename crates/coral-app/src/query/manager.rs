@@ -20,6 +20,7 @@ use crate::sources::SourceName;
 use crate::sources::catalog::resolve_installed_manifest;
 use crate::sources::model::InstalledSource;
 use crate::state::{AppStateLayout, ConfigStore, SecretStore};
+use crate::values::ValueMemoryRecorder;
 use crate::workspaces::WorkspaceName;
 
 #[derive(Debug)]
@@ -40,6 +41,7 @@ pub(crate) struct QueryManager {
     runtime_context: QueryRuntimeContext,
     layout: AppStateLayout,
     engine_extensions_providers: Vec<Arc<dyn EngineExtensionsProvider>>,
+    value_memory_recorder: ValueMemoryRecorder,
 }
 
 impl QueryManager {
@@ -49,6 +51,7 @@ impl QueryManager {
         runtime_context: QueryRuntimeContext,
         layout: AppStateLayout,
         engine_extensions_providers: Vec<Arc<dyn EngineExtensionsProvider>>,
+        value_memory_recorder: ValueMemoryRecorder,
     ) -> Self {
         Self {
             config_store,
@@ -56,6 +59,7 @@ impl QueryManager {
             runtime_context,
             layout,
             engine_extensions_providers,
+            value_memory_recorder,
         }
     }
 
@@ -79,7 +83,7 @@ impl QueryManager {
         workspace_name: &WorkspaceName,
         sql: &str,
     ) -> Result<QueryExecution, QueryManagerError> {
-        run_query_operation(
+        let execution = run_query_operation(
             QueryOperation::ExecuteSql,
             workspace_name,
             sql,
@@ -94,7 +98,17 @@ impl QueryManager {
             },
             |execution| Some(u64::try_from(execution.row_count()).unwrap_or(u64::MAX)),
         )
-        .await
+        .await?;
+        if let Err(error) =
+            self.value_memory_recorder
+                .record_result(workspace_name, sql, execution.batches())
+        {
+            tracing::warn!(
+                detail = %error,
+                "query result was returned but value memory indexing was not queued"
+            );
+        }
+        Ok(execution)
     }
 
     pub(crate) async fn explain_sql(

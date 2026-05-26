@@ -26,9 +26,10 @@ Use this as the Coral entrypoint for external context. Query Coral before answer
 2. Discover tables with `list_tables`; page large catalogs and narrow by schema when useful.
 3. Read `list_tables`, `coral://guide`, or `coral://tables` for `sql_reference`, `required_filters`, and examples.
 4. Inspect `coral.columns` for candidate columns, required filters, virtual columns, and descriptions.
-5. Inspect `coral.inputs` when source configuration affects the answer.
-6. Query with `sql`: select useful columns, include required filters, and add `LIMIT` unless complete output is requested.
-7. Summarize evidence, gaps, and next action. If editing code, use the Coral result to guide changes.
+5. Use `search_values` when the user gives a private clue, such as a service, pod, repo, channel, status, or error phrase, and the right field is not obvious.
+6. Inspect `coral.inputs` when source configuration affects the answer.
+7. Query with `sql`: select useful columns, include required filters, and add `LIMIT` unless complete output is requested.
+8. Summarize evidence, gaps, and next action. If editing code, use the Coral result to guide changes.
 
 ## Query Rules
 

@@ -1,4 +1,4 @@
-use coral_api::v1::{PaginationResponse, Table, TableSummary};
+use coral_api::v1::{PaginationResponse, SearchValuesResponse, Table, TableSummary};
 use serde_json::{Map, Value, json};
 
 pub(crate) fn queryable_table_summary_value(table: &TableSummary) -> Value {
@@ -70,6 +70,56 @@ pub(crate) fn insert_pagination_fields(
     }
 }
 
+pub(crate) fn value_search_value(response: &SearchValuesResponse) -> Value {
+    let pagination = response.pagination.unwrap_or_default();
+    let matches = value_search_matches(&response.values);
+    paged_collection_value("matches", matches, &pagination)
+}
+
+struct ValueMatch {
+    field: String,
+    values: Vec<String>,
+    total: u32,
+}
+
+fn value_search_matches(values: &[coral_api::v1::ValueSearchResult]) -> Vec<Value> {
+    let mut matches = Vec::<ValueMatch>::new();
+    for value in values {
+        let field = observed_value_field(value);
+        let Some(existing) = matches
+            .iter_mut()
+            .find(|candidate| candidate.field == field)
+        else {
+            matches.push(ValueMatch {
+                field,
+                values: vec![value.value.clone()],
+                total: value.field_total_count.max(1),
+            });
+            continue;
+        };
+        existing.values.push(value.value.clone());
+        existing.total = existing.total.max(value.field_total_count);
+    }
+
+    matches.into_iter().map(value_match_value).collect()
+}
+
+fn value_match_value(candidate: ValueMatch) -> Value {
+    let page_count = u32::try_from(candidate.values.len()).unwrap_or(u32::MAX);
+    json!({
+        "field": candidate.field,
+        "values": candidate.values,
+        "total": candidate.total.max(page_count),
+    })
+}
+
+fn observed_value_field(value: &coral_api::v1::ValueSearchResult) -> String {
+    format!(
+        "{}.{}.{}",
+        value.schema_name, value.table_name, value.column_path
+    )
+}
+
 pub(crate) fn format_schema_table_equivalent(schema_name: &str, table_name: &str) -> String {
     format!(
         "{}.{}",
@@ -95,4 +145,109 @@ fn identifier_needs_quotes(identifier: &str) -> bool {
         return true;
     }
     !chars.all(|char| char.is_ascii_lowercase() || char.is_ascii_digit() || char == '_')
+}
+
+#[cfg(test)]
+mod tests {
+    use coral_api::v1::{PaginationResponse, SearchValuesResponse, ValueSearchResult};
+    use serde_json::json;
+
+    use super::value_search_value;
+
+    #[test]
+    fn value_search_value_groups_repeated_fields() {
+        let response = SearchValuesResponse {
+            values: vec![
+                value_result("slack", "channels", "name", "coral", 13),
+                value_result("slack", "channels", "name", "coral-auth", 13),
+                value_result("slack", "channels", "name", "coral-benchmarks", 13),
+            ],
+            pagination: Some(PaginationResponse {
+                total_count: 13,
+                limit: 10,
+                offset: 0,
+                has_more: true,
+                next_offset: 10,
+            }),
+        };
+
+        assert_eq!(
+            value_search_value(&response),
+            json!({
+                "matches": [
+                    {
+                        "field": "slack.channels.name",
+                        "values": ["coral", "coral-auth", "coral-benchmarks"],
+                        "total": 13
+                    }
+                ],
+                "total": 13,
+                "limit": 10,
+                "offset": 0,
+                "has_more": true,
+                "next_offset": 10
+            })
+        );
+    }
+
+    #[test]
+    fn value_search_value_preserves_field_groups_in_result_order() {
+        let response = SearchValuesResponse {
+            values: vec![
+                value_result("linear", "issues", "team_key", "BENCH", 1),
+                value_result("linear", "issues", "identifier", "BENCH-424", 2),
+                value_result("linear", "issues", "identifier", "BENCH-423", 2),
+            ],
+            pagination: Some(PaginationResponse {
+                total_count: 3,
+                limit: 20,
+                offset: 0,
+                has_more: false,
+                next_offset: 20,
+            }),
+        };
+
+        assert_eq!(
+            value_search_value(&response),
+            json!({
+                "matches": [
+                    {
+                        "field": "linear.issues.team_key",
+                        "values": ["BENCH"],
+                        "total": 1
+                    },
+                    {
+                        "field": "linear.issues.identifier",
+                        "values": ["BENCH-424", "BENCH-423"],
+                        "total": 2
+                    }
+                ],
+                "total": 3,
+                "limit": 20,
+                "offset": 0,
+                "has_more": false
+            })
+        );
+    }
+
+    fn value_result(
+        schema_name: &str,
+        table_name: &str,
+        column_path: &str,
+        value: &str,
+        field_total_count: u32,
+    ) -> ValueSearchResult {
+        ValueSearchResult {
+            workspace: None,
+            schema_name: schema_name.to_string(),
+            table_name: table_name.to_string(),
+            column_path: column_path.to_string(),
+            value: value.to_string(),
+            value_truncated: false,
+            seen_count: 1,
+            first_seen_at: "2026-05-19T14:00:00Z".to_string(),
+            last_seen_at: "2026-05-19T14:00:00Z".to_string(),
+            field_total_count,
+        }
+    }
 }
