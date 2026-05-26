@@ -4,6 +4,7 @@ import { ChevronDownIcon } from '@/wax/components/icon/custom-icons/chevron-down
 import { ChevronRightIcon } from '@/wax/components/icon/custom-icons/chevron-right'
 import { CircleAlertIcon } from '@/wax/components/icon/custom-icons/circle-alert'
 import { CoralIcon } from '@/wax/components/icon/custom-icons/coral'
+import { PlugIcon } from '@/wax/components/icon/custom-icons/plug'
 import { SearchIcon } from '@/wax/components/icon/custom-icons/search'
 import { XIcon } from '@/wax/components/icon/custom-icons/x'
 import { IconName } from '@/wax/components/icon'
@@ -22,6 +23,7 @@ export const customIcons = {
   ChevronRight: ChevronRightIcon,
   CircleAlert: CircleAlertIcon,
   Coral: CoralIcon,
+  Plug: PlugIcon,
   Search: SearchIcon,
   X: XIcon,
 } as const

@@ -21,9 +21,9 @@ export const headerLogo = style({
 })
 
 export const headerLogoImg = style({
-  height: 24,
-  objectFit: 'contain',
-  width: 24,
+  height: '100%',
+  objectFit: 'cover',
+  width: '100%',
 })
 
 export const headerText = style({

@@ -128,9 +128,9 @@ export const cardLogo = style({
 })
 
 export const cardLogoImg = style({
-  height: 20,
-  objectFit: 'contain',
-  width: 20,
+  height: '100%',
+  objectFit: 'cover',
+  width: '100%',
 })
 
 export const cardTitle = style({
