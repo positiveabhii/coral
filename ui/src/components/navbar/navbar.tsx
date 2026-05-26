@@ -53,6 +53,7 @@ function renderNavItem(
   const button = (
     <SidebarButton
       aria-current={isActive ? 'page' : undefined}
+      disabled={isActive}
       icon={item.icon}
       isActive={isActive}
       isMinimized={isCollapsed}
