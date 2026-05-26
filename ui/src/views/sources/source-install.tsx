@@ -204,7 +204,7 @@ function SourceInstallDialogContent({
             </Typography.HeadingMedium>
             <span className={styles.headerPill}>Core</span>
           </Dialog.Title>
-          <Dialog.Description>
+          <Dialog.Description render={<div />}>
             <Markdown>{resolved?.info.description ?? 'Officially supported by Coral.'}</Markdown>
           </Dialog.Description>
         </div>
