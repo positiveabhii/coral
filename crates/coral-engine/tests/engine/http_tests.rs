@@ -1651,6 +1651,50 @@ async fn api_retries_truncated_json_response() {
 }
 
 #[tokio::test]
+async fn api_does_not_retry_truncated_json_response_for_post() {
+    let server = MockServer::start().await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let responder_attempts = Arc::clone(&attempts);
+    Mock::given(method("POST"))
+        .and(path("/api/users"))
+        .respond_with(move |_request: &Request| {
+            responder_attempts.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"data":[{"id":1,"name":"Ada","email":"ada@example.com"#)
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let mut manifest = base_http_manifest("http_truncated_post_json", &server.uri());
+    manifest["tables"][0]["request"]["method"] = json!("POST");
+    let source = build_source(manifest);
+
+    let error = CoralQuery::execute_sql(
+        &[source],
+        test_runtime(),
+        "SELECT id, name, email FROM http_truncated_post_json.users ORDER BY id",
+    )
+    .await
+    .expect_err("truncated JSON EOF should not retry non-idempotent requests");
+
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    assert_eq!(error.status_code(), StatusCode::FailedPrecondition);
+    match error {
+        CoreError::QueryFailure(sqe) => {
+            assert_eq!(sqe.reason(), "PROVIDER_REQUEST_FAILED");
+            assert_eq!(sqe.summary(), "Source response decode failed");
+            assert!(!sqe.retryable());
+            assert_eq!(
+                sqe.metadata().get("provider_failure_stage").unwrap(),
+                "decode"
+            );
+        }
+        other => panic!("unexpected truncated-json error variant: {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn pagination_link_header_cross_origin_surfaces_structured_error() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))

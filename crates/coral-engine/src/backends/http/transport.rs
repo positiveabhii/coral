@@ -327,14 +327,15 @@ pub(super) async fn execute_request(
             .await
             {
                 Ok(payload) => ResponseOutcome::Done(Ok(Some((payload, next_url)))),
-                Err(error) if error.retryable && decode_retries < 2 => {
-                    record_http_processing_error(&request_span, "DECODE_RETRY", &error.error);
-                    decode_retries += 1;
-                    ResponseOutcome::Retry(Duration::from_secs(2))
-                }
                 Err(error) => {
-                    record_http_processing_error(&request_span, "DECODE", &error.error);
-                    ResponseOutcome::Done(Err(error.error))
+                    if error.retryable && decode_retries < 2 && matches!(method, HttpMethod::GET) {
+                        record_http_processing_error(&request_span, "DECODE_RETRY", &error.error);
+                        decode_retries += 1;
+                        ResponseOutcome::Retry(Duration::from_secs(2))
+                    } else {
+                        record_http_processing_error(&request_span, "DECODE", &error.error);
+                        ResponseOutcome::Done(Err(error.error))
+                    }
                 }
             }
         };
