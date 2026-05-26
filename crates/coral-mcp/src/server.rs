@@ -3,8 +3,8 @@
 use coral_api::v1::{
     CatalogItemKind as ProtoCatalogItemKind, DescribeTableRequest, DescribeTableResponse,
     ExecuteSqlRequest, ListCatalogRequest, ListCatalogResponse, ListColumnsRequest,
-    ListSourcesRequest, PaginationRequest, SearchCatalogRequest, SearchRequest, Source,
-    SubmitFeedbackRequest, TableSummary as ProtoTableSummary, catalog_item,
+    ListSourcesRequest, PaginationRequest, SearchRequest, Source, SubmitFeedbackRequest,
+    TableSummary as ProtoTableSummary, catalog_item,
 };
 use coral_client::{
     AppClient, CatalogClient, FeedbackClient, QueryClient, SearchClient, SourceClient,
@@ -30,9 +30,9 @@ use crate::{
         describe_table_value, feedback_tool, guide_resource, guide_resource_content,
         initial_instructions, internal_status, list_catalog_arguments, list_catalog_tool,
         list_catalog_value, list_columns_arguments, list_columns_tool, list_columns_value,
-        required_string_argument, search_arguments, search_catalog_arguments, search_catalog_tool,
-        search_catalog_value, search_tool, search_value, sql_tool, status_to_error_data,
-        tables_resource, tables_resource_content, tool_error_from_status, tool_error_result,
+        required_string_argument, search_arguments, search_tool, search_value, sql_tool,
+        status_to_error_data, tables_resource, tables_resource_content, tool_error_from_status,
+        tool_error_result,
     },
     telemetry,
 };
@@ -287,38 +287,6 @@ impl CoralMcpServer {
         })
     }
 
-    async fn search_catalog_tool_result(
-        &self,
-        request_arguments: Option<&Map<String, Value>>,
-    ) -> Result<ToolCallOutcome, ErrorData> {
-        let arguments = search_catalog_arguments(request_arguments)?;
-        let mut catalog_client = self.catalog.clone();
-        match catalog_client
-            .search_catalog(Request::new(SearchCatalogRequest {
-                workspace: Some(default_workspace()),
-                pattern: arguments.pattern,
-                ignore_case: arguments.ignore_case,
-                schema_name: arguments.schema.unwrap_or_default(),
-                kind: catalog_item_kind_from_tool(arguments.kind) as i32,
-                pagination: Some(PaginationRequest {
-                    limit: arguments.pagination.limit,
-                    offset: arguments.pagination.offset,
-                }),
-            }))
-            .await
-            .map(|response| search_catalog_value(&response.into_inner()))
-        {
-            Ok(value) => Ok(ToolCallOutcome::Success(value)),
-            Err(status) if status.code() == tonic::Code::InvalidArgument => {
-                Err(status_to_error_data(&status))
-            }
-            Err(status) => Ok(ToolCallOutcome::ToolError {
-                operation: "Catalog search",
-                status,
-            }),
-        }
-    }
-
     async fn search_tool_result(
         &self,
         request_arguments: Option<&Map<String, Value>>,
@@ -405,10 +373,6 @@ impl CoralMcpServer {
             "search" => self.search_tool_result(request.arguments.as_ref()).await,
             "list_catalog" => {
                 self.list_catalog_tool_result(request.arguments.as_ref())
-                    .await
-            }
-            "search_catalog" => {
-                self.search_catalog_tool_result(request.arguments.as_ref())
                     .await
             }
             "describe_table" => {
@@ -517,7 +481,6 @@ impl ServerHandler for CoralMcpServer {
                 sql_tool(&sources, visible_table_count),
                 search_tool(visible_table_count, visible_function_count),
                 list_catalog_tool(visible_table_count, visible_function_count),
-                search_catalog_tool(visible_table_count, visible_function_count),
                 describe_table_tool(),
                 list_columns_tool(),
             ];

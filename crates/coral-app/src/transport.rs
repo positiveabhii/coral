@@ -5,8 +5,7 @@ use std::future::Future;
 use coral_api::{
     CORAL_ERROR_DOMAIN, grpc_response_status_code,
     v1::{
-        CatalogItem as ProtoCatalogItem, CatalogSearchResult as ProtoCatalogSearchResult, Column,
-        ColumnSearchResult as ProtoColumnSearchResult,
+        CatalogItem as ProtoCatalogItem, Column, ColumnSearchResult as ProtoColumnSearchResult,
         DescribeTableResponse as ProtoDescribeTableResponse, PaginationResponse, QueryTestFailure,
         QueryTestResult, QueryTestSuccess, Source, Table, TableFunction, TableFunctionArgument,
         TableFunctionResultColumn, TableSummary, ValidateSourceResponse, Workspace, catalog_item,
@@ -23,8 +22,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 
 use crate::bootstrap::{AppError, app_status, core_status};
 use crate::catalog::discovery::{
-    CatalogItem, CatalogMetadataField, CatalogSearchResult, ColumnMetadataField,
-    ColumnSearchResult, DescribeTableResult,
+    CatalogItem, ColumnMetadataField, ColumnSearchResult, DescribeTableResult,
 };
 use crate::query::manager::QueryManagerError;
 use crate::workspaces::WorkspaceName;
@@ -289,21 +287,6 @@ pub(crate) fn catalog_item_to_proto(
                 function,
             ))),
         },
-    }
-}
-
-pub(crate) fn catalog_search_result_to_proto(
-    workspace_name: &WorkspaceName,
-    result: CatalogSearchResult,
-) -> ProtoCatalogSearchResult {
-    ProtoCatalogSearchResult {
-        item: Some(catalog_item_to_proto(workspace_name, result.item)),
-        matched_fields: result
-            .matched_fields
-            .into_iter()
-            .map(CatalogMetadataField::as_proto_name)
-            .map(str::to_string)
-            .collect(),
     }
 }
 

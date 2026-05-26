@@ -16,7 +16,7 @@ use coral_api::v1::catalog_service_server::{CatalogService, CatalogServiceServer
 use coral_api::v1::query_service_server::{QueryService, QueryServiceServer};
 use coral_api::v1::source_service_server::{SourceService, SourceServiceServer};
 use coral_api::v1::{
-    CatalogItem, CatalogSearchResult, Column, ColumnSearchResult, CreateBundledSourceRequest,
+    CatalogItem, Column, ColumnSearchResult, CreateBundledSourceRequest,
     CreateBundledSourceResponse, CreateBundledSourceWithOAuthRequest,
     CreateBundledSourceWithOAuthResponse, DeleteSourceRequest, DeleteSourceResponse,
     DescribeTableRequest, DescribeTableResponse, DiscoverSourcesRequest, DiscoverSourcesResponse,
@@ -24,11 +24,10 @@ use coral_api::v1::{
     GetSourceInfoRequest, GetSourceInfoResponse, GetSourceRequest, GetSourceResponse,
     ImportSourceRequest, ImportSourceResponse, ListCatalogRequest, ListCatalogResponse,
     ListColumnsRequest, ListColumnsResponse, ListSourcesRequest, ListSourcesResponse,
-    PaginationRequest, PaginationResponse, QueryPlan, SearchCatalogRequest, SearchCatalogResponse,
-    Source, SourceInfo, SourceInputSpec, SourceOrigin, SourceSecretInput, Table, TableSummary,
-    ValidateSourceRequest, ValidateSourceResponse, Workspace, catalog_item,
-    create_bundled_source_with_o_auth_response, import_source_response,
-    source_input_spec::Input as ProtoSourceInput,
+    PaginationRequest, PaginationResponse, QueryPlan, Source, SourceInfo, SourceInputSpec,
+    SourceOrigin, SourceSecretInput, Table, TableSummary, ValidateSourceRequest,
+    ValidateSourceResponse, Workspace, catalog_item, create_bundled_source_with_o_auth_response,
+    import_source_response, source_input_spec::Input as ProtoSourceInput,
 };
 use coral_api::{CORAL_ERROR_DOMAIN, CORAL_ERROR_REASON_SOURCE_NOT_FOUND};
 use tokio::net::TcpListener;
@@ -164,29 +163,6 @@ fn paginate<T>(items: Vec<T>, pagination: PaginationRequest) -> (Vec<T>, Paginat
             next_offset,
         },
     )
-}
-
-fn table_matched_fields(table: &Table, regex: &regex::Regex) -> Vec<String> {
-    let name = format!("{}.{}", table.schema_name, table.name);
-    let candidates = [
-        ("schema_name", table.schema_name.as_str()),
-        ("table_name", table.name.as_str()),
-        ("name", name.as_str()),
-        ("description", table.description.as_str()),
-        ("guide", table.guide.as_str()),
-    ];
-    let mut matches = candidates
-        .into_iter()
-        .filter_map(|(field, value)| regex.is_match(value).then_some(field.to_string()))
-        .collect::<Vec<_>>();
-    if table
-        .required_filters
-        .iter()
-        .any(|filter| regex.is_match(filter))
-    {
-        matches.push("required_filters".to_string());
-    }
-    matches
 }
 
 fn column_matched_fields(column: &Column, regex: &regex::Regex) -> Vec<String> {
@@ -549,7 +525,6 @@ fn list_catalog_response(request: &ListCatalogRequest) -> ListCatalogResponse {
 struct Captured {
     execute_sql: Mutex<Vec<ExecuteSqlRequest>>,
     list_catalog: Mutex<Vec<ListCatalogRequest>>,
-    search_catalog: Mutex<Vec<SearchCatalogRequest>>,
     describe_table: Mutex<Vec<DescribeTableRequest>>,
     list_columns: Mutex<Vec<ListColumnsRequest>>,
     discover_sources: Mutex<Vec<DiscoverSourcesRequest>>,
@@ -645,49 +620,6 @@ impl CatalogService for MockCatalogService {
             .expect("list_catalog capture")
             .push(request.clone());
         Ok(Response::new(list_catalog_response(&request)))
-    }
-
-    async fn search_catalog(
-        &self,
-        request: Request<SearchCatalogRequest>,
-    ) -> Result<Response<SearchCatalogResponse>, Status> {
-        let request = request.into_inner();
-        self.captured
-            .search_catalog
-            .lock()
-            .expect("search_catalog capture")
-            .push(request.clone());
-        let pattern = regex::RegexBuilder::new(&request.pattern)
-            .case_insensitive(request.ignore_case)
-            .build()
-            .map_err(|error| Status::invalid_argument(format!("invalid regex pattern: {error}")))?;
-        let mut matches = Vec::new();
-        if request.kind == 0 || request.kind == 1 {
-            for table in mock_visible_tables().into_iter().filter(|table| {
-                request.schema_name.is_empty() || table.schema_name == request.schema_name
-            }) {
-                let matched_fields = table_matched_fields(&table, &pattern);
-                if !matched_fields.is_empty() {
-                    matches.push(CatalogSearchResult {
-                        item: Some(CatalogItem {
-                            item: Some(catalog_item::Item::Table(table_summary(&table))),
-                        }),
-                        matched_fields,
-                    });
-                }
-            }
-        }
-        let (items, pagination) = paginate(
-            matches,
-            request.pagination.unwrap_or(PaginationRequest {
-                limit: 20,
-                offset: 0,
-            }),
-        );
-        Ok(Response::new(SearchCatalogResponse {
-            items,
-            pagination: Some(pagination),
-        }))
     }
 
     async fn describe_table(
@@ -1037,14 +969,6 @@ impl MockServer {
             .list_catalog
             .lock()
             .expect("list_catalog capture")
-            .clone()
-    }
-
-    pub(crate) fn search_catalog_requests(&self) -> Vec<SearchCatalogRequest> {
-        self.captured
-            .search_catalog
-            .lock()
-            .expect("search_catalog capture")
             .clone()
     }
 

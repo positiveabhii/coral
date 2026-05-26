@@ -238,7 +238,6 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             "sql",
             "search",
             "list_catalog",
-            "search_catalog",
             "describe_table",
             "list_columns"
         ]
@@ -264,14 +263,6 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             .expect("list_catalog description")
             .contains("3 table(s) and 0 table function(s) are currently visible")
     );
-    assert!(
-        tools[3]
-            .description
-            .as_deref()
-            .expect("search_catalog description")
-            .contains("3 table(s) and 0 table function(s) are currently visible")
-    );
-
     let resources = client.list_all_resources().await?;
     assert_eq!(
         resources
@@ -317,7 +308,6 @@ async fn mcp_stdio_enable_feedback_lists_feedback_tool() -> Result<(), Box<dyn s
             "sql",
             "search",
             "list_catalog",
-            "search_catalog",
             "describe_table",
             "list_columns",
             "feedback"
@@ -336,7 +326,6 @@ async fn mcp_stdio_sql_and_catalog_tools_return_structured_content()
     let client = start_mcp_client(&server).await?;
 
     assert_list_catalog_tool(&client, &server).await?;
-    assert_search_catalog_tool(&client, &server).await?;
     assert_describe_table_tool(&client, &server).await?;
     assert_list_columns_tool(&client).await?;
     assert_sql_tool(&client).await?;
@@ -413,65 +402,6 @@ async fn assert_list_catalog_tool(
         )
         .await
         .expect_err("invalid catalog kind should fail");
-    Ok(())
-}
-
-async fn assert_search_catalog_tool(
-    client: &RunningService<RoleClient, ()>,
-    server: &MockServer,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let search = structured_tool_content(
-        client,
-        CallToolRequestParams::new("search_catalog").with_arguments(json_object(&json!({
-            "pattern": "fixture.*messages",
-            "schema": "local_messages",
-            "kind": "table",
-            "ignore_case": true
-        }))),
-    )
-    .await?;
-    assert_eq!(search["total"], 1);
-    assert_eq!(search["items"][0]["name"], "local_messages.messages");
-    assert_eq!(
-        search["items"][0]["sql_reference"],
-        "local_messages.messages"
-    );
-    assert!(
-        search["items"][0]["matched_fields"]
-            .as_array()
-            .expect("matched fields")
-            .iter()
-            .any(|field| field == "description")
-    );
-    let search_requests = server.search_catalog_requests();
-    let search_request = search_requests.last().expect("search catalog request");
-    assert_eq!(search_request.pattern, "fixture.*messages");
-    assert_eq!(search_request.schema_name, "local_messages");
-    assert_eq!(search_request.kind, 1);
-    let search_pagination = search_request
-        .pagination
-        .as_ref()
-        .expect("search pagination");
-    assert_eq!(search_pagination.limit, 20);
-    assert_eq!(search_pagination.offset, 0);
-    assert!(search_request.ignore_case);
-
-    let guide_search = structured_tool_content(
-        client,
-        CallToolRequestParams::new("search_catalog").with_arguments(json_object(&json!({
-            "pattern": "Query fixture messages",
-            "schema": "local_messages"
-        }))),
-    )
-    .await?;
-    assert_eq!(guide_search["total"], 1);
-    assert!(
-        guide_search["items"][0]["matched_fields"]
-            .as_array()
-            .expect("matched fields")
-            .iter()
-            .any(|field| field == "guide")
-    );
     Ok(())
 }
 
