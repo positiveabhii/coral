@@ -17,6 +17,7 @@ import { Icon } from '@/wax/components/icon'
 import { TextInput } from '@/wax/components/inputs/text'
 import { Typography } from '@/wax/components/typography'
 
+import { Markdown } from '@/components/markdown'
 import { showToast } from '@/components/toast'
 import { providerIcon } from '@/lib/provider-icons'
 import {
@@ -204,7 +205,7 @@ function SourceInstallDialogContent({
             <span className={styles.headerPill}>Core</span>
           </Dialog.Title>
           <Dialog.Description>
-            {resolved?.info.description ?? 'Officially supported by Coral.'}
+            <Markdown>{resolved?.info.description ?? 'Officially supported by Coral.'}</Markdown>
           </Dialog.Description>
         </div>
       </div>
@@ -369,11 +370,9 @@ function Field({
 }) {
   return (
     <div className={classNames(styles.fieldItem, fullWidth ? styles.fieldItemFull : null)}>
-      <Typography.BodyStrong>{formatFieldName(input.key)}</Typography.BodyStrong>
+      <Typography.Body className={styles.fieldLabel}>{formatFieldName(input.key)}</Typography.Body>
       {children}
-      {input.hint ? (
-        <Typography.BodySmall variant="secondary">{input.hint}</Typography.BodySmall>
-      ) : null}
+      {input.hint ? <Markdown>{input.hint}</Markdown> : null}
     </div>
   )
 }
@@ -401,7 +400,7 @@ function OAuthFields({
     <div className={styles.oauthFields}>
       {requiredInputs.map(({ key, secret }) => (
         <div key={key} className={styles.fieldItem}>
-          <Typography.BodyStrong>{formatFieldName(key)}</Typography.BodyStrong>
+          <Typography.Body className={styles.fieldLabel}>{formatFieldName(key)}</Typography.Body>
           <TextInput
             type={secret ? 'password' : 'text'}
             value={values[key] ?? ''}

@@ -60,9 +60,9 @@ export const headerPill = style({
 })
 
 export const fieldGroup = style({
-  display: 'grid',
-  gap: 16,
-  gridTemplateColumns: '1fr 1fr',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 14,
 })
 
 export const fieldItem = style({
@@ -71,8 +71,14 @@ export const fieldItem = style({
   gap: 6,
 })
 
-export const fieldItemFull = style({
-  gridColumn: '1 / -1',
+// Kept so the public API of <Field> is unchanged even though all fields are
+// now full-width — selecting this className is a no-op against the flex
+// column layout above.
+export const fieldItemFull = style({})
+
+export const fieldLabel = style({
+  color: theme.content.primary,
+  fontWeight: 500,
 })
 
 export const methodTabs = style({
