@@ -154,17 +154,10 @@ export const cardFooter = style({
   marginBlockStart: 'auto',
 })
 
-export const statusPill = style({
+export const connectedIcon = style({
   alignItems: 'center',
-  background: theme.pill.green.background,
-  border: `1px solid ${theme.pill.green.stroke}`,
-  borderRadius: 999,
   color: theme.pill.green.color,
   display: 'inline-flex',
-  fontSize: 11,
-  fontWeight: 600,
-  gap: 4,
-  padding: '2px 8px',
 })
 
 export const originPill = style({

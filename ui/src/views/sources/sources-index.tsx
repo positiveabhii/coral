@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { Icon } from '@/wax/components/icon'
 import { TextInput } from '@/wax/components/inputs/text'
+import { Tooltip } from '@/wax/components/tooltip'
 import { Typography } from '@/wax/components/typography'
 
 import { ErrorBanner } from '@/components/error-banner'
@@ -195,14 +196,14 @@ function SourceCard({ entry, onClick }: { entry: IndexEntry; onClick: () => void
         <Typography.BodyLargeStrong as="span" className={styles.cardTitle}>
           {entry.name}
         </Typography.BodyLargeStrong>
+        <span className={styles.originPill}>Core</span>
         {entry.installed ? (
-          <span className={styles.statusPill}>
-            <Icon color="success" name="CircleCheck" size="14" />
-            Connected
-          </span>
-        ) : (
-          <span className={styles.originPill}>Core</span>
-        )}
+          <Tooltip content="Connected">
+            <span className={styles.connectedIcon} aria-label="Connected">
+              <Icon color="success" name="CircleCheck" size="16" />
+            </span>
+          </Tooltip>
+        ) : null}
       </div>
       {entry.description ? (
         <Typography.Body variant="tertiary" className={styles.cardDescription}>
