@@ -6,16 +6,22 @@ import { CoralIcon } from '@/wax/components/icon/custom-icons/coral'
 import { KeyboardShortcut } from '@/wax/components/keyboard-shortcut'
 import { SidebarButton } from '@/wax/components/sidebar-button/sidebar-button'
 import { Tooltip } from '@/wax/components/tooltip'
+import { useRouter, type Route } from '@/lib/router'
+
 import * as styles from './navbar.css'
 import { useSidebarState } from './use-sidebar-state'
 
 interface NavItem {
   icon: IconName
-  isActive?: boolean
   label: string
+  target: Route
+  matches: Route['kind'][]
 }
 
-const NAV_ITEMS: NavItem[] = [{ icon: 'Activity', isActive: true, label: 'Traces' }]
+const NAV_ITEMS: NavItem[] = [
+  { icon: 'Activity', label: 'Traces', target: { kind: 'traces' }, matches: ['traces'] },
+  { icon: 'Plug', label: 'Sources', target: { kind: 'sources' }, matches: ['sources'] },
+]
 
 const QUERY_STREAM_LABEL = 'Query stream'
 const COLLAPSE_SIDEBAR_LABEL = 'Collapse sidebar'
@@ -38,15 +44,20 @@ function renderBrandMark(isCollapsed: boolean) {
   )
 }
 
-function renderNavItem(item: NavItem, isCollapsed: boolean) {
+function renderNavItem(
+  item: NavItem,
+  isCollapsed: boolean,
+  isActive: boolean,
+  onSelect: (target: Route) => void,
+) {
   const button = (
     <SidebarButton
-      aria-current={item.isActive ? 'page' : undefined}
-      disabled={item.isActive}
+      aria-current={isActive ? 'page' : undefined}
       icon={item.icon}
-      isActive={item.isActive}
+      isActive={isActive}
       isMinimized={isCollapsed}
       key={item.label}
+      onClick={() => onSelect(item.target)}
     >
       {item.label}
     </SidebarButton>
@@ -63,6 +74,7 @@ function renderNavItem(item: NavItem, isCollapsed: boolean) {
 
 export function Navbar() {
   const { isCollapsed, shouldHideSidebarToggle, toggleSidebar } = useSidebarState()
+  const { location, navigate } = useRouter()
 
   const toggleLabel = isCollapsed ? EXPAND_SIDEBAR_LABEL : COLLAPSE_SIDEBAR_LABEL
   const handleSidebarShortcut = useCallback(
@@ -71,6 +83,10 @@ export function Navbar() {
       toggleSidebar()
     },
     [toggleSidebar],
+  )
+  const onSelect = useCallback(
+    (target: Route) => navigate({ route: target }),
+    [navigate],
   )
 
   return (
@@ -102,7 +118,9 @@ export function Navbar() {
         )}
       </div>
       <div className={styles.nav} aria-label="Primary navigation" id={PRIMARY_NAVIGATION_ID}>
-        {NAV_ITEMS.map((item) => renderNavItem(item, isCollapsed))}
+        {NAV_ITEMS.map((item) =>
+          renderNavItem(item, isCollapsed, item.matches.includes(location.route.kind), onSelect),
+        )}
       </div>
     </nav>
   )
