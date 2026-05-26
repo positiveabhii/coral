@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use coral_engine::{
     CoralQuery, CoreError, EngineExtensions, QueryRuntimeConfig, QueryRuntimeContext,
@@ -16,7 +17,7 @@ use serde_json::{Value, json};
 use wiremock::matchers::{
     body_json, body_string, header, method, path, query_param, query_param_is_missing,
 };
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 use crate::harness::{
     build_source, build_source_with_secrets, execution_to_rows, test_runtime, users_rows,
@@ -1612,6 +1613,41 @@ async fn api_returns_malformed_json() {
         }
         other => panic!("unexpected malformed-json error variant: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn api_retries_truncated_json_response() {
+    let server = MockServer::start().await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let responder_attempts = Arc::clone(&attempts);
+    Mock::given(method("GET"))
+        .and(path("/api/users"))
+        .respond_with(move |_request: &Request| {
+            if responder_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"data":[{"id":1,"name":"Ada","email":"ada@example.com"#)
+            } else {
+                ResponseTemplate::new(200).set_body_json(json!({ "data": users_rows() }))
+            }
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let source = build_source(base_http_manifest("http_truncated_json", &server.uri()));
+
+    let rows = execution_to_rows(
+        &CoralQuery::execute_sql(
+            &[source],
+            test_runtime(),
+            "SELECT id, name, email FROM http_truncated_json.users ORDER BY id",
+        )
+        .await
+        .expect("truncated JSON EOF should be retried"),
+    );
+
+    assert_eq!(rows, users_rows());
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

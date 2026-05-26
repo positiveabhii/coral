@@ -1,6 +1,6 @@
 //! HTTP response body decoding.
 
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::DataFusionError;
 use serde_json::Value;
 
 use crate::backends::http::ProviderQueryError;
@@ -18,11 +18,32 @@ pub(super) struct ResponseDecodeContext<'a> {
     pub(super) request_id: u64,
 }
 
+pub(super) struct ResponseDecodeFailure {
+    pub(super) error: DataFusionError,
+    pub(super) retryable: bool,
+}
+
+impl ResponseDecodeFailure {
+    fn retryable(error: DataFusionError) -> Self {
+        Self {
+            error,
+            retryable: true,
+        }
+    }
+
+    fn terminal(error: DataFusionError) -> Self {
+        Self {
+            error,
+            retryable: false,
+        }
+    }
+}
+
 pub(super) async fn decode_response_body(
     response: reqwest::Response,
     format: ResponseBodyFormat,
     context: ResponseDecodeContext<'_>,
-) -> Result<Value> {
+) -> std::result::Result<Value, ResponseDecodeFailure> {
     let ResponseDecodeContext {
         source_schema,
         table_name,
@@ -35,18 +56,30 @@ pub(super) async fn decode_response_body(
     match format {
         ResponseBodyFormat::Json => {
             let bytes = response.bytes().await.map_err(|error| {
-                decode_error(source_schema, table_name, method_label, logged_url, &error)
+                ResponseDecodeFailure::retryable(decode_error(
+                    source_schema,
+                    table_name,
+                    method_label,
+                    logged_url,
+                    &error,
+                ))
             })?;
             response_span.record("http.response.body.size", bytes.len());
             let trace_body = String::from_utf8_lossy(&bytes);
             body_capture.record_response(response_span, request_id, trace_body.as_ref());
             serde_json::from_slice(&bytes).map_err(|error| {
-                json_decode_error(source_schema, table_name, method_label, logged_url, &error)
+                json_decode_failure(source_schema, table_name, method_label, logged_url, &error)
             })
         }
         ResponseBodyFormat::JsonEachRow => {
             let text = response.text().await.map_err(|error| {
-                decode_error(source_schema, table_name, method_label, logged_url, &error)
+                ResponseDecodeFailure::retryable(decode_error(
+                    source_schema,
+                    table_name,
+                    method_label,
+                    logged_url,
+                    &error,
+                ))
             })?;
             response_span.record("http.response.body.size", text.len());
             body_capture.record_response(response_span, request_id, &text);
@@ -57,16 +90,22 @@ pub(super) async fn decode_response_body(
                     continue;
                 }
                 let row: Value = serde_json::from_str(trimmed).map_err(|error| {
-                    provider_error(ProviderQueryError::Decode {
+                    let detail = format!(
+                        "source API response decoding failed: json_each_row line {} is not valid JSON: {error}",
+                        index + 1
+                    );
+                    let provider_error = provider_error(ProviderQueryError::Decode {
                         source_schema: source_schema.to_string(),
                         table: table_name.to_string(),
                         method: Some(method_label.to_string()),
                         url: Some(logged_url.to_string()),
-                        detail: format!(
-                            "source API response decoding failed: json_each_row line {} is not valid JSON: {error}",
-                            index + 1
-                        ),
-                    })
+                        detail,
+                    });
+                    if is_retryable_json_decode_error(&error) {
+                        ResponseDecodeFailure::retryable(provider_error)
+                    } else {
+                        ResponseDecodeFailure::terminal(provider_error)
+                    }
                 })?;
                 rows.push(row);
             }
@@ -105,4 +144,24 @@ fn json_decode_error(
         url: Some(logged_url.to_string()),
         detail: format!("source API response decoding failed: {error}"),
     })
+}
+
+fn json_decode_failure(
+    source_schema: &str,
+    table_name: &str,
+    method_label: &str,
+    logged_url: &str,
+    error: &serde_json::Error,
+) -> ResponseDecodeFailure {
+    let provider_error =
+        json_decode_error(source_schema, table_name, method_label, logged_url, error);
+    if is_retryable_json_decode_error(error) {
+        ResponseDecodeFailure::retryable(provider_error)
+    } else {
+        ResponseDecodeFailure::terminal(provider_error)
+    }
+}
+
+fn is_retryable_json_decode_error(error: &serde_json::Error) -> bool {
+    matches!(error.classify(), serde_json::error::Category::Eof)
 }
