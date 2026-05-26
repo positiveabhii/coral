@@ -21,11 +21,11 @@ File-based sources (Parquet, JSONL, JSON, CSV) are the simplest case — define 
 
 API-backed sources vary in difficulty. The source spec model is designed for APIs that have:
 
-- **HTTP credentials Coral can store locally** — an API key, personal access token, service account credential, or OAuth authorization-code flow that returns an access token for Coral to use on API requests
+- **HTTP credentials Coral can store locally** — an API key, personal access token, service account credential, or OAuth device-code or authorization-code flow that returns an access token for Coral to use on API requests
 - **Structured, accessible documentation** — an OpenAPI spec, GraphQL schema, or clearly organized REST docs that describe endpoints, response shapes, authentication, scopes, and OAuth client settings
 - **Real data to validate against** — actual records in the account so you can confirm the source is returning the expected results during development
 
-OAuth-backed services can work well when the provider supports a loopback redirect URI such as `http://127.0.0.1:<port>/oauth/callback` or `http://localhost:<port>/oauth/callback`. Coral can run the browser-based authorization-code flow during `coral source add --interactive`, store the returned access token as the source secret, and use that secret through the normal `auth` or request-header fields. Automatic token refresh is not implemented yet, so prefer providers whose access tokens are long-lived enough for the source's expected use.
+OAuth-backed services can work well when the provider supports device-code flow, or when it supports an authorization-code loopback redirect URI such as `http://127.0.0.1:<port>/oauth/callback` or `http://localhost:<port>/oauth/callback`. Coral can run the OAuth flow during `coral source add --interactive`, store the returned access token as the source secret, and use that secret through the normal `auth` or request-header fields. Automatic token refresh is not implemented yet, so prefer providers whose access tokens are long-lived enough for the source's expected use.
 
 If you are unsure whether your API is a good candidate, ask us in [Discord](https://withcoral.com/discord) before getting started.
 
