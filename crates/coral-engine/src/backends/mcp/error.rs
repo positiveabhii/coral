@@ -35,6 +35,18 @@ pub(crate) enum McpProviderQueryError {
         detail: String,
     },
 
+    #[error("MCP HTTP transport for source '{source_schema}' requires authorization: {detail}")]
+    AuthRequired {
+        source_schema: String,
+        detail: String,
+    },
+
+    #[error("MCP HTTP transport authorization failed for source '{source_schema}': {detail}")]
+    AuthFailed {
+        source_schema: String,
+        detail: String,
+    },
+
     #[error("{source_schema}.{relation}: MCP tool '{tool}' call failed: {detail}")]
     ToolCall {
         source_schema: String,
@@ -165,6 +177,48 @@ impl McpProviderQueryError {
                     ),
                     true,
                     StatusCode::Unavailable,
+                    metadata,
+                )
+            }
+            Self::AuthRequired {
+                source_schema,
+                detail,
+            } => {
+                let mut metadata = HashMap::new();
+                metadata.insert("source".to_string(), source_schema.clone());
+                metadata.insert("mcp_stage".to_string(), "auth".to_string());
+                StructuredQueryError::new(
+                    "MCP_AUTH_REQUIRED",
+                    format!("MCP HTTP server for source `{source_schema}` requires authorization"),
+                    detail.clone(),
+                    Some(
+                        "Install or update the source with the required OAuth or bearer-token \
+                         credential, then retry the query."
+                            .to_string(),
+                    ),
+                    false,
+                    StatusCode::FailedPrecondition,
+                    metadata,
+                )
+            }
+            Self::AuthFailed {
+                source_schema,
+                detail,
+            } => {
+                let mut metadata = HashMap::new();
+                metadata.insert("source".to_string(), source_schema.clone());
+                metadata.insert("mcp_stage".to_string(), "auth".to_string());
+                StructuredQueryError::new(
+                    "MCP_AUTH_FAILED",
+                    format!("MCP HTTP authorization failed for source `{source_schema}`"),
+                    detail.clone(),
+                    Some(
+                        "Refresh or replace the source credential. If the server reports an \
+                         insufficient scope, update the manifest OAuth scopes and reinstall."
+                            .to_string(),
+                    ),
+                    false,
+                    StatusCode::FailedPrecondition,
                     metadata,
                 )
             }

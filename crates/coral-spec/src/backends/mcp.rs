@@ -50,14 +50,20 @@ struct RawMcpSourceManifest {
 
 /// MCP server connection settings.
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct McpServerSpec {
-    pub transport: McpTransport,
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: Vec<McpEnvSpec>,
+#[serde(tag = "transport", rename_all = "snake_case", deny_unknown_fields)]
+pub enum McpServerSpec {
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: Vec<McpEnvSpec>,
+    },
+    StreamableHttp {
+        url: String,
+        #[serde(default)]
+        auth: Option<McpHttpAuthSpec>,
+    },
 }
 
 /// Supported MCP transports.
@@ -65,6 +71,7 @@ pub struct McpServerSpec {
 #[serde(rename_all = "snake_case")]
 pub enum McpTransport {
     Stdio,
+    StreamableHttp,
 }
 
 /// One environment variable passed to a stdio MCP server process.
@@ -73,6 +80,31 @@ pub struct McpEnvSpec {
     pub name: String,
     #[serde(flatten)]
     pub value: crate::ValueSourceSpec,
+}
+
+/// HTTP authentication for Streamable HTTP MCP servers.
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpHttpAuthSpec {
+    #[serde(rename = "type")]
+    kind: McpHttpAuthKind,
+    #[serde(flatten)]
+    token: crate::ValueSourceSpec,
+}
+
+/// Supported Streamable HTTP MCP auth schemes.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum McpHttpAuthKind {
+    Bearer,
+}
+
+impl McpHttpAuthSpec {
+    #[must_use]
+    pub fn bearer_token(&self) -> &crate::ValueSourceSpec {
+        match self.kind {
+            McpHttpAuthKind::Bearer => &self.token,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -385,14 +417,25 @@ impl McpSourceManifest {
 }
 
 fn validate_server(source_name: &str, server: &McpServerSpec) -> Result<()> {
-    if server.command.trim().is_empty() {
+    match server {
+        McpServerSpec::Stdio { command, env, .. } => {
+            validate_stdio_server(source_name, command, env)
+        }
+        McpServerSpec::StreamableHttp { url, auth } => {
+            validate_streamable_http_server(source_name, url, auth.as_ref())
+        }
+    }
+}
+
+fn validate_stdio_server(source_name: &str, command: &str, env: &[McpEnvSpec]) -> Result<()> {
+    if command.trim().is_empty() {
         return Err(ManifestError::validation(format!(
             "source '{source_name}' MCP server command must not be empty"
         )));
     }
 
     let mut env_names = HashSet::new();
-    for env in &server.env {
+    for env in env {
         if env.name.trim().is_empty() {
             return Err(ManifestError::validation(format!(
                 "source '{source_name}' MCP server env name must not be empty"
@@ -407,6 +450,48 @@ fn validate_server(source_name: &str, server: &McpServerSpec) -> Result<()> {
         validate_server_env_value_source(source_name, env)?;
     }
     Ok(())
+}
+
+fn validate_streamable_http_server(
+    source_name: &str,
+    raw_url: &str,
+    auth: Option<&McpHttpAuthSpec>,
+) -> Result<()> {
+    let url = url::Url::parse(raw_url).map_err(|error| {
+        ManifestError::validation(format!(
+            "source '{source_name}' MCP streamable_http server url is invalid: {error}"
+        ))
+    })?;
+    match url.scheme() {
+        "https" => {}
+        "http" if is_local_http_url(&url) => {}
+        "http" => {
+            return Err(ManifestError::validation(format!(
+                "source '{source_name}' MCP streamable_http server url must use https unless it targets localhost"
+            )));
+        }
+        scheme => {
+            return Err(ManifestError::validation(format!(
+                "source '{source_name}' MCP streamable_http server url has unsupported scheme '{scheme}'"
+            )));
+        }
+    }
+    if let Some(auth) = auth {
+        validate_source_scoped_value_source(
+            auth.bearer_token(),
+            &format!("source '{source_name}' MCP streamable_http server auth token"),
+        )?;
+    }
+    Ok(())
+}
+
+fn is_local_http_url(url: &url::Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host == "127.0.0.1"
+            || host == "::1"
+            || host.starts_with("127.")
+    })
 }
 
 fn validate_server_env_value_source(source_name: &str, env: &McpEnvSpec) -> Result<()> {
@@ -830,7 +915,7 @@ fn validate_identifier(value: &str, context: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::McpSourceManifest;
+    use super::{McpServerSpec, McpSourceManifest};
     use serde_json::json;
 
     #[test]
@@ -892,6 +977,118 @@ mod tests {
         assert_eq!(
             error.to_string(),
             "source 'demo' function 'lookup' must define columns"
+        );
+    }
+
+    #[test]
+    fn parses_streamable_http_mcp_server_with_input_backed_bearer_auth() {
+        let manifest = McpSourceManifest::parse_manifest_value(json!({
+            "dsl_version": 3,
+            "name": "remote_mcp",
+            "version": "0.1.0",
+            "backend": "mcp",
+            "inputs": {
+                "MCP_ACCESS_TOKEN": {
+                    "kind": "secret",
+                    "credential": {
+                        "methods": [{
+                            "type": "oauth",
+                            "oauth": {
+                                "flow": { "type": "authorization_code", "pkce": "required" },
+                                "redirect_uri": "http://127.0.0.1:0/oauth/callback",
+                                "redirect_uri_port_mode": "random",
+                                "endpoints": {
+                                    "authorization_url": "https://provider.example.com/oauth/authorize",
+                                    "token_url": "https://provider.example.com/oauth/token"
+                                },
+                                "client": {
+                                    "id": { "default": "coral-client-id" }
+                                },
+                                "scopes": {
+                                    "scope": {
+                                        "delimiter": "space",
+                                        "values": ["read"]
+                                    }
+                                }
+                            }
+                        }]
+                    }
+                }
+            },
+            "server": {
+                "transport": "streamable_http",
+                "url": "https://mcp.example.com/mcp",
+                "auth": {
+                    "type": "bearer",
+                    "from": "input",
+                    "key": "MCP_ACCESS_TOKEN"
+                }
+            },
+            "tables": [{
+                "name": "issues",
+                "tool": "list_issues",
+                "columns": [{ "name": "title", "type": "Utf8" }]
+            }]
+        }))
+        .expect("streamable_http mcp manifest should parse");
+
+        assert!(matches!(
+            manifest.server,
+            McpServerSpec::StreamableHttp { .. }
+        ));
+        assert!(
+            manifest
+                .required_secret_names()
+                .contains("MCP_ACCESS_TOKEN")
+        );
+    }
+
+    #[test]
+    fn rejects_streamable_http_server_with_stdio_fields() {
+        let error = McpSourceManifest::parse_manifest_value(json!({
+            "dsl_version": 3,
+            "name": "remote_mcp",
+            "version": "0.1.0",
+            "backend": "mcp",
+            "server": {
+                "transport": "streamable_http",
+                "url": "https://mcp.example.com/mcp",
+                "command": "mcp-server"
+            },
+            "tables": [{
+                "name": "issues",
+                "tool": "list_issues",
+                "columns": [{ "name": "title", "type": "Utf8" }]
+            }]
+        }))
+        .expect_err("stdio fields on streamable_http should fail");
+
+        assert!(error.to_string().contains("unknown field `command`"));
+    }
+
+    #[test]
+    fn rejects_insecure_non_local_streamable_http_url() {
+        let error = McpSourceManifest::parse_manifest_value(json!({
+            "dsl_version": 3,
+            "name": "remote_mcp",
+            "version": "0.1.0",
+            "backend": "mcp",
+            "server": {
+                "transport": "streamable_http",
+                "url": "http://mcp.example.com/mcp"
+            },
+            "tables": [{
+                "name": "issues",
+                "tool": "list_issues",
+                "columns": [{ "name": "title", "type": "Utf8" }]
+            }]
+        }))
+        .expect_err("non-local http streamable_http url should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must use https unless it targets localhost")
         );
     }
 

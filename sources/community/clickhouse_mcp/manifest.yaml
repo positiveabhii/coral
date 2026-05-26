@@ -1,20 +1,55 @@
 dsl_version: 3
 name: clickhouse_mcp
-version: 0.1.0
+version: 0.2.0
 description: ClickHouse Cloud remote MCP server (mcp.clickhouse.cloud).
 backend: mcp
 
-# The Cloud MCP server is HTTP-only; coral-engine's MCP backend only speaks
-# stdio, so we proxy through `mcp-remote`. OAuth tokens are cached in
-# ~/.mcp-auth/ from a one-time `npx -y mcp-remote@0.1.37 https://mcp.clickhouse.cloud/mcp`
-# browser flow.
+inputs:
+  MCP_ACCESS_TOKEN:
+    kind: secret
+    hint: |
+      ClickHouse Cloud OAuth access token. Click "Connect with ClickHouse
+      Cloud" during `coral source add` to authorize through the browser —
+      Coral drives the OAuth flow and stores the resulting access token.
+
+      Tokens last 1 hour. Until automatic refresh ships, re-run
+      `coral source add --file sources/community/clickhouse_mcp/manifest.yaml`
+      to mint a fresh one when queries start failing with MCP_AUTH_REQUIRED.
+    credential:
+      methods:
+        - type: oauth
+          label: Connect with ClickHouse Cloud
+          oauth:
+            flow:
+              type: authorization_code
+              pkce: required
+            redirect_uri: http://127.0.0.1:53683/oauth/callback
+            endpoints:
+              authorization_url: https://mcp.clickhouse.cloud/authorize
+              token_url: https://mcp.clickhouse.cloud/token
+            client:
+              id:
+                # Public client registered via Dynamic Client Registration
+                # against https://mcp.clickhouse.cloud/register. PKCE-only,
+                # no client secret. Shared across Coral installs is safe
+                # because each user's tokens are user-bound and PKCE
+                # protects the per-session code exchange.
+                default: c9249c91-5f7c-44ed-8e9f-cd328782dc03
+            scopes:
+              scope:
+                delimiter: space
+                values:
+                  - openid
+                  - profile
+                  - email
+
 server:
-  transport: stdio
-  command: npx
-  args:
-    - -y
-    - mcp-remote@0.1.37
-    - https://mcp.clickhouse.cloud/mcp
+  transport: streamable_http
+  url: https://mcp.clickhouse.cloud/mcp
+  auth:
+    type: bearer
+    from: input
+    key: MCP_ACCESS_TOKEN
 
 tables:
   # ----- Cloud management surface -----

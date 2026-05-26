@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use coral_spec::backends::mcp::McpSourceManifest;
+use coral_spec::backends::mcp::{McpServerSpec, McpSourceManifest};
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::datasource::TableProvider;
 use datafusion::error::Result;
@@ -22,7 +22,7 @@ use datafusion::error::Result;
 use self::client::{McpSourceClient, McpToolCaller};
 use self::function::McpSourceTableFunction;
 use self::provider::McpTableProvider;
-use self::transport::StdioMcpToolCaller;
+use self::transport::{StdioMcpToolCaller, StreamableHttpMcpToolCaller};
 use crate::backends::{
     BackendCompileRequest, BackendRegistration, CompiledBackendSource, RegisteredSource,
     SourceTableFunctions, build_registered_inputs, build_registered_table,
@@ -48,11 +48,18 @@ pub(crate) fn compile_manifest(
         &request.source_secrets,
         &request.source_variables,
     ));
-    let caller = Arc::new(StdioMcpToolCaller {
-        source_name: manifest.common.name.clone(),
-        server: manifest.server.clone(),
-        resolved_inputs: Arc::clone(&resolved_inputs),
-    });
+    let caller: Arc<dyn McpToolCaller> = match &manifest.server {
+        McpServerSpec::Stdio { .. } => Arc::new(StdioMcpToolCaller {
+            source_name: manifest.common.name.clone(),
+            server: manifest.server.clone(),
+            resolved_inputs: Arc::clone(&resolved_inputs),
+        }),
+        McpServerSpec::StreamableHttp { .. } => Arc::new(StreamableHttpMcpToolCaller {
+            source_name: manifest.common.name.clone(),
+            server: manifest.server.clone(),
+            resolved_inputs: Arc::clone(&resolved_inputs),
+        }),
+    };
     compile_source_with_caller(
         manifest.clone(),
         request.source_secrets.clone(),
