@@ -1,17 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 
-import type { Source } from '@/generated/coral/v1/sources_pb'
-import type { ValidateSourceResponse } from '@/generated/coral/v1/sources_pb'
+import type { Source, ValidateSourceResponse } from '@/generated/coral/v1/sources_pb'
 
-import * as Button from '@/wax/components/button'
+import { Container as ButtonContainer } from '@/wax/components/button/container'
+import { Icon as ButtonIcon } from '@/wax/components/button/icon'
+import { Text as ButtonText } from '@/wax/components/button/text'
+import * as Dialog from '@/wax/components/dialog'
 import { Icon } from '@/wax/components/icon'
 import { Typography } from '@/wax/components/typography'
 
-import { ErrorBanner } from '@/components/error-banner'
-import { PageHeader } from '@/components/page-header'
 import { showToast } from '@/components/toast'
 import { providerIcon } from '@/lib/provider-icons'
-import { useRouter } from '@/lib/router'
 import {
   deleteSource,
   getInstalledSource,
@@ -27,12 +26,48 @@ type ValidationState =
   | { kind: 'ok'; tableCount: number; functionCount: number }
   | { kind: 'failed'; message: string }
 
-export function SourceDetail({ name }: { name: string }) {
-  const { navigate } = useRouter()
+export function SourceDetailDialog({
+  name,
+  open,
+  onOpenChange,
+  onRemoved,
+}: {
+  name: string | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onRemoved: (name: string) => void
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Backdrop />
+        <Dialog.Popup size="l">
+          {name ? (
+            <SourceDetailDialogContent
+              name={name}
+              onClose={() => onOpenChange(false)}
+              onRemoved={onRemoved}
+            />
+          ) : null}
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  )
+}
+
+function SourceDetailDialogContent({
+  name,
+  onClose,
+  onRemoved,
+}: {
+  name: string
+  onClose: () => void
+  onRemoved: (name: string) => void
+}) {
   const [source, setSource] = useState<Source | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [validation, setValidation] = useState<ValidationState>({ kind: 'idle' })
-  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirmOpen, setConfirmOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
@@ -75,100 +110,132 @@ export function SourceDetail({ name }: { name: string }) {
     try {
       await deleteSource(name)
       showToast('success', `Removed ${name}`)
-      navigate({ route: { kind: 'sources' } })
+      setConfirmOpen(false)
+      onRemoved(name)
     } catch (e) {
       showToast('error', e instanceof Error ? e.message : String(e))
       setDeleting(false)
     }
-  }, [name, navigate])
+  }, [name, onRemoved])
 
   const icon = providerIcon(name)
   const origin = source ? originLabel(source.origin) : null
 
   return (
-    <div className={styles.root}>
-      <PageHeader
-        title={
-          <div className={styles.titleRow}>
-            <div className={styles.titleIcon}>
-              {icon ? (
-                <img src={icon} alt="" className={styles.titleIconImg} />
-              ) : (
-                <Icon name="Plug" size="22" color="secondary" />
-              )}
-            </div>
-            <Typography.HeadingMedium as="h1">{name}</Typography.HeadingMedium>
-            {origin ? <span className={styles.originBadge}>{originBadgeLabel(origin)}</span> : null}
-          </div>
-        }
-        subtitle={source?.version ? `v${source.version}` : undefined}
-      >
-        <Button.Container
-          variant="secondary"
-          size="32"
-          onClick={() => navigate({ route: { kind: 'sources' } })}
-        >
-          <Button.Text>Back to sources</Button.Text>
-        </Button.Container>
-      </PageHeader>
-
-      <div className={styles.body}>
-        {loadError ? (
-          <ErrorBanner
-            title="Couldn't load source"
-            message={loadError}
-            onRetry={() => window.location.reload()}
-          />
-        ) : null}
-
-        {!source && !loadError ? (
-          <Typography.BodySmall variant="tertiary">Loading…</Typography.BodySmall>
-        ) : !source ? null : (
-          <>
-            <div className={styles.grid}>
-              <Bindings source={source} />
-              <Validation state={validation} onValidate={onValidate} />
-            </div>
-
-            <DeleteCard
-              name={name}
-              confirm={confirmDelete}
-              deleting={deleting}
-              onArm={() => setConfirmDelete(true)}
-              onCancel={() => setConfirmDelete(false)}
-              onConfirm={() => void onDelete()}
-            />
-          </>
-        )}
+    <>
+      <div className={styles.header}>
+        <div className={styles.headerLogo}>
+          {icon ? (
+            <img src={icon} alt="" className={styles.headerLogoImg} />
+          ) : (
+            <Icon name="Plug" size="22" color="secondary" />
+          )}
+        </div>
+        <div className={styles.headerText}>
+          <Dialog.Title className={styles.headerTitleRow}>
+            <Typography.HeadingMedium as="span" className={styles.headerTitle}>
+              {name}
+            </Typography.HeadingMedium>
+            {origin ? (
+              <span className={styles.headerPill}>{originBadgeLabel(origin)}</span>
+            ) : null}
+          </Dialog.Title>
+          <Dialog.Description render={<div />}>
+            <Typography.BodySmall variant="secondary">
+              {source?.version ? `v${source.version}` : 'Connected source'}
+            </Typography.BodySmall>
+          </Dialog.Description>
+        </div>
       </div>
-    </div>
+
+      {loadError ? (
+        <div className={styles.alertError}>
+          <Icon name="CircleAlert" size="14" color="inherit" />
+          <Typography.BodySmall>{loadError}</Typography.BodySmall>
+        </div>
+      ) : null}
+
+      {!source && !loadError ? (
+        <Typography.BodySmall variant="tertiary">Loading…</Typography.BodySmall>
+      ) : !source ? null : (
+        <>
+          <Bindings source={source} />
+          <Validation state={validation} onValidate={onValidate} />
+        </>
+      )}
+
+      <Dialog.Actions>
+        <ButtonContainer
+          variant="bare"
+          size="32"
+          onClick={() => setConfirmOpen(true)}
+          disabled={deleting}
+        >
+          <ButtonText>Remove</ButtonText>
+        </ButtonContainer>
+        <ButtonContainer variant="primary" size="32" onClick={onClose}>
+          <ButtonText>Close</ButtonText>
+        </ButtonContainer>
+      </Dialog.Actions>
+
+      <Dialog.Root open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <Dialog.Portal>
+          <Dialog.Backdrop />
+          <Dialog.Popup size="m">
+            <Dialog.Title>Remove {name}?</Dialog.Title>
+            <Dialog.Description>
+              This deletes the source configuration and stored credentials from this workspace.
+              You can reinstall later, but you'll need to re-supply any secrets.
+            </Dialog.Description>
+            <Dialog.Actions>
+              <ButtonContainer
+                variant="secondary"
+                size="32"
+                onClick={() => setConfirmOpen(false)}
+                disabled={deleting}
+              >
+                <ButtonText>Cancel</ButtonText>
+              </ButtonContainer>
+              <ButtonContainer
+                variant="primary"
+                size="32"
+                onClick={() => void onDelete()}
+                disabled={deleting}
+              >
+                {deleting ? <ButtonIcon name="Loader" /> : null}
+                <ButtonText>{deleting ? 'Removing…' : 'Remove'}</ButtonText>
+              </ButtonContainer>
+            </Dialog.Actions>
+          </Dialog.Popup>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </>
   )
 }
 
 function Bindings({ source }: { source: Source }) {
   return (
-    <div className={styles.card}>
-      <div className={styles.cardTitle}>
-        <Typography.HeadingXSmall as="h2">Configuration</Typography.HeadingXSmall>
-      </div>
-      <div className={styles.cardList}>
-        {source.variables.length === 0 && source.secrets.length === 0 ? (
-          <Typography.BodySmall variant="tertiary">No bindings recorded.</Typography.BodySmall>
-        ) : null}
-        {source.variables.map((v) => (
-          <div key={`var:${v.key}`} className={styles.keyValue}>
-            <span className={styles.keyLabel}>{v.key}</span>
-            <span className={styles.keyValueText}>{v.value || '—'}</span>
-          </div>
-        ))}
-        {source.secrets.map((s) => (
-          <div key={`sec:${s.key}`} className={styles.keyValue}>
-            <span className={styles.keyLabel}>{s.key}</span>
-            <span className={styles.keyValueText}>•••••••• (secret)</span>
-          </div>
-        ))}
-      </div>
-    </div>
+    <section className={styles.section}>
+      <Typography.HeadingXSmall as="h3">Configuration</Typography.HeadingXSmall>
+      {source.variables.length === 0 && source.secrets.length === 0 ? (
+        <Typography.BodySmall variant="tertiary">No bindings recorded.</Typography.BodySmall>
+      ) : (
+        <div className={styles.bindingList}>
+          {source.variables.map((v) => (
+            <div key={`var:${v.key}`} className={styles.keyValue}>
+              <span className={styles.keyLabel}>{v.key}</span>
+              <span className={styles.keyValueText}>{v.value || '—'}</span>
+            </div>
+          ))}
+          {source.secrets.map((s) => (
+            <div key={`sec:${s.key}`} className={styles.keyValue}>
+              <span className={styles.keyLabel}>{s.key}</span>
+              <span className={styles.keyValueText}>•••••••• (secret)</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -180,13 +247,18 @@ function Validation({
   onValidate: () => void
 }) {
   return (
-    <div className={styles.card}>
-      <div className={styles.cardTitle}>
-        <Typography.HeadingXSmall as="h2">Connection</Typography.HeadingXSmall>
-        <Button.Container variant="secondary" size="32" onClick={onValidate} disabled={state.kind === 'busy'}>
-          <Button.Icon name={state.kind === 'busy' ? 'Loader' : 'RefreshCw'} />
-          <Button.Text>{state.kind === 'busy' ? 'Validating…' : 'Validate'}</Button.Text>
-        </Button.Container>
+    <section className={styles.section}>
+      <div className={styles.sectionHead}>
+        <Typography.HeadingXSmall as="h3">Connection</Typography.HeadingXSmall>
+        <ButtonContainer
+          variant="secondary"
+          size="32"
+          onClick={onValidate}
+          disabled={state.kind === 'busy'}
+        >
+          <ButtonIcon name={state.kind === 'busy' ? 'Loader' : 'RefreshCw'} />
+          <ButtonText>{state.kind === 'busy' ? 'Validating…' : 'Validate'}</ButtonText>
+        </ButtonContainer>
       </div>
       {state.kind === 'idle' ? (
         <Typography.BodySmall variant="tertiary">
@@ -208,68 +280,16 @@ function Validation({
           </Typography.BodySmall>
         </div>
       ) : (
-        <div className={styles.errorBox}>
-          <Icon name="CircleAlert" size="16" color="error" />
-          <Typography.BodySmall variant="primary">{state.message}</Typography.BodySmall>
+        <div className={styles.alertError}>
+          <Icon name="CircleAlert" size="14" color="inherit" />
+          <Typography.BodySmall>{state.message}</Typography.BodySmall>
         </div>
       )}
-    </div>
-  )
-}
-
-function DeleteCard({
-  name,
-  confirm,
-  deleting,
-  onArm,
-  onCancel,
-  onConfirm,
-}: {
-  name: string
-  confirm: boolean
-  deleting: boolean
-  onArm: () => void
-  onCancel: () => void
-  onConfirm: () => void
-}) {
-  if (!confirm) {
-    return (
-      <div className={styles.card}>
-        <div className={styles.cardTitle}>
-          <Typography.HeadingXSmall as="h2">Remove</Typography.HeadingXSmall>
-          <Button.Container variant="secondary" size="32" onClick={onArm}>
-            <Button.Icon name="X" />
-            <Button.Text>Remove source</Button.Text>
-          </Button.Container>
-        </div>
-        <Typography.BodySmall variant="tertiary">
-          Deletes the source configuration and stored credentials from this workspace.
-        </Typography.BodySmall>
-      </div>
-    )
-  }
-  return (
-    <div className={styles.deleteCard}>
-      <Typography.BodyStrong as="span">Remove {name}?</Typography.BodyStrong>
-      <Typography.BodySmall variant="primary">
-        This deletes the source and its stored credentials. You can reinstall later, but you'll need to
-        re-supply any secrets.
-      </Typography.BodySmall>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <Button.Container variant="secondary" size="32" onClick={onCancel} disabled={deleting}>
-          <Button.Text>Cancel</Button.Text>
-        </Button.Container>
-        <Button.Container variant="primary" size="32" onClick={onConfirm} disabled={deleting}>
-          <Button.Icon name={deleting ? 'Loader' : 'X'} />
-          <Button.Text>{deleting ? 'Removing…' : 'Remove'}</Button.Text>
-        </Button.Container>
-      </div>
-    </div>
+    </section>
   )
 }
 
 function originLabel(origin: number): SourceOriginLabel {
-  // Mirrors the conversion in lib/sources but keeps this component self-contained.
   if (origin === 1) return 'bundled'
   if (origin === 2) return 'imported'
   return 'unknown'

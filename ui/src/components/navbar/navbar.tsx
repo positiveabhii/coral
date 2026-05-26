@@ -15,7 +15,7 @@ const NAV_ITEMS: { icon: IconName; label: string; target: Route; matches: Route[
     icon: 'Plug',
     label: 'Sources',
     target: { kind: 'sources' },
-    matches: ['sources', 'source-detail'],
+    matches: ['sources'],
   },
 ]
 

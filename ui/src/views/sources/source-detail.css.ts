@@ -2,84 +2,84 @@ import { style } from '@vanilla-extract/css'
 
 import { theme } from '@/wax/theme/theme.css'
 
-export const root = style({
+export const header = style({
+  alignItems: 'flex-start',
   display: 'flex',
-  flexDirection: 'column',
-  height: '100%',
-  minHeight: 0,
+  gap: 12,
 })
 
-export const titleRow = style({
+export const headerLogo = style({
+  alignItems: 'center',
+  background: theme.surface.onMainContent,
+  borderRadius: '50%',
+  display: 'flex',
+  flexShrink: 0,
+  height: 40,
+  justifyContent: 'center',
+  overflow: 'hidden',
+  width: 40,
+})
+
+export const headerLogoImg = style({
+  height: 24,
+  objectFit: 'contain',
+  width: 24,
+})
+
+export const headerText = style({
+  display: 'flex',
+  flexDirection: 'column',
+  flexGrow: 1,
+  gap: 4,
+  minWidth: 0,
+})
+
+export const headerTitleRow = style({
   alignItems: 'center',
   display: 'flex',
   gap: 10,
+  marginInlineEnd: 24,
 })
 
-export const titleIcon = style({
+export const headerTitle = style({
+  textTransform: 'capitalize',
+})
+
+export const headerPill = style({
   alignItems: 'center',
   background: theme.surface.onMainContent,
-  borderRadius: 8,
-  display: 'flex',
-  flexShrink: 0,
-  height: 32,
-  justifyContent: 'center',
-  overflow: 'hidden',
-  width: 32,
-})
-
-export const titleIconImg = style({
-  height: 22,
-  objectFit: 'contain',
-  width: 22,
-})
-
-export const originBadge = style({
-  background: theme.surface.onMainContent,
   border: `1px solid ${theme.stroke.secondary}`,
-  borderRadius: 6,
+  borderRadius: 999,
   color: theme.content.secondary,
+  display: 'inline-flex',
   fontSize: 11,
   fontWeight: 600,
-  letterSpacing: '0.04em',
-  padding: '3px 8px',
+  letterSpacing: '0.02em',
+  padding: '2px 8px',
   textTransform: 'uppercase',
 })
 
-export const body = style({
+export const section = style({
   display: 'flex',
   flexDirection: 'column',
-  gap: 20,
-  overflow: 'auto',
-  padding: 24,
+  gap: 8,
 })
 
-export const grid = style({
-  display: 'grid',
-  gap: 16,
-  gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-})
-
-export const card = style({
-  background: theme.surface.card,
-  border: `1px solid ${theme.stroke.secondary}`,
-  borderRadius: 10,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-  padding: 16,
-})
-
-export const cardTitle = style({
+export const sectionHead = style({
   alignItems: 'center',
   display: 'flex',
   gap: 8,
   justifyContent: 'space-between',
 })
 
-export const cardList = style({
+export const bindingList = style({
+  background: theme.surface.onMainContent,
+  border: `1px solid ${theme.stroke.secondary}`,
+  borderRadius: 8,
   display: 'flex',
   flexDirection: 'column',
-  gap: 8,
+  gap: 6,
+  padding: 12,
 })
 
 export const keyValue = style({
@@ -109,7 +109,7 @@ export const validateBox = style({
   borderRadius: 8,
   display: 'flex',
   flexDirection: 'column',
-  gap: 8,
+  gap: 6,
   padding: 12,
 })
 
@@ -119,24 +119,16 @@ export const validateRow = style({
   gap: 8,
 })
 
-export const errorBox = style({
-  alignItems: 'flex-start',
+export const alertError = style({
+  alignItems: 'center',
   background: theme.pill.red.background,
   border: `1px solid ${theme.pill.red.stroke}`,
-  borderRadius: 8,
+  borderRadius: 6,
   color: theme.pill.red.color,
   display: 'flex',
+  fontSize: 12,
   gap: 8,
-  padding: 10,
-})
-
-export const deleteCard = style({
-  background: theme.pill.red.background,
-  border: `1px solid ${theme.pill.red.stroke}`,
-  borderRadius: 10,
-  color: theme.pill.red.color,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 12,
-  padding: 16,
+  lineHeight: '16px',
+  paddingBlock: 8,
+  paddingInline: 12,
 })

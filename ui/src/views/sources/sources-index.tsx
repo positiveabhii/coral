@@ -7,7 +7,6 @@ import { Typography } from '@/wax/components/typography'
 
 import { ErrorBanner } from '@/components/error-banner'
 import { providerIcon } from '@/lib/provider-icons'
-import { useRouter } from '@/lib/router'
 import {
   discoverBundled,
   listInstalledSources,
@@ -15,6 +14,7 @@ import {
   type InstalledSource,
 } from '@/lib/sources'
 
+import { SourceDetailDialog } from './source-detail'
 import { SourceInstallDialog } from './source-install'
 import * as styles from './sources-index.css'
 
@@ -23,12 +23,12 @@ interface IndexEntry extends CatalogEntry {
 }
 
 export function SourcesIndex() {
-  const { navigate } = useRouter()
   const [bundled, setBundled] = useState<CatalogEntry[] | null>(null)
   const [installed, setInstalled] = useState<InstalledSource[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [installingName, setInstallingName] = useState<string | null>(null)
+  const [detailName, setDetailName] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -74,7 +74,7 @@ export function SourcesIndex() {
 
   const onPick = (entry: IndexEntry) => {
     if (entry.installed) {
-      navigate({ route: { kind: 'source-detail', name: entry.name } })
+      setDetailName(entry.name)
     } else {
       setInstallingName(entry.name)
     }
@@ -84,10 +84,15 @@ export function SourcesIndex() {
     (name: string) => {
       setInstallingName(null)
       void refresh()
-      navigate({ route: { kind: 'source-detail', name } })
+      setDetailName(name)
     },
-    [navigate, refresh],
+    [refresh],
   )
+
+  const onRemoved = useCallback(() => {
+    setDetailName(null)
+    void refresh()
+  }, [refresh])
 
   return (
     <div className={styles.root}>
@@ -171,6 +176,15 @@ export function SourcesIndex() {
           if (!open) setInstallingName(null)
         }}
         onInstalled={onInstalled}
+      />
+
+      <SourceDetailDialog
+        name={detailName}
+        open={detailName !== null}
+        onOpenChange={(open) => {
+          if (!open) setDetailName(null)
+        }}
+        onRemoved={onRemoved}
       />
     </div>
   )

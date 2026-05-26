@@ -1,9 +1,6 @@
 import { useCallback, useSyncExternalStore } from 'react'
 
-export type Route =
-  | { kind: 'traces' }
-  | { kind: 'sources' }
-  | { kind: 'source-detail'; name: string }
+export type Route = { kind: 'traces' } | { kind: 'sources' }
 
 export interface ParsedLocation {
   route: Route
@@ -14,9 +11,6 @@ function parseHash(): ParsedLocation {
   const segments = raw.split('?')[0].split('/').filter(Boolean)
 
   if (segments[0] === 'sources') {
-    if (segments[1] === 'detail' && segments[2]) {
-      return { route: { kind: 'source-detail', name: decodeURIComponent(segments[2]) } }
-    }
     return { route: { kind: 'sources' } }
   }
 
@@ -28,10 +22,8 @@ function parseHash(): ParsedLocation {
 }
 
 function serialise(parsed: ParsedLocation): string {
-  const r = parsed.route
-  if (r.kind === 'traces') return '#/traces'
-  if (r.kind === 'sources') return '#/sources'
-  return `#/sources/detail/${encodeURIComponent(r.name)}`
+  if (parsed.route.kind === 'traces') return '#/traces'
+  return '#/sources'
 }
 
 let cachedLocation: ParsedLocation = parseHash()
