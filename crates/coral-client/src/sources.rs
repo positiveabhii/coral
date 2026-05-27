@@ -306,6 +306,10 @@ mod tests {
     use super::*;
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "test fixture is intentionally verbose"
+    )]
     fn manifest_input_from_proto_preserves_credential_methods() {
         let input = SourceInputSpec {
             key: "API_TOKEN".to_string(),
