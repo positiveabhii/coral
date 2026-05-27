@@ -19,10 +19,10 @@ manual token handling required.
 ### Register the source
 
 ```bash
-coral source add --file sources/community/clickhouse_mcp/manifest.yaml --interactive
+coral source add --file sources/community/clickhouse_cloud/manifest.yaml --interactive
 ```
 
-When prompted for `MCP_ACCESS_TOKEN`, choose **Connect with ClickHouse
+When prompted for `CLICKHOUSE_ACCESS_TOKEN`, choose **Connect with ClickHouse
 Cloud**. Coral binds a loopback callback on port 53683, opens your browser
 to ClickHouse's authorization page, exchanges the resulting code for an
 access token, and stores it as the source's secret. The catalog prints
@@ -31,7 +31,7 @@ immediately after.
 ### Verify
 
 ```bash
-coral sql "SELECT id, name FROM clickhouse_mcp.organizations"
+coral sql "SELECT id, name FROM clickhouse_cloud.organizations"
 ```
 
 You should see your accessible ClickHouse Cloud organizations.
@@ -89,7 +89,7 @@ you'll get a clear error rather than a runaway scan.
 All functions require **named arguments**, not positional:
 
 ```sql
-SELECT * FROM clickhouse_mcp.run_select_query(
+SELECT * FROM clickhouse_cloud.run_select_query(
   query => 'SELECT 1',
   service_id => '...'
 )
@@ -124,29 +124,29 @@ organizations.id
 
 ```bash
 # 1. Register the source (browser opens automatically for OAuth)
-coral source add --file sources/community/clickhouse_mcp/manifest.yaml --interactive
+coral source add --file sources/community/clickhouse_cloud/manifest.yaml --interactive
 
 # 2. List orgs
-coral sql "SELECT id, name FROM clickhouse_mcp.organizations"
+coral sql "SELECT id, name FROM clickhouse_cloud.organizations"
 
 # 3. List services in an org
 coral sql "
   SELECT id, name, provider, region, state, \"clickhouseVersion\"
-  FROM clickhouse_mcp.services
+  FROM clickhouse_cloud.services
   WHERE organization_id = '<org-id>'
 "
 
 # 4. List databases in a service
 coral sql "
   SELECT name
-  FROM clickhouse_mcp.databases
+  FROM clickhouse_cloud.databases
   WHERE service_id = '<service-id>'
 "
 
 # 5. List tables in a database
 coral sql "
   SELECT name, engine, primary_key
-  FROM clickhouse_mcp.tables
+  FROM clickhouse_cloud.tables
   WHERE service_id = '<service-id>' AND database_filter = 'default'
   LIMIT 20
 "
@@ -154,7 +154,7 @@ coral sql "
 # 6. Run SQL against the service
 coral sql "
   SELECT row
-  FROM clickhouse_mcp.run_select_query(
+  FROM clickhouse_cloud.run_select_query(
     query => 'SELECT version() AS v, currentDatabase() AS db',
     service_id => '<service-id>'
   )
@@ -163,7 +163,7 @@ coral sql "
 # 7. Inspect a single service
 coral sql "
   SELECT id, name, region, \"clickhouseVersion\", \"numReplicas\"
-  FROM clickhouse_mcp.get_service_details(
+  FROM clickhouse_cloud.get_service_details(
     organization_id => '<org-id>',
     service_id => '<service-id>'
   )
@@ -172,7 +172,7 @@ coral sql "
 # 8. Aggregate costs
 coral sql "
   SELECT SUM(json_get_float(row, 'totalCHC')) AS total
-  FROM clickhouse_mcp.organization_costs
+  FROM clickhouse_cloud.organization_costs
   WHERE organization_id = '<org-id>'
     AND from_date = '2026-04-01'
     AND to_date = '2026-05-01'
@@ -188,7 +188,7 @@ The Cloud API returns camelCase fields (`clickhouseVersion`, `sizeInBytes`,
 identifiers, so you must double-quote them in SQL:
 
 ```sql
-SELECT "sizeInBytes" FROM clickhouse_mcp.service_backups WHERE ...
+SELECT "sizeInBytes" FROM clickhouse_cloud.service_backups WHERE ...
 ```
 
 snake_case columns from the manifest (`organization_id`, `service_id`,
@@ -198,10 +198,10 @@ snake_case columns from the manifest (`organization_id`, `service_id`,
 
 ```sql
 -- WRONG: errors with "requires named arguments"
-SELECT * FROM clickhouse_mcp.run_select_query('SELECT 1', '<id>')
+SELECT * FROM clickhouse_cloud.run_select_query('SELECT 1', '<id>')
 
 -- RIGHT
-SELECT * FROM clickhouse_mcp.run_select_query(
+SELECT * FROM clickhouse_cloud.run_select_query(
   query => 'SELECT 1',
   service_id => '<id>'
 )
@@ -216,7 +216,7 @@ ClickHouse SQL query. To project a specific field:
 SELECT
   json_get_str(row, 'name')   AS name,
   json_get_str(row, 'engine') AS engine
-FROM clickhouse_mcp.run_select_query(
+FROM clickhouse_cloud.run_select_query(
   query => 'SELECT name, engine FROM system.tables LIMIT 10',
   service_id => '<id>'
 )
