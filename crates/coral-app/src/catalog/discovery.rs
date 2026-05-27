@@ -223,7 +223,7 @@ impl CatalogDiscovery {
         pagination: Pagination,
     ) -> Result<Page<CatalogSearchResult>, QueryManagerError> {
         let regex = compile_metadata_regex(pattern, ignore_case).map_err(QueryManagerError::App)?;
-        let matches = self
+        let mut matches = self
             .catalog_items(workspace_name, schema_name, kind)
             .await?
             .into_iter()
@@ -234,7 +234,8 @@ impl CatalogDiscovery {
                     matched_fields,
                 })
             })
-            .collect();
+            .collect::<Vec<_>>();
+        sort_catalog_search_results(&mut matches, &regex);
         Ok(page_items(matches, pagination))
     }
 
@@ -379,6 +380,62 @@ fn catalog_item_sort_key(item: &CatalogItem) -> (&str, &str, &'static str) {
             &function.function_name,
             "table_function",
         ),
+    }
+}
+
+fn sort_catalog_search_results(matches: &mut [CatalogSearchResult], regex: &Regex) {
+    matches.sort_by(|left, right| {
+        catalog_search_relevance(right, regex)
+            .cmp(&catalog_search_relevance(left, regex))
+            .then_with(|| {
+                catalog_item_sort_key(&left.item).cmp(&catalog_item_sort_key(&right.item))
+            })
+    });
+}
+
+fn catalog_search_relevance(result: &CatalogSearchResult, regex: &Regex) -> (usize, u16, u16) {
+    let best_identifier_match_len = regex
+        .find_iter(catalog_item_bare_name(&result.item))
+        .map(|matched| matched.len())
+        .max()
+        .unwrap_or_default();
+    let best_field_weight = result
+        .matched_fields
+        .iter()
+        .copied()
+        .map(catalog_field_weight)
+        .max()
+        .unwrap_or_default();
+    let total_field_weight = result
+        .matched_fields
+        .iter()
+        .copied()
+        .map(catalog_field_weight)
+        .sum();
+    (
+        best_identifier_match_len,
+        best_field_weight,
+        total_field_weight,
+    )
+}
+
+fn catalog_item_bare_name(item: &CatalogItem) -> &str {
+    match item {
+        CatalogItem::Table(table) => &table.table_name,
+        CatalogItem::TableFunction(function) => &function.function_name,
+    }
+}
+
+fn catalog_field_weight(field: CatalogMetadataField) -> u16 {
+    match field {
+        CatalogMetadataField::TableName | CatalogMetadataField::FunctionName => 100,
+        CatalogMetadataField::Name => 90,
+        CatalogMetadataField::SchemaName => 60,
+        CatalogMetadataField::RequiredFilters
+        | CatalogMetadataField::Arguments
+        | CatalogMetadataField::ResultColumns => 45,
+        CatalogMetadataField::Description => 25,
+        CatalogMetadataField::Guide => 10,
     }
 }
 
@@ -611,7 +668,10 @@ pub(crate) fn page_items<T>(items: Vec<T>, pagination: Pagination) -> Page<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CatalogMetadataField, compile_metadata_regex, table_matched_fields};
+    use super::{
+        CatalogItem, CatalogMetadataField, CatalogSearchResult, compile_metadata_regex,
+        sort_catalog_search_results, table_matched_fields,
+    };
     use coral_engine::TableInfo;
 
     fn table(required_filters: Vec<String>) -> TableInfo {
@@ -625,6 +685,33 @@ mod tests {
         }
     }
 
+    fn table_result(
+        schema_name: &str,
+        table_name: &str,
+        matched_fields: Vec<CatalogMetadataField>,
+    ) -> CatalogSearchResult {
+        CatalogSearchResult {
+            item: CatalogItem::Table(TableInfo {
+                schema_name: schema_name.to_string(),
+                table_name: table_name.to_string(),
+                description: String::new(),
+                guide: String::new(),
+                columns: Vec::new(),
+                required_filters: Vec::new(),
+            }),
+            matched_fields,
+        }
+    }
+
+    fn result_name(result: &CatalogSearchResult) -> String {
+        match &result.item {
+            CatalogItem::Table(table) => format!("{}.{}", table.schema_name, table.table_name),
+            CatalogItem::TableFunction(function) => {
+                format!("{}.{}", function.schema_name, function.function_name)
+            }
+        }
+    }
+
     #[test]
     fn required_filters_match_each_filter_independently() {
         let summary = table(vec!["owner".to_string(), "repo".to_string()]);
@@ -635,6 +722,57 @@ mod tests {
         );
         assert!(
             table_matched_fields(&summary, &regex::Regex::new("r.r").expect("regex")).is_empty()
+        );
+    }
+
+    #[test]
+    fn catalog_search_ranks_identifier_matches_before_weak_metadata_matches() {
+        let mut results = vec![
+            table_result("datadog", "dashboards", vec![CatalogMetadataField::Guide]),
+            table_result("github", "zebra", vec![CatalogMetadataField::SchemaName]),
+            table_result(
+                "github",
+                "enterprise_teams",
+                vec![
+                    CatalogMetadataField::SchemaName,
+                    CatalogMetadataField::TableName,
+                    CatalogMetadataField::Name,
+                    CatalogMetadataField::Description,
+                    CatalogMetadataField::Guide,
+                    CatalogMetadataField::RequiredFilters,
+                ],
+            ),
+            table_result(
+                "github",
+                "pulls",
+                vec![
+                    CatalogMetadataField::SchemaName,
+                    CatalogMetadataField::TableName,
+                    CatalogMetadataField::Name,
+                ],
+            ),
+            table_result("github", "attempts", vec![CatalogMetadataField::Guide]),
+            table_result(
+                "jira",
+                "pulls",
+                vec![CatalogMetadataField::TableName, CatalogMetadataField::Name],
+            ),
+        ];
+
+        let regex = regex::Regex::new("github|pull|review|pr").expect("regex");
+        sort_catalog_search_results(&mut results, &regex);
+
+        let names = results.iter().map(result_name).collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "github.pulls",
+                "jira.pulls",
+                "github.enterprise_teams",
+                "github.zebra",
+                "datadog.dashboards",
+                "github.attempts",
+            ]
         );
     }
 

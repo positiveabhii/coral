@@ -37,7 +37,7 @@ Use this as the Coral entrypoint for external context. Query Coral before answer
 - Use each table's `sql_reference`; write `github.pulls` or `"github"."pulls"`, not `"github.pulls"`.
 - Use each table function's `sql_call_example`, filling in required arguments before querying it.
 - Use the `sql` result's `row_count` and `columns` before issuing extra count or schema-discovery calls. Treat `row_count` as rows returned by the statement, not total rows beyond a `LIMIT`.
-- Keep metadata discovery bounded: prefer compact catalog summaries, focused `search_catalog` patterns, `search_columns` for cross-table field discovery, `describe_table`, and filtered `list_columns`; add `LIMIT` when reading broad metadata directly.
+- Keep metadata discovery bounded: prefer compact catalog summaries, focused `search_catalog` patterns, `search_columns` for cross-table field discovery, `describe_table`, and filtered `list_columns`; `search_catalog` ranks strong identifier matches first, so inspect early hits before broadening the search. Add `LIMIT` when reading broad metadata directly.
 - Virtual columns are filter-only and return `NULL`; check `is_virtual`.
 - Required filters must appear in `WHERE`; inspect `required_filters` and `is_required_filter`.
 - Secret inputs always return `value = NULL`; use `is_set`.

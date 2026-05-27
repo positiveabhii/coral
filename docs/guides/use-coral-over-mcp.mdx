@@ -45,6 +45,7 @@ Agents should treat the discovery tools as catalog helpers, not as replacement p
 **`search_catalog`**: deterministic regex matching over database catalog metadata.
 
 - Arguments: required `pattern` plus optional `schema`, `kind`, `detail`, `ignore_case`, `limit`, `offset`.
+- Results are ranked before pagination. Matches on exact catalog identifiers such as table or function names appear ahead of weaker prose matches in descriptions, guides, arguments, or result columns.
 - The default `detail: "summary"` is intended for normal agent discovery. Use `detail: "full"` only for small result sets.
 - `limit` accepts `1` through `50`.
 

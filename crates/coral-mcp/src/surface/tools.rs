@@ -488,7 +488,7 @@ fn sql_tool_description() -> &'static str {
 }
 
 fn search_catalog_description() -> &'static str {
-    "Search compact database catalog summaries for currently configured sources with a Rust regex. Use this before list_catalog when you know the entity or task; use detail='full' only for small result sets."
+    "Search compact database catalog summaries for currently configured sources with a Rust regex. Strong identifier matches are ranked first. Use this before list_catalog when you know the entity or task; use detail='full' only for small result sets."
 }
 
 fn sql_output_schema() -> Arc<Map<String, Value>> {
