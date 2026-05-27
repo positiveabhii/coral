@@ -1,8 +1,8 @@
 //! Source-related client-side transport decoding helpers.
 
 use coral_api::v1::{
-    OAuthAuthorizationCodeCredentialMethod, OAuthCredentialTokenRequestBodyFormat,
-    OauthCredentialClientSecretTransport, OauthCredentialPkceMode,
+    OAuthCredentialMethod, OAuthCredentialTokenRequestBodyFormat,
+    OauthCredentialClientSecretTransport, OauthCredentialFlowType, OauthCredentialPkceMode,
     OauthCredentialRedirectUriPortMode, OauthCredentialScopeDelimiter, SourceCredential,
     SourceCredentialMethod, SourceInputSpec,
     source_credential_method::Method as ProtoCredentialMethod,
@@ -33,6 +33,9 @@ pub enum SourceInputDecodeError {
     /// The OAuth PKCE mode was missing or unknown.
     #[error("unknown oauth pkce mode")]
     UnknownOAuthPkceMode,
+    /// The OAuth flow type was unknown.
+    #[error("unknown oauth flow type")]
+    UnknownOAuthFlowType,
     /// The OAuth redirect URI port mode was missing or unknown.
     #[error("unknown oauth redirect URI port mode")]
     UnknownOAuthRedirectUriPortMode,
@@ -118,9 +121,9 @@ fn credential_method_from_proto(
         Some(ProtoCredentialMethod::SourceConfig(_)) => {
             (ManifestCredentialMethodKind::SourceConfig, None)
         }
-        Some(ProtoCredentialMethod::OauthAuthorizationCode(oauth)) => (
+        Some(ProtoCredentialMethod::Oauth(oauth)) => (
             ManifestCredentialMethodKind::OAuth,
-            Some(oauth_authorization_code_from_proto(oauth)?),
+            Some(oauth_from_proto(oauth)?),
         ),
         None => return Err(SourceInputDecodeError::MissingCredentialMethod),
     };
@@ -132,8 +135,8 @@ fn credential_method_from_proto(
     })
 }
 
-fn oauth_authorization_code_from_proto(
-    oauth: &OAuthAuthorizationCodeCredentialMethod,
+fn oauth_from_proto(
+    oauth: &OAuthCredentialMethod,
 ) -> Result<ManifestOAuthCredentialSpec, SourceInputDecodeError> {
     let endpoints = oauth
         .endpoints
@@ -146,12 +149,15 @@ fn oauth_authorization_code_from_proto(
         .and_then(oauth_client_from_proto)?;
     Ok(ManifestOAuthCredentialSpec {
         flow: ManifestOAuthFlowSpec {
-            kind: ManifestOAuthFlowKind::AuthorizationCode,
+            kind: oauth_flow_kind_from_proto(oauth.flow)?,
             pkce: oauth_pkce_from_proto(oauth.pkce)?,
         },
-        redirect_uri: oauth.redirect_uri.clone(),
+        redirect_uri: (!oauth.redirect_uri.is_empty()).then(|| oauth.redirect_uri.clone()),
         redirect_uri_port_mode: redirect_uri_port_mode_from_proto(oauth.redirect_uri_port_mode)?,
-        authorization_url: endpoints.authorization_url.clone(),
+        authorization_url: (!endpoints.authorization_url.is_empty())
+            .then(|| endpoints.authorization_url.clone()),
+        device_authorization_url: (!endpoints.device_authorization_url.is_empty())
+            .then(|| endpoints.device_authorization_url.clone()),
         token_url: endpoints.token_url.clone(),
         token_request: oauth
             .token_request
@@ -166,6 +172,17 @@ fn oauth_authorization_code_from_proto(
             .map(oauth_scopes_from_proto)
             .transpose()?,
     })
+}
+
+fn oauth_flow_kind_from_proto(flow: i32) -> Result<ManifestOAuthFlowKind, SourceInputDecodeError> {
+    match OauthCredentialFlowType::try_from(flow) {
+        Ok(OauthCredentialFlowType::AuthorizationCode) => {
+            Ok(ManifestOAuthFlowKind::AuthorizationCode)
+        }
+        Ok(OauthCredentialFlowType::DeviceCode) => Ok(ManifestOAuthFlowKind::DeviceCode),
+        Ok(OauthCredentialFlowType::Unspecified) => Ok(ManifestOAuthFlowKind::AuthorizationCode),
+        Err(_) => Err(SourceInputDecodeError::UnknownOAuthFlowType),
+    }
 }
 
 fn oauth_pkce_from_proto(pkce: i32) -> Result<ManifestOAuthPkceMode, SourceInputDecodeError> {
@@ -295,10 +312,9 @@ mod tests {
     )]
 
     use coral_api::v1::{
-        OAuthAuthorizationCodeCredentialMethod, OAuthCredentialClient, OAuthCredentialClientId,
-        OAuthCredentialEndpoints, OAuthCredentialTokenRequest,
-        OAuthCredentialTokenRequestBodyFormat, OAuthCredentialTokenRequestHeader,
-        SourceConfigCredentialMethod, SourceSecretInput,
+        OAuthCredentialClient, OAuthCredentialClientId, OAuthCredentialEndpoints,
+        OAuthCredentialMethod, OAuthCredentialTokenRequest, OAuthCredentialTokenRequestBodyFormat,
+        OAuthCredentialTokenRequestHeader, SourceConfigCredentialMethod, SourceSecretInput,
         source_credential_method::Method as ProtoCredentialMethod,
         source_input_spec::Input as ProtoSourceInput,
     };
@@ -321,8 +337,9 @@ mod tests {
                         SourceCredentialMethod {
                             label: "Connect".to_string(),
                             description: String::new(),
-                            method: Some(ProtoCredentialMethod::OauthAuthorizationCode(
-                                OAuthAuthorizationCodeCredentialMethod {
+                            method: Some(ProtoCredentialMethod::Oauth(Box::new(
+                                OAuthCredentialMethod {
+                                    flow: OauthCredentialFlowType::AuthorizationCode as i32,
                                     pkce: OauthCredentialPkceMode::Required as i32,
                                     redirect_uri: "http://127.0.0.1:53682/oauth/callback"
                                         .to_string(),
@@ -332,6 +349,7 @@ mod tests {
                                                 .to_string(),
                                         token_url: "https://provider.example.com/oauth/token"
                                             .to_string(),
+                                        device_authorization_url: String::new(),
                                     }),
                                     client: Some(OAuthCredentialClient {
                                         id: Some(OAuthCredentialClientId {
@@ -351,7 +369,7 @@ mod tests {
                                     }),
                                     scopes: None,
                                 },
-                            )),
+                            ))),
                         },
                         SourceCredentialMethod {
                             label: "Paste token".to_string(),
@@ -405,6 +423,15 @@ mod tests {
                 .oauth
                 .as_ref()
                 .expect("oauth")
+                .authorization_url
+                .as_deref(),
+            Some("https://provider.example.com/oauth/authorize")
+        );
+        assert_eq!(
+            credential.methods[0]
+                .oauth
+                .as_ref()
+                .expect("oauth")
                 .client
                 .id
                 .default
@@ -417,7 +444,10 @@ mod tests {
         );
     }
 
-    fn source_input_with_oauth_pkce(pkce: OauthCredentialPkceMode) -> SourceInputSpec {
+    fn source_input_with_oauth_flow(
+        flow: OauthCredentialFlowType,
+        pkce: OauthCredentialPkceMode,
+    ) -> SourceInputSpec {
         SourceInputSpec {
             key: "API_TOKEN".to_string(),
             required: true,
@@ -427,8 +457,9 @@ mod tests {
                     methods: vec![SourceCredentialMethod {
                         label: "Connect".to_string(),
                         description: String::new(),
-                        method: Some(ProtoCredentialMethod::OauthAuthorizationCode(
-                            OAuthAuthorizationCodeCredentialMethod {
+                        method: Some(ProtoCredentialMethod::Oauth(Box::new(
+                            OAuthCredentialMethod {
+                                flow: flow as i32,
                                 pkce: pkce as i32,
                                 redirect_uri: "http://127.0.0.1:53682/oauth/callback".to_string(),
                                 endpoints: Some(OAuthCredentialEndpoints {
@@ -436,6 +467,7 @@ mod tests {
                                         "https://provider.example.com/oauth/authorize".to_string(),
                                     token_url: "https://provider.example.com/oauth/token"
                                         .to_string(),
+                                    device_authorization_url: String::new(),
                                 }),
                                 client: Some(OAuthCredentialClient {
                                     id: Some(OAuthCredentialClientId {
@@ -449,11 +481,28 @@ mod tests {
                                 token_request: None,
                                 scopes: None,
                             },
-                        )),
+                        ))),
                     }],
                 }),
             })),
         }
+    }
+
+    #[test]
+    fn manifest_input_from_proto_defaults_unspecified_oauth_flow_type_to_authorization_code() {
+        let input = source_input_with_oauth_flow(
+            OauthCredentialFlowType::Unspecified,
+            OauthCredentialPkceMode::Required,
+        );
+
+        let input = manifest_input_from_proto(&input).expect("legacy oauth flow should decode");
+        let oauth = input
+            .credential
+            .and_then(|credential| credential.methods.into_iter().next())
+            .and_then(|method| method.oauth)
+            .expect("oauth method");
+
+        assert_eq!(oauth.flow.kind, ManifestOAuthFlowKind::AuthorizationCode);
     }
 
     #[test]
@@ -472,7 +521,10 @@ mod tests {
 
     #[test]
     fn manifest_input_from_proto_rejects_unspecified_oauth_pkce_mode() {
-        let input = source_input_with_oauth_pkce(OauthCredentialPkceMode::Unspecified);
+        let input = source_input_with_oauth_flow(
+            OauthCredentialFlowType::AuthorizationCode,
+            OauthCredentialPkceMode::Unspecified,
+        );
 
         let error = manifest_input_from_proto(&input).expect_err("unspecified pkce should fail");
 
