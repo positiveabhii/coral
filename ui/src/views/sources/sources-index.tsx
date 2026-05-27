@@ -261,7 +261,11 @@ function SourceCard({ entry, onClick }: { entry: IndexEntry; onClick: () => void
         <Typography.BodyLargeStrong as="span" className={styles.cardTitle}>
           {entry.name}
         </Typography.BodyLargeStrong>
-        <span className={styles.originPill}>Core</span>
+        {entry.origin === 'imported' ? (
+          <span className={styles.originPill}>Imported</span>
+        ) : entry.origin === 'bundled' ? (
+          <span className={styles.originPill}>Core</span>
+        ) : null}
         {entry.installed ? (
           <Tooltip content="Connected">
             <span className={styles.connectedIcon} aria-label="Connected">
