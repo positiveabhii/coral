@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
-use std::io::{IsTerminal, stdin, stdout};
+use std::io::{IsTerminal, Read as _, Write as _, stdin, stdout};
+use std::net::TcpStream;
 use std::path::Path;
+use std::thread;
+use std::time::Duration;
 
 use coral_api::CORAL_ERROR_REASON_SOURCE_NOT_FOUND;
 use coral_api::v1::{
@@ -21,6 +24,7 @@ use coral_spec::{
 use dialoguer::console::style;
 use dialoguer::{Input, Password, Select, theme::ColorfulTheme};
 use tonic::Request;
+use url::{Host, Url};
 
 const MAX_TABLES_PER_SCHEMA: usize = 9;
 
@@ -281,6 +285,7 @@ fn handle_credential_stream_event(
                 .map_or(input_key.as_str(), String::as_str);
             println!("Open this URL to connect {label}:");
             println!("{authorization_url}");
+            spawn_oauth_redirect_paste_prompt(&authorization_url, label);
             if let Err(err) = crate::browser::open_url(&authorization_url) {
                 println!("{}", style(format!("Could not open browser: {err}")).dim());
             }
@@ -984,6 +989,167 @@ fn oauth_error(action: &str, error: &tonic::Status) -> anyhow::Error {
     )
 }
 
+fn spawn_oauth_redirect_paste_prompt(authorization_url: &str, label: &str) {
+    if !stdin().is_terminal() || !stdout().is_terminal() {
+        return;
+    }
+    let expected_redirect_uri = match expected_oauth_redirect_uri(authorization_url) {
+        Ok(redirect_uri) => redirect_uri,
+        Err(error) => {
+            println!(
+                "{}",
+                style(format!("Could not enable redirect paste fallback: {error}")).dim()
+            );
+            return;
+        }
+    };
+    let label = label.to_string();
+    println!(
+        "{}",
+        style(
+            "If the browser cannot reach the localhost callback, paste the final redirect URL below."
+        )
+        .dim()
+    );
+    drop(thread::spawn(move || {
+        let theme = ColorfulTheme::default();
+        let callback_url = Input::<String>::with_theme(&theme)
+            .with_prompt("Redirect URL")
+            .allow_empty(true)
+            .interact_text();
+        match callback_url {
+            Ok(value) if !value.trim().is_empty() => {
+                match submit_oauth_redirect_url(value.trim(), &expected_redirect_uri) {
+                    Ok(()) => println!("Submitted OAuth redirect for {label}."),
+                    Err(error) => eprintln!("Could not submit OAuth redirect URL: {error}"),
+                }
+            }
+            Ok(_) => {}
+            Err(error) => eprintln!("Could not read OAuth redirect URL: {error}"),
+        }
+    }));
+}
+
+fn expected_oauth_redirect_uri(authorization_url: &str) -> Result<Url, anyhow::Error> {
+    let authorization_url = Url::parse(authorization_url)?;
+    let redirect_uri = authorization_url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "redirect_uri").then(|| value.into_owned()))
+        .ok_or_else(|| anyhow::anyhow!("authorization URL is missing redirect_uri"))?;
+    let redirect_uri = Url::parse(&redirect_uri)?;
+    validate_loopback_http_redirect(&redirect_uri)?;
+    Ok(redirect_uri)
+}
+
+fn submit_oauth_redirect_url(
+    value: &str,
+    expected_redirect_uri: &Url,
+) -> Result<(), anyhow::Error> {
+    let callback_url = Url::parse(value)?;
+    validate_oauth_redirect_url(&callback_url, expected_redirect_uri)?;
+    let response = send_loopback_get(&callback_url)?;
+    let status = response.lines().next().unwrap_or_default();
+    if !http_status_is_success(status) {
+        return Err(anyhow::anyhow!(
+            "callback listener returned unexpected response: {status}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_oauth_redirect_url(
+    callback_url: &Url,
+    expected_redirect_uri: &Url,
+) -> Result<(), anyhow::Error> {
+    validate_loopback_http_redirect(callback_url)?;
+    if callback_url.host() != expected_redirect_uri.host()
+        || callback_url.port_or_known_default() != expected_redirect_uri.port_or_known_default()
+        || callback_url.path() != expected_redirect_uri.path()
+    {
+        return Err(anyhow::anyhow!(
+            "redirect URL must match the OAuth redirect URI host, port, and path"
+        ));
+    }
+    if callback_url.query().is_none() {
+        return Err(anyhow::anyhow!("redirect URL is missing query parameters"));
+    }
+    Ok(())
+}
+
+fn validate_loopback_http_redirect(url: &Url) -> Result<(), anyhow::Error> {
+    if url.scheme() != "http" {
+        return Err(anyhow::anyhow!("redirect URL must use http"));
+    }
+    let Some(host) = url.host() else {
+        return Err(anyhow::anyhow!("redirect URL is missing host"));
+    };
+    let is_loopback = match host {
+        Host::Domain(domain) => domain.eq_ignore_ascii_case("localhost"),
+        Host::Ipv4(addr) => addr.is_loopback(),
+        Host::Ipv6(addr) => addr.is_loopback(),
+    };
+    if !is_loopback {
+        return Err(anyhow::anyhow!("redirect URL host must be loopback"));
+    }
+    if url.port_or_known_default().is_none() {
+        return Err(anyhow::anyhow!("redirect URL is missing port"));
+    }
+    Ok(())
+}
+
+fn send_loopback_get(url: &Url) -> Result<String, anyhow::Error> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow::anyhow!("redirect URL is missing host"))?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| anyhow::anyhow!("redirect URL is missing port"))?;
+    let mut stream = TcpStream::connect((host, port))?;
+    let timeout = Some(Duration::from_secs(5));
+    stream.set_read_timeout(timeout)?;
+    stream.set_write_timeout(timeout)?;
+    let request = format!(
+        "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        request_target(url),
+        host_header(url)?
+    );
+    stream.write_all(request.as_bytes())?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    Ok(response)
+}
+
+fn request_target(url: &Url) -> String {
+    match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_string(),
+    }
+}
+
+fn host_header(url: &Url) -> Result<String, anyhow::Error> {
+    let host = url
+        .host()
+        .ok_or_else(|| anyhow::anyhow!("redirect URL is missing host"))?;
+    let mut value = match host {
+        Host::Domain(domain) => domain.to_string(),
+        Host::Ipv4(addr) => addr.to_string(),
+        Host::Ipv6(addr) => format!("[{addr}]"),
+    };
+    if let Some(port) = url.port() {
+        value.push(':');
+        value.push_str(&port.to_string());
+    }
+    Ok(value)
+}
+
+fn http_status_is_success(status: &str) -> bool {
+    status
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse::<u16>().ok())
+        .is_some_and(|code| (200..300).contains(&code))
+}
+
 fn prompt_oauth_credential_inputs(
     oauth: &ManifestOAuthCredentialSpec,
 ) -> Result<Vec<OAuthCredentialInput>, anyhow::Error> {
@@ -1081,10 +1247,15 @@ mod tests {
     use coral_spec::{ManifestInputKind, ManifestInputSpec};
 
     use std::collections::HashMap;
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::thread;
+    use url::Url;
 
     use super::{
-        ValidationFollowUp, ValidationSeverityMode, collect_inputs_with_hint, finalize_input_value,
-        shell_quote_arg, source_name_arg, validation_follow_up,
+        ValidationFollowUp, ValidationSeverityMode, collect_inputs_with_hint,
+        expected_oauth_redirect_uri, finalize_input_value, shell_quote_arg, source_name_arg,
+        submit_oauth_redirect_url, validate_oauth_redirect_url, validation_follow_up,
     };
 
     #[test]
@@ -1249,6 +1420,77 @@ mod tests {
             "'fixtures/my source.yaml'"
         );
         assert_eq!(shell_quote_arg("it'demo.yaml"), "'it'\\''demo.yaml'");
+    }
+
+    #[test]
+    fn expected_oauth_redirect_uri_reads_authorization_query() {
+        let authorization_url = "https://provider.example.com/oauth/authorize?client_id=abc&redirect_uri=http%3A%2F%2Flocalhost%3A53682%2Foauth%2Fcallback&state=xyz";
+
+        let redirect_uri =
+            expected_oauth_redirect_uri(authorization_url).expect("redirect_uri should parse");
+
+        assert_eq!(
+            redirect_uri.as_str(),
+            "http://localhost:53682/oauth/callback"
+        );
+    }
+
+    #[test]
+    fn oauth_redirect_url_must_match_expected_loopback_callback() {
+        let expected = Url::parse("http://localhost:53682/oauth/callback").expect("expected url");
+        let mismatched =
+            Url::parse("http://localhost:53682/other?state=xyz&code=abc").expect("callback url");
+
+        let error = validate_oauth_redirect_url(&mismatched, &expected)
+            .expect_err("mismatched callback should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must match the OAuth redirect URI"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn oauth_redirect_url_rejects_non_loopback_hosts() {
+        let expected = Url::parse("http://localhost:53682/oauth/callback").expect("expected url");
+        let callback = Url::parse("http://example.com:53682/oauth/callback?state=xyz&code=abc")
+            .expect("callback url");
+
+        let error = validate_oauth_redirect_url(&callback, &expected)
+            .expect_err("non-loopback callback should fail");
+
+        assert!(
+            error.to_string().contains("host must be loopback"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn submit_oauth_redirect_url_sends_get_to_loopback_listener() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind callback listener");
+        let port = listener.local_addr().expect("listener addr").port();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept callback");
+            let mut buffer = [0_u8; 1024];
+            let read = stream.read(&mut buffer).expect("read callback request");
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            assert!(
+                request.starts_with("GET /oauth/callback?state=xyz&code=test-code HTTP/1.1\r\n"),
+                "unexpected request: {request}"
+            );
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\nok")
+                .expect("write callback response");
+        });
+        let expected =
+            Url::parse(&format!("http://127.0.0.1:{port}/oauth/callback")).expect("expected url");
+        let callback_url =
+            format!("http://127.0.0.1:{port}/oauth/callback?state=xyz&code=test-code");
+
+        submit_oauth_redirect_url(&callback_url, &expected).expect("submit redirect url");
+        server.join().expect("callback server");
     }
 
     #[test]

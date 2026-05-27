@@ -74,6 +74,10 @@ source spec's authored order. `source_config` methods use the normal source
 input path and prompt for the secret value here; OAuth methods open or print an
 authorization URL, wait for the loopback callback, and store the
 resulting secret without printing token material.
+If the browser runs somewhere that cannot reach Coral's loopback listener, such
+as a host browser authorizing a Coral process in a VM or SSH session, paste the
+final localhost redirect URL into the terminal prompt and Coral submits it to
+the local callback listener.
 Environment variables still win, so a secret value already present in the
 environment bypasses the retrieval choice.
 

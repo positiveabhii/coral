@@ -960,6 +960,9 @@ loopback redirect behavior in the OAuth app. For OAuth methods, Coral starts
 the loopback flow and returns the provider authorization URL. After the
 callback, Coral exchanges the code, stores the access token as the source
 secret, and stores any refresh token as internal credential metadata.
+The CLI also accepts the final loopback redirect URL in the terminal while it
+waits, which lets users complete OAuth when their browser cannot reach the
+machine running Coral directly.
 
 ### Inspecting configured inputs
 
