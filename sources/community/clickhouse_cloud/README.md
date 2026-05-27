@@ -222,11 +222,14 @@ FROM clickhouse_cloud.run_select_query(
 )
 ```
 
-### Each query opens a fresh MCP session
+### Each tool call opens a fresh MCP session
 
-Coral creates a new Streamable HTTP MCP session per query. The initialize
-handshake adds a small latency (a few hundred ms) per scan. Session pooling
-is tracked in the MCP backend follow-up plan.
+Coral creates a new Streamable HTTP MCP session for every underlying
+`tools/call` — not once per SQL query. A single query that scans several
+tables, or that joins across two MCP tables, runs the initialize +
+notifications/initialized handshake for each tool call, adding a few
+hundred ms of latency per call. Session pooling is tracked in the MCP
+backend follow-up plan.
 
 ### Error responses surface as `MCP_TOOL_RETURNED_ERROR`
 

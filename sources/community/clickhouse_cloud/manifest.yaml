@@ -13,8 +13,11 @@ inputs:
       Coral drives the OAuth flow and stores the resulting access token.
 
       Tokens last 1 hour. Until automatic refresh ships, re-run
-      `coral source add --file sources/community/clickhouse_cloud/manifest.yaml`
+      `coral source add --file sources/community/clickhouse_cloud/manifest.yaml --interactive`
       to mint a fresh one when queries start failing with MCP_AUTH_REQUIRED.
+      The `--interactive` flag is what triggers the browser-driven OAuth
+      method; without it Coral falls back to reading the token from a
+      `CLICKHOUSE_ACCESS_TOKEN` environment variable.
     credential:
       methods:
         - type: oauth

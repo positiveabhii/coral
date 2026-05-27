@@ -668,12 +668,17 @@ Streamable HTTP token refresh is not handled by the MCP transport itself. If a
 server rejects an expired token, Coral surfaces an auth failure; refresh support
 is owned by the shared OAuth credential flow.
 
-Each query opens a fresh MCP session: stdio sources spawn a child process per
-`call_tool`, and Streamable HTTP sources run the initialize handshake on every
-call. Session pooling is a future optimization.
+Each tool call opens a fresh MCP session: stdio sources spawn a child process
+per `tools/call`, and Streamable HTTP sources run the initialize handshake on
+every call. A single SQL query that scans multiple MCP tables incurs that
+handshake once per table scan. Session pooling is a future optimization.
 
-Query-time failures surface as one of the following structured error reasons,
-each carrying source, relation, tool, and stage metadata:
+Query-time failures surface as one of the following structured error reasons.
+Every reason carries `source` and `mcp_stage` metadata. Tool-scoped reasons
+(`MCP_TOOL_CALL_FAILED`, `MCP_TOOL_RETURNED_ERROR`, `MCP_RESULT_DECODE_FAILED`,
+`MCP_PAGINATION_FAILED`) additionally carry `relation` and `tool`. Transport,
+auth, and server-start reasons do not, since they fire before a specific tool
+call is identified.
 
 | Reason | Meaning |
 | ------ | ------- |

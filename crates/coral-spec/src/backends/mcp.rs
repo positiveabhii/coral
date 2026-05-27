@@ -393,7 +393,7 @@ impl McpSourceManifest {
             )));
         }
         validate_test_queries(&name, &test_queries)?;
-        validate_server(&name, &server)?;
+        validate_server(&name, &server, &declared_inputs)?;
         validate_table_and_function_names(&name, &tables, &functions)?;
         let common =
             SourceManifestCommon::new(dsl_version, name, version, description, test_queries);
@@ -416,13 +416,17 @@ impl McpSourceManifest {
     }
 }
 
-fn validate_server(source_name: &str, server: &McpServerSpec) -> Result<()> {
+fn validate_server(
+    source_name: &str,
+    server: &McpServerSpec,
+    declared_inputs: &[ManifestInputSpec],
+) -> Result<()> {
     match server {
         McpServerSpec::Stdio { command, env, .. } => {
             validate_stdio_server(source_name, command, env)
         }
         McpServerSpec::StreamableHttp { url, auth } => {
-            validate_streamable_http_server(source_name, url, auth.as_ref())
+            validate_streamable_http_server(source_name, url, auth.as_ref(), declared_inputs)
         }
     }
 }
@@ -456,6 +460,7 @@ fn validate_streamable_http_server(
     source_name: &str,
     raw_url: &str,
     auth: Option<&McpHttpAuthSpec>,
+    declared_inputs: &[ManifestInputSpec],
 ) -> Result<()> {
     let url = url::Url::parse(raw_url).map_err(|error| {
         ManifestError::validation(format!(
@@ -477,21 +482,51 @@ fn validate_streamable_http_server(
         }
     }
     if let Some(auth) = auth {
-        validate_source_scoped_value_source(
-            auth.bearer_token(),
-            &format!("source '{source_name}' MCP streamable_http server auth token"),
-        )?;
+        validate_streamable_http_auth_token(source_name, auth.bearer_token(), declared_inputs)?;
+    }
+    Ok(())
+}
+
+/// Streamable HTTP bearer tokens are credentials: enforce that they
+/// resolve from a declared `kind: secret` input rather than a literal,
+/// template, variable input, or any of the request-scoped sources.
+fn validate_streamable_http_auth_token(
+    source_name: &str,
+    token: &ValueSourceSpec,
+    declared_inputs: &[ManifestInputSpec],
+) -> Result<()> {
+    let ValueSourceSpec::Input { key } = token else {
+        return Err(ManifestError::validation(format!(
+            "source '{source_name}' MCP streamable_http server auth token must use `from: input` referencing a secret input"
+        )));
+    };
+    let declared = declared_inputs
+        .iter()
+        .find(|input| input.key == *key)
+        .ok_or_else(|| {
+            ManifestError::validation(format!(
+                "source '{source_name}' MCP streamable_http server auth token references input '{key}' which is not declared under `inputs`"
+            ))
+        })?;
+    if declared.kind != ManifestInputKind::Secret {
+        return Err(ManifestError::validation(format!(
+            "source '{source_name}' MCP streamable_http server auth token must reference a `kind: secret` input; '{key}' is a variable"
+        )));
     }
     Ok(())
 }
 
 fn is_local_http_url(url: &url::Url) -> bool {
-    url.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host == "127.0.0.1"
-            || host == "::1"
-            || host.starts_with("127.")
-    })
+    // Use the typed `Host` enum so IPv4/IPv6 literals are matched by their
+    // parsed address (`is_loopback()`) rather than a textual prefix check —
+    // a hostname like `127.example.com` shares the `127.` prefix but is not
+    // loopback, and IPv6 literals in URLs arrive bracketed.
+    match url.host() {
+        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(addr)) => addr.is_loopback(),
+        Some(url::Host::Ipv6(addr)) => addr.is_loopback(),
+        None => false,
+    }
 }
 
 fn validate_server_env_value_source(source_name: &str, env: &McpEnvSpec) -> Result<()> {
@@ -1089,6 +1124,129 @@ mod tests {
             error
                 .to_string()
                 .contains("must use https unless it targets localhost")
+        );
+    }
+
+    #[test]
+    fn rejects_insecure_http_url_with_loopback_lookalike_host() {
+        // A hostname like `127.example.com` previously slipped past the
+        // `starts_with("127.")` check; the IP-parsing check rejects it.
+        let error = McpSourceManifest::parse_manifest_value(json!({
+            "dsl_version": 3,
+            "name": "remote_mcp",
+            "version": "0.1.0",
+            "backend": "mcp",
+            "server": {
+                "transport": "streamable_http",
+                "url": "http://127.example.com/mcp"
+            },
+            "tables": [{
+                "name": "issues",
+                "tool": "list_issues",
+                "columns": [{ "name": "title", "type": "Utf8" }]
+            }]
+        }))
+        .expect_err("loopback-lookalike host should still fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must use https unless it targets localhost")
+        );
+    }
+
+    #[test]
+    fn allows_http_for_real_loopback_addresses() {
+        for url in [
+            "http://127.0.0.1:8080/mcp",
+            "http://localhost:8080/mcp",
+            "http://[::1]:8080/mcp",
+        ] {
+            McpSourceManifest::parse_manifest_value(json!({
+                "dsl_version": 3,
+                "name": "remote_mcp",
+                "version": "0.1.0",
+                "backend": "mcp",
+                "server": {
+                    "transport": "streamable_http",
+                    "url": url
+                },
+                "tables": [{
+                    "name": "issues",
+                    "tool": "list_issues",
+                    "columns": [{ "name": "title", "type": "Utf8" }]
+                }]
+            }))
+            .unwrap_or_else(|err| panic!("loopback url `{url}` should parse: {err}"));
+        }
+    }
+
+    #[test]
+    fn rejects_streamable_http_auth_token_from_literal() {
+        let error = McpSourceManifest::parse_manifest_value(json!({
+            "dsl_version": 3,
+            "name": "remote_mcp",
+            "version": "0.1.0",
+            "backend": "mcp",
+            "server": {
+                "transport": "streamable_http",
+                "url": "https://mcp.example.com/mcp",
+                "auth": {
+                    "type": "bearer",
+                    "from": "literal",
+                    "value": "hunter2"
+                }
+            },
+            "tables": [{
+                "name": "issues",
+                "tool": "list_issues",
+                "columns": [{ "name": "title", "type": "Utf8" }]
+            }]
+        }))
+        .expect_err("literal bearer token should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must use `from: input` referencing a secret input"),
+            "got: {error}"
+        );
+    }
+
+    #[test]
+    fn rejects_streamable_http_auth_token_from_variable_input() {
+        // Use a non-credential-like name so the early credential-like
+        // safety net does not fire before our explicit check.
+        let error = McpSourceManifest::parse_manifest_value(json!({
+            "dsl_version": 3,
+            "name": "remote_mcp",
+            "version": "0.1.0",
+            "backend": "mcp",
+            "inputs": {
+                "MCP_OPAQUE_VALUE": { "kind": "variable", "default": "x" }
+            },
+            "server": {
+                "transport": "streamable_http",
+                "url": "https://mcp.example.com/mcp",
+                "auth": {
+                    "type": "bearer",
+                    "from": "input",
+                    "key": "MCP_OPAQUE_VALUE"
+                }
+            },
+            "tables": [{
+                "name": "issues",
+                "tool": "list_issues",
+                "columns": [{ "name": "title", "type": "Utf8" }]
+            }]
+        }))
+        .expect_err("variable-kind input as bearer token should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("must reference a `kind: secret` input"),
+            "got: {error}"
         );
     }
 
