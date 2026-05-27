@@ -311,7 +311,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .description
             .as_deref()
             .expect("sql description")
-            .contains("No user tables are currently visible")
+            .contains("Use JOIN, CROSS JOIN, CTEs")
     );
     for tool in &initial_tools {
         let Some(output_schema) = &tool.output_schema else {
@@ -340,7 +340,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .description
             .as_deref()
             .expect("guide description")
-            .contains("0 visible table")
+            .contains("generated from currently configured sources")
     );
 
     let initial_guide = client
@@ -367,21 +367,21 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .description
             .as_deref()
             .expect("sql description")
-            .contains("3 table(s) are currently visible")
+            .contains("coral.* metadata tables")
     );
     assert!(
         updated_tools[1]
             .description
             .as_deref()
             .expect("catalog description")
-            .contains("3 table(s) and 0 table function(s) are currently visible")
+            .contains("currently configured sources")
     );
     assert!(
         updated_tools[2]
             .description
             .as_deref()
             .expect("catalog search description")
-            .contains("3 table(s) and 0 table function(s) are currently visible")
+            .contains("currently configured sources")
     );
 
     let updated_resources = client
@@ -393,7 +393,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .description
             .as_deref()
             .expect("guide description")
-            .contains("1 configured connection")
+            .contains("generated from currently configured sources")
     );
 
     let tables_resource = client
@@ -856,7 +856,7 @@ async fn list_catalog_surfaces_table_functions() {
             .description
             .as_deref()
             .expect("catalog description")
-            .contains("1 table(s) and 2 table function(s) are currently visible")
+            .contains("currently configured sources")
     );
     assert!(tools.iter().all(|tool| tool.name != "list_tables"));
     assert!(tools.iter().all(|tool| tool.name != "search_tables"));

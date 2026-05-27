@@ -28,6 +28,9 @@
 - Decode query payloads through `coral-client`; do not fork Arrow IPC handling
   here.
 - Shape MCP surfaces for agent ergonomics, not raw proto parity.
+- Keep MCP capability listing cheap: `tools/list` and `resources/list` should
+  describe static capabilities without loading sources or catalog counts. Put
+  live catalog work in tool calls and resource reads.
 - Treat MCP tools, resources, prompts, and other user-facing protocol surfaces
   as documented surfaces; when they change, update the relevant docs under
   `docs/` in the same change.

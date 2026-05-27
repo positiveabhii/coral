@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use coral_api::v1::Source;
 use rmcp::{
     ErrorData,
     model::{CallToolResult, Content, Tool, ToolAnnotations},
@@ -59,10 +58,10 @@ pub(crate) struct SearchColumnsArguments {
     pub(crate) pagination: Pagination,
 }
 
-pub(crate) fn sql_tool(sources: &[Source], visible_table_count: usize) -> Tool {
+pub(crate) fn sql_tool() -> Tool {
     Tool::new(
         "sql",
-        sql_tool_description(sources, visible_table_count),
+        sql_tool_description(),
         json_object_schema(&json!({
             "type": "object",
             "required": ["sql"],
@@ -83,12 +82,10 @@ pub(crate) fn sql_tool(sources: &[Source], visible_table_count: usize) -> Tool {
     )
 }
 
-pub(crate) fn list_catalog_tool(visible_table_count: usize, visible_function_count: usize) -> Tool {
+pub(crate) fn list_catalog_tool() -> Tool {
     Tool::new(
         "list_catalog",
-        format!(
-            "List compact database catalog summaries. {visible_table_count} table(s) and {visible_function_count} table function(s) are currently visible. Prefer search_catalog when you know the entity or task; use detail='full' only for small result sets that need guides, function result columns, or full argument metadata."
-        ),
+        "List compact database catalog summaries for currently configured sources. Prefer search_catalog when you know the entity or task; use detail='full' only for small result sets that need guides, function result columns, or full argument metadata.",
         json_object_schema(&json!({
             "type": "object",
             "properties": {
@@ -141,13 +138,10 @@ pub(crate) fn list_catalog_tool(visible_table_count: usize, visible_function_cou
     )
 }
 
-pub(crate) fn search_catalog_tool(
-    visible_table_count: usize,
-    visible_function_count: usize,
-) -> Tool {
+pub(crate) fn search_catalog_tool() -> Tool {
     Tool::new(
         "search_catalog",
-        search_catalog_description(visible_table_count, visible_function_count),
+        search_catalog_description(),
         json_object_schema(&json!({
             "type": "object",
             "required": ["pattern"],
@@ -488,21 +482,12 @@ pub(crate) fn build_tool_result(value: Value) -> Result<CallToolResult, ErrorDat
     Ok(result)
 }
 
-fn sql_tool_description(_sources: &[Source], visible_table_count: usize) -> String {
-    if visible_table_count == 0 {
-        "Execute read-only SQL against the Coral database. No user tables are currently visible."
-            .to_string()
-    } else {
-        format!(
-            "Execute read-only SQL against the Coral database. {visible_table_count} table(s) are currently visible. Use JOIN, CROSS JOIN, CTEs, subqueries, and aggregates to combine tables in one statement."
-        )
-    }
+fn sql_tool_description() -> &'static str {
+    "Execute read-only SQL against the Coral database. Use JOIN, CROSS JOIN, CTEs, subqueries, and aggregates to combine tables in one statement; use catalog tools or coral.* metadata tables for discovery."
 }
 
-fn search_catalog_description(visible_table_count: usize, visible_function_count: usize) -> String {
-    format!(
-        "Search compact database catalog summaries with a Rust regex. {visible_table_count} table(s) and {visible_function_count} table function(s) are currently visible. Use this before list_catalog when you know the entity or task; use detail='full' only for small result sets."
-    )
+fn search_catalog_description() -> &'static str {
+    "Search compact database catalog summaries for currently configured sources with a Rust regex. Use this before list_catalog when you know the entity or task; use detail='full' only for small result sets."
 }
 
 fn list_catalog_output_schema() -> Arc<Map<String, Value>> {

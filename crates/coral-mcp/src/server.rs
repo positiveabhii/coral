@@ -38,8 +38,6 @@ use crate::{
     telemetry,
 };
 
-const LIST_TABLES_COUNT_LIMIT: u32 = 1;
-const LIST_TABLE_FUNCTIONS_COUNT_LIMIT: u32 = 1;
 const LIST_CATALOG_UNBOUNDED_LIMIT: u32 = 0;
 const CATALOG_KIND_ALL: ProtoCatalogItemKind = ProtoCatalogItemKind::Unspecified;
 const CATALOG_KIND_TABLE: ProtoCatalogItemKind = ProtoCatalogItemKind::Table;
@@ -185,50 +183,6 @@ impl CoralMcpServer {
             }))
             .await?
             .into_inner())
-    }
-
-    async fn load_table_count(&self) -> Result<usize, tonic::Status> {
-        self.load_catalog(
-            None,
-            CATALOG_KIND_TABLE,
-            PaginationRequest {
-                limit: LIST_TABLES_COUNT_LIMIT,
-                offset: 0,
-            },
-        )
-        .await
-        .map(|response| {
-            response
-                .pagination
-                .map_or(0, |pagination| pagination.total_count as usize)
-        })
-    }
-
-    async fn load_table_function_count(&self) -> Result<usize, tonic::Status> {
-        self.load_catalog(
-            None,
-            CATALOG_KIND_TABLE_FUNCTION,
-            PaginationRequest {
-                limit: LIST_TABLE_FUNCTIONS_COUNT_LIMIT,
-                offset: 0,
-            },
-        )
-        .await
-        .map(|response| {
-            response
-                .pagination
-                .map_or(0, |pagination| pagination.total_count as usize)
-        })
-    }
-
-    async fn load_sources_and_catalog_counts(
-        &self,
-    ) -> Result<(Vec<Source>, usize, usize), tonic::Status> {
-        tokio::try_join!(
-            self.load_sources(),
-            self.load_table_count(),
-            self.load_table_function_count()
-        )
     }
 
     async fn load_sources_and_guide_catalog(
@@ -517,14 +471,10 @@ impl ServerHandler for CoralMcpServer {
     ) -> Result<ListToolsResult, ErrorData> {
         let span = telemetry::list_tools_span(self.options.trace_parent.as_deref());
         telemetry::instrument_protocol(span, async {
-            let (sources, visible_table_count, visible_function_count) = self
-                .load_sources_and_catalog_counts()
-                .await
-                .map_err(|status| status_to_error_data(&status))?;
             let mut tools = vec![
-                sql_tool(&sources, visible_table_count),
-                list_catalog_tool(visible_table_count, visible_function_count),
-                search_catalog_tool(visible_table_count, visible_function_count),
+                sql_tool(),
+                list_catalog_tool(),
+                search_catalog_tool(),
                 describe_table_tool(),
                 list_columns_tool(),
                 search_columns_tool(),
@@ -555,13 +505,9 @@ impl ServerHandler for CoralMcpServer {
     ) -> Result<ListResourcesResult, ErrorData> {
         let span = telemetry::list_resources_span(self.options.trace_parent.as_deref());
         telemetry::instrument_protocol(span, async {
-            let (sources, visible_table_count, visible_function_count) = self
-                .load_sources_and_catalog_counts()
-                .await
-                .map_err(|status| status_to_error_data(&status))?;
             Ok(ListResourcesResult::with_all_items(vec![
-                guide_resource(&sources, visible_table_count, visible_function_count),
-                tables_resource(visible_table_count),
+                guide_resource(),
+                tables_resource(),
             ]))
         })
         .await

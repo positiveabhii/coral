@@ -207,6 +207,8 @@ coral mcp-stdio
 
 This command is intended to be launched by an MCP-capable client rather than used directly in an interactive shell.
 
+The MCP `tools/list` and `resources/list` responses are static capability metadata. Live source and catalog state is loaded only when a client calls a catalog tool, reads `coral://guide` or `coral://tables`, or queries the `coral.*` metadata tables.
+
 This server exposes:
 
 | Type     | Name             | Description                      |

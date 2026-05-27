@@ -25,6 +25,8 @@ Before setting up a client, make sure you have [connected at least one source](/
 
 Clients see the same database catalog and query results as `coral sql`. You set up sources with the CLI, then agents query Coral over MCP as SQL schemas and tables.
 
+MCP tool and resource listings are static capability metadata. They do not count or load the current source catalog; use `list_catalog`, `search_catalog`, `coral://guide`, `coral://tables`, or the `coral.*` metadata tables when the agent needs live catalog state.
+
 Agents should treat the discovery tools as catalog helpers, not as replacement provider APIs. For data questions, prefer a single `sql` call using `JOIN`, `CROSS JOIN`, CTEs, subqueries, aggregates, or window functions over multiple tool calls that fetch rows and combine them in the agent.
 
 ### Discovery tools

@@ -274,21 +274,21 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             .description
             .as_deref()
             .expect("sql description")
-            .contains("3 table(s) are currently visible")
+            .contains("Use JOIN, CROSS JOIN, CTEs")
     );
     assert!(
         tools[1]
             .description
             .as_deref()
             .expect("list_catalog description")
-            .contains("3 table(s) and 0 table function(s) are currently visible")
+            .contains("currently configured sources")
     );
     assert!(
         tools[2]
             .description
             .as_deref()
             .expect("search_catalog description")
-            .contains("3 table(s) and 0 table function(s) are currently visible")
+            .contains("currently configured sources")
     );
 
     let resources = client.list_all_resources().await?;
@@ -298,6 +298,14 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             .map(|resource| resource.uri.as_str())
             .collect::<Vec<_>>(),
         vec!["coral://guide", "coral://tables"]
+    );
+    assert!(
+        server.list_sources_requests().is_empty(),
+        "capability listing should not fetch sources"
+    );
+    assert!(
+        server.list_catalog_requests().is_empty(),
+        "capability listing should not fetch catalog counts"
     );
 
     let guide = client
@@ -315,6 +323,16 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
         .await?;
     let tables_json: Value = serde_json::from_str(text_content(&tables))?;
     assert_eq!(tables_json["tables"][0]["name"], "local_messages.events");
+    assert_eq!(
+        server.list_sources_requests().len(),
+        1,
+        "guide resource should fetch live source metadata when read"
+    );
+    assert_eq!(
+        server.list_catalog_requests().len(),
+        2,
+        "guide and tables resources should fetch live catalog metadata when read"
+    );
 
     client.cancel().await?;
     server.shutdown().await;
