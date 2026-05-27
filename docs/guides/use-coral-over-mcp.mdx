@@ -27,6 +27,8 @@ Clients see the same database catalog and query results as `coral sql`. You set 
 
 MCP tool and resource listings are static capability metadata. They do not count or load the current source catalog; use `list_catalog`, `search_catalog`, `coral://guide`, `coral://tables`, or the `coral.*` metadata tables when the agent needs live catalog state.
 
+Successful `sql` calls return structured content with `rows`, `row_count`, and `columns`. `row_count` is the number of rows returned by that SQL statement, so a limited query reports the returned rows rather than the total rows available beyond the `LIMIT`. `columns` contains the returned Arrow field names, data types, and nullability, including for empty result sets.
+
 Agents should treat the discovery tools as catalog helpers, not as replacement provider APIs. For data questions, prefer a single `sql` call using `JOIN`, `CROSS JOIN`, CTEs, subqueries, aggregates, or window functions over multiple tool calls that fetch rows and combine them in the agent.
 
 ### Discovery tools

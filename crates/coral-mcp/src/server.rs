@@ -52,8 +52,17 @@ enum ToolCallOutcome {
 }
 
 #[derive(Serialize)]
-struct SqlRowsValue {
+struct SqlResultValue {
     rows: Vec<Value>,
+    row_count: usize,
+    columns: Vec<SqlColumnValue>,
+}
+
+#[derive(Serialize)]
+struct SqlColumnValue {
+    name: String,
+    data_type: String,
+    is_nullable: bool,
 }
 
 #[derive(Serialize)]
@@ -193,7 +202,7 @@ impl CoralMcpServer {
         Ok((sources, tables, table_function_schema_names))
     }
 
-    async fn query_rows(&self, sql: &str) -> Result<Vec<Value>, tonic::Status> {
+    async fn execute_sql_value(&self, sql: &str) -> Result<Value, tonic::Status> {
         let mut query_client = self.query.clone();
         let response = query_client
             .execute_sql(Request::new(ExecuteSqlRequest {
@@ -204,13 +213,23 @@ impl CoralMcpServer {
             .into_inner();
         let result = decode_execute_sql_response(&response)
             .map_err(|error| tonic::Status::internal(error.to_string()))?;
-        batches_to_json_rows(result.batches())
-            .map_err(|error| tonic::Status::internal(error.to_string()))
-    }
-
-    async fn execute_sql_value(&self, sql: &str) -> Result<Value, tonic::Status> {
-        serialize_tool_value(SqlRowsValue {
-            rows: self.query_rows(sql).await?,
+        let columns = result
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| SqlColumnValue {
+                name: field.name().clone(),
+                data_type: field.data_type().to_string(),
+                is_nullable: field.is_nullable(),
+            })
+            .collect();
+        let row_count = result.row_count();
+        let rows = batches_to_json_rows(result.batches())
+            .map_err(|error| tonic::Status::internal(error.to_string()))?;
+        serialize_tool_value(SqlResultValue {
+            rows,
+            row_count,
+            columns,
         })
     }
 

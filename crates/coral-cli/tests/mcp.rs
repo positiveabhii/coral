@@ -803,6 +803,10 @@ async fn assert_sql_tool(
     )
     .await?;
     assert_eq!(sql["rows"][0]["text"], "hello");
+    assert_eq!(sql["row_count"], 2);
+    assert_eq!(sql["columns"][0]["name"], "text");
+    assert_eq!(sql["columns"][0]["data_type"], "Utf8");
+    assert_eq!(sql["columns"][0]["is_nullable"], false);
     Ok(())
 }
 

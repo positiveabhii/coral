@@ -73,6 +73,7 @@ pub(crate) fn sql_tool() -> Tool {
             }
         })),
     )
+    .with_raw_output_schema(sql_output_schema())
     .with_annotations(
         ToolAnnotations::with_title("Run SQL")
             .read_only(true)
@@ -488,6 +489,41 @@ fn sql_tool_description() -> &'static str {
 
 fn search_catalog_description() -> &'static str {
     "Search compact database catalog summaries for currently configured sources with a Rust regex. Use this before list_catalog when you know the entity or task; use detail='full' only for small result sets."
+}
+
+fn sql_output_schema() -> Arc<Map<String, Value>> {
+    json_object_schema(&json!({
+        "type": "object",
+        "required": ["rows", "row_count", "columns"],
+        "additionalProperties": false,
+        "properties": {
+            "rows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                }
+            },
+            "row_count": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Number of rows returned by this SQL statement."
+            },
+            "columns": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["name", "data_type", "is_nullable"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "name": { "type": "string" },
+                        "data_type": { "type": "string" },
+                        "is_nullable": { "type": "boolean" }
+                    }
+                }
+            }
+        }
+    }))
 }
 
 fn list_catalog_output_schema() -> Arc<Map<String, Value>> {

@@ -1095,6 +1095,9 @@ async fn mcp_tool_error_does_not_end_session() {
 
     add_demo_source(&mut session.source_client, manifest_yaml).await;
 
+    let tools = client.list_all_tools().await.expect("tools");
+    let sql_tool = tool_by_name(&tools, "sql");
+
     let sql = client
         .call_tool(
             CallToolRequestParams::new("sql").with_arguments(json_object(&json!({
@@ -1103,11 +1106,32 @@ async fn mcp_tool_error_does_not_end_session() {
         )
         .await
         .expect("sql");
-    assert_eq!(
-        sql.structured_content.expect("structured content")["rows"][0]["text"],
-        "hello"
-    );
+    let sql_content = sql.structured_content.expect("structured content");
+    assert_eq!(sql_content["rows"][0]["text"], "hello");
+    assert_eq!(sql_content["row_count"], 2);
+    assert_eq!(sql_content["columns"][0]["name"], "text");
+    assert_eq!(sql_content["columns"][0]["data_type"], "Utf8");
+    assert_eq!(sql_content["columns"][0]["is_nullable"], true);
+    assert_matches_output_schema(sql_tool, &sql_content);
     assert_eq!(sql.is_error, Some(false));
+
+    let empty_sql = client
+        .call_tool(
+            CallToolRequestParams::new("sql").with_arguments(json_object(&json!({
+                "sql": "SELECT text FROM local_messages.messages WHERE text = 'missing'"
+            }))),
+        )
+        .await
+        .expect("empty sql");
+    let empty_sql_content = empty_sql
+        .structured_content
+        .expect("empty structured content");
+    assert_eq!(empty_sql_content["rows"].as_array().expect("rows").len(), 0);
+    assert_eq!(empty_sql_content["row_count"], 0);
+    assert_eq!(empty_sql_content["columns"][0]["name"], "text");
+    assert_eq!(empty_sql_content["columns"][0]["data_type"], "Utf8");
+    assert_eq!(empty_sql_content["columns"][0]["is_nullable"], true);
+    assert_matches_output_schema(sql_tool, &empty_sql_content);
 
     let invalid_sql = client
         .call_tool(

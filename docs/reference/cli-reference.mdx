@@ -209,6 +209,8 @@ This command is intended to be launched by an MCP-capable client rather than use
 
 The MCP `tools/list` and `resources/list` responses are static capability metadata. Live source and catalog state is loaded only when a client calls a catalog tool, reads `coral://guide` or `coral://tables`, or queries the `coral.*` metadata tables.
 
+Successful MCP `sql` tool calls return structured content with `rows`, `row_count`, and `columns`. `row_count` is the number of rows returned by that SQL statement, not a total beyond a `LIMIT`; `columns` reports the returned Arrow field names, data types, and nullability.
+
 This server exposes:
 
 | Type     | Name             | Description                      |
