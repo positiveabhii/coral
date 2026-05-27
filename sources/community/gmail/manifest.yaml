@@ -1,0 +1,160 @@
+name: gmail
+version: 0.1.0
+dsl_version: 3
+backend: http
+description: >-
+  Query messages and conversation threads from the Google Gmail v1 API. 
+  Authenticate securely via Google OAuth 2.0 authorization-code flow to index
+  local communication context.
+base_url: https://gmail.googleapis.com/gmail/v1/users/me
+
+inputs:
+  GMAIL_TOKEN:
+    kind: secret
+    hint: |
+      Gmail OAuth access token. Click "Connect with Google Gmail" to
+      authorize through the browser — Coral will handle the OAuth flow
+      and store the token automatically.
+
+      To use OAuth, first create a project in the Google Cloud Console,
+      enable the Gmail API, and configure an OAuth consent screen.
+      Set the Authorized Redirect URI to exactly: http://127.0.0.1:8080/oauth/callback
+      Grant the following scopes:
+        - https://www.googleapis.com/auth/gmail.readonly
+        - https://www.googleapis.com/auth/gmail.send
+      
+      Copy the Client ID into GMAIL_CLIENT_ID and the Client Secret into
+      GMAIL_CLIENT_SECRET before running source add.
+    credential:
+      methods:
+        - type: oauth
+          label: Connect with Google Gmail
+          description: Open a browser and authorize Coral to manage your Gmail data.
+          oauth:
+            flow:
+              type: authorization_code
+              pkce: required
+            redirect_uri: http://127.0.0.1:8080/oauth/callback
+            redirect_uri_port_mode: fixed
+            endpoints:
+              authorization_url: https://accounts.google.com/o/oauth2/v2/auth
+              token_url: https://oauth2.googleapis.com/token
+            client:
+              id:
+                input: GMAIL_OAUTH_CLIENT_ID
+              secret:
+                input: GMAIL_OAUTH_CLIENT_SECRET
+                transport: request_body
+            scopes:
+              scope:
+                delimiter: space
+                values:
+                  - https://www.googleapis.com/auth/gmail.readonly
+                  - https://www.googleapis.com/auth/gmail.send
+
+  GMAIL_OAUTH_CLIENT_ID:
+    kind: variable
+    hint: |
+      OAuth 2.0 Client ID obtained from Google Cloud Console → Credentials.
+
+  GMAIL_OAUTH_CLIENT_SECRET:
+    kind: secret
+    hint: |
+      OAuth 2.0 Client Secret from the same Google Cloud Console credential block.
+
+auth:
+  type: HeaderAuth
+  headers:
+    - name: Authorization
+      from: template
+      template: Bearer {{input.GMAIL_TOKEN}}
+
+test_queries:
+  - SELECT id, threadId FROM gmail.messages LIMIT 1
+
+tables:
+  # ──────────────────────────────────────────────────────────────────────────
+  # messages — List of messages in the user's mailbox
+  # ──────────────────────────────────────────────────────────────────────────
+  - name: messages
+    description: >-
+      Individual email messages residing in the user's mailbox. Each row represents
+      a single immutable message metadata container.
+    guide: |
+      Provides access to individual message identifiers. Use `id` and `threadId` 
+      to cross-reference specific communication items or join with `gmail.threads`.
+    request:
+      method: GET
+      path: /messages
+    response:
+      rows_path:
+        - messages
+    pagination:
+      mode: token
+      next_token_path:
+        - nextPageToken
+      token_param: pageToken
+    columns:
+      - name: id
+        type: Utf8
+        nullable: false
+        description: The unique immutable ID of the message.
+        expr:
+          kind: path
+          path:
+            - id
+      - name: threadId
+        type: Utf8
+        nullable: false
+        description: The ID of the thread to which this message belongs.
+        expr:
+          kind: path
+          path:
+            - threadId
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # threads — Collections of related messages
+  # ──────────────────────────────────────────────────────────────────────────
+  - name: threads
+    description: >-
+      Conversation threads containing collections of closely related messages.
+    guide: |
+      Surfaces high-level email content summaries. The `snippet` column provides 
+      the first 100 characters of contextual text, which is ideal for running text 
+      matching filters (`LIKE %keyword%`) to identify target platforms.
+    request:
+      method: GET
+      path: /threads
+    response:
+      rows_path:
+        - threads
+    pagination:
+      mode: token
+      next_token_path:
+        - nextPageToken
+      token_param: pageToken
+    columns:
+      - name: id
+        type: Utf8
+        nullable: false
+        description: The unique immutable ID of the conversation thread.
+        expr:
+          kind: path
+          path:
+            - id
+      - name: snippet
+        type: Utf8
+        nullable: true
+        description: A short textual summary snippet of the content within the thread.
+        expr:
+          kind: path
+          path:
+            - snippet
+      - name: historyId
+        type: Utf8
+        nullable: true
+        description: The unique ID of the latest long-polling history record for this thread.
+        expr:
+          kind: path
+          path:
+            - historyId
