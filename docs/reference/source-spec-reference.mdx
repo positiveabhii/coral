@@ -668,6 +668,24 @@ Streamable HTTP token refresh is not handled by the MCP transport itself. If a
 server rejects an expired token, Coral surfaces an auth failure; refresh support
 is owned by the shared OAuth credential flow.
 
+Each query opens a fresh MCP session: stdio sources spawn a child process per
+`call_tool`, and Streamable HTTP sources run the initialize handshake on every
+call. Session pooling is a future optimization.
+
+Query-time failures surface as one of the following structured error reasons,
+each carrying source, relation, tool, and stage metadata:
+
+| Reason | Meaning |
+| ------ | ------- |
+| `MCP_SERVER_START_FAILED` | The stdio MCP server process could not be spawned. |
+| `MCP_INITIALIZE_FAILED` | The MCP `initialize` handshake failed. Retryable. |
+| `MCP_AUTH_REQUIRED` | A Streamable HTTP server returned 401 with `WWW-Authenticate`. Reinstall the source with a valid credential. |
+| `MCP_AUTH_FAILED` | A Streamable HTTP server returned 403 with insufficient scope. Update the manifest scopes and reinstall. |
+| `MCP_TOOL_CALL_FAILED` | The transport or protocol layer rejected the `tools/call`. Retryable. |
+| `MCP_TOOL_RETURNED_ERROR` | The tool ran and reported a business-logic failure on the manifest's declared `response.error_path`. |
+| `MCP_RESULT_DECODE_FAILED` | The tool's structured content did not match the declared `response.rows_path` or column types. |
+| `MCP_PAGINATION_FAILED` | Cursor pagination exceeded `max_pages` without terminating. |
+
 ### HTTP authentication
 
 The top-level `auth` block declares how Coral authenticates outgoing requests. It does not collect or store credentials; reference values declared under [Source inputs](/reference/source-spec-reference#source-inputs) when auth needs API keys, bearer tokens, usernames, passwords, or signing material. Pick one of three `type` values:
