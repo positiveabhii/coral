@@ -30,7 +30,6 @@
     clippy::allow_attributes_without_reason,
     clippy::default_trait_access,
     clippy::doc_markdown,
-    clippy::large_enum_variant,
     clippy::missing_errors_doc,
     clippy::must_use_candidate,
     clippy::too_many_lines,
