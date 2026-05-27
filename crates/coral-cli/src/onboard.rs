@@ -1,6 +1,7 @@
 use coral_api::v1::{ExecuteSqlRequest, Source, SourceInfo};
 use coral_client::{
     AppClient, decode_execute_sql_response, default_workspace, format_batches_table,
+    manifest_input_from_proto,
 };
 use dialoguer::console::{measure_text_width, style};
 use dialoguer::{Select, theme::ColorfulTheme};
@@ -171,7 +172,7 @@ async fn run_installed_source_menu(
             let inputs = source
                 .inputs
                 .iter()
-                .map(source_ops::manifest_input_from_proto)
+                .map(manifest_input_from_proto)
                 .collect::<Result<Vec<_>, _>>()?;
             let (variables, secrets) = source_ops::prompt_for_inputs(&inputs)?;
             let result =
@@ -194,7 +195,7 @@ async fn run_add_bundled_source(app: &AppClient, source: &SourceInfo) -> Result<
     let inputs = source
         .inputs
         .iter()
-        .map(source_ops::manifest_input_from_proto)
+        .map(manifest_input_from_proto)
         .collect::<Result<Vec<_>, _>>()?;
     let (variables, secrets) = source_ops::prompt_for_inputs(&inputs)?;
     let result = source_ops::add_bundled_source(app, &source.name, variables, secrets).await?;
@@ -361,6 +362,7 @@ mod tests {
             inputs: Vec::new(),
             installed: true,
             origin: 1,
+            credential_storage: 1,
         };
         let item = format_source_list_item(&source, 10);
         assert!(item.starts_with("✓ "));
@@ -377,6 +379,7 @@ mod tests {
             inputs: Vec::new(),
             installed: false,
             origin: 1,
+            credential_storage: 0,
         };
         let item = format_source_list_item(&source, 10);
         assert!(item.starts_with("  "));
@@ -392,6 +395,7 @@ mod tests {
             inputs: Vec::new(),
             installed: false,
             origin: 1,
+            credential_storage: 0,
         };
         let long = SourceInfo {
             name: "statusgator".to_string(),
@@ -400,6 +404,7 @@ mod tests {
             inputs: Vec::new(),
             installed: false,
             origin: 1,
+            credential_storage: 0,
         };
         let width = 11; // len of "statusgator"
         let short_item = format_source_list_item(&short, width);

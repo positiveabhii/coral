@@ -62,8 +62,8 @@ pub(crate) fn validate_test_queries(source_name: &str, test_queries: &[String]) 
 #[serde(rename_all = "snake_case")]
 pub enum SourceBackend {
     Http,
-    Parquet,
-    Jsonl,
+    File,
+    Mcp,
 }
 
 /// Normalized scalar data types supported by the source-spec DSL.
@@ -322,6 +322,8 @@ pub struct QueryParamSpec {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BodyFieldSpec {
     pub path: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_arg: Option<String>,
     #[serde(flatten)]
     pub value: ValueSourceSpec,
 }
@@ -466,6 +468,16 @@ pub enum ValueSourceSpec {
         key: String,
         #[serde(default)]
         default: Option<bool>,
+    },
+    ArgSplit {
+        key: String,
+        separator: String,
+        part: usize,
+    },
+    ArgSplitInt {
+        key: String,
+        separator: String,
+        part: usize,
     },
     Input {
         key: String,
@@ -822,6 +834,9 @@ pub enum ExprSpec {
     FromFilter {
         key: String,
     },
+    FromArg {
+        key: String,
+    },
     Literal {
         value: Value,
     },
@@ -1118,16 +1133,6 @@ mod tests {
     }
 
     #[test]
-    fn filter_mode_deserializes_search() {
-        let spec: FilterSpec = serde_json::from_value(serde_json::json!({
-            "name": "q",
-            "mode": "search"
-        }))
-        .unwrap();
-        assert_eq!(spec.mode, FilterMode::Search);
-    }
-
-    #[test]
     fn filter_mode_deserializes_contains() {
         let spec: FilterSpec = serde_json::from_value(serde_json::json!({
             "name": "q",
@@ -1145,6 +1150,16 @@ mod tests {
         }));
         let error = result.expect_err("unknown filter mode should fail");
         assert!(error.to_string().contains("unknown variant"));
+    }
+
+    #[test]
+    fn filter_mode_deserializes_legacy_search_value() {
+        let spec: FilterSpec = serde_json::from_value(serde_json::json!({
+            "name": "q",
+            "mode": "search"
+        }))
+        .unwrap();
+        assert_eq!(spec.mode, FilterMode::Search);
     }
 
     #[test]

@@ -3,6 +3,7 @@
     reason = "Integration test crates share this harness, but each target only uses a subset of the helpers."
 )]
 
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use arrow::array::Int64Array;
@@ -16,22 +17,28 @@ use coral_api::v1::query_service_server::{QueryService, QueryServiceServer};
 use coral_api::v1::source_service_server::{SourceService, SourceServiceServer};
 use coral_api::v1::{
     CatalogItem, CatalogSearchResult, Column, ColumnSearchResult, CreateBundledSourceRequest,
-    CreateBundledSourceResponse, DeleteSourceRequest, DeleteSourceResponse, DescribeTableRequest,
-    DescribeTableResponse, DiscoverSourcesRequest, DiscoverSourcesResponse, ExecuteSqlRequest,
-    ExecuteSqlResponse, ExplainSqlRequest, ExplainSqlResponse, GetSourceInfoRequest,
-    GetSourceInfoResponse, GetSourceRequest, GetSourceResponse, ImportSourceRequest,
-    ImportSourceResponse, ListCatalogRequest, ListCatalogResponse, ListColumnsRequest,
-    ListColumnsResponse, ListSourcesRequest, ListSourcesResponse, PaginationRequest,
-    PaginationResponse, QueryPlan, SearchCatalogRequest, SearchCatalogResponse, Source, SourceInfo,
-    SourceInputKind, SourceInputSpec, SourceOrigin, Table, TableSummary, ValidateSourceRequest,
-    ValidateSourceResponse, Workspace, catalog_item,
+    CreateBundledSourceResponse, CreateBundledSourceWithOAuthRequest,
+    CreateBundledSourceWithOAuthResponse, DeleteSourceRequest, DeleteSourceResponse,
+    DescribeTableRequest, DescribeTableResponse, DiscoverSourcesRequest, DiscoverSourcesResponse,
+    ExecuteSqlRequest, ExecuteSqlResponse, ExplainSqlRequest, ExplainSqlResponse,
+    GetSourceInfoRequest, GetSourceInfoResponse, GetSourceRequest, GetSourceResponse,
+    ImportSourceRequest, ImportSourceResponse, ListCatalogRequest, ListCatalogResponse,
+    ListColumnsRequest, ListColumnsResponse, ListSourcesRequest, ListSourcesResponse,
+    PaginationRequest, PaginationResponse, QueryPlan, SearchCatalogRequest, SearchCatalogResponse,
+    Source, SourceCredentialStorage, SourceInfo, SourceInputSpec, SourceOrigin, SourceSecretInput,
+    Table, TableSummary, ValidateSourceRequest, ValidateSourceResponse, Workspace, catalog_item,
+    create_bundled_source_with_o_auth_response, import_source_response,
+    source_input_spec::Input as ProtoSourceInput,
 };
+use coral_api::{CORAL_ERROR_DOMAIN, CORAL_ERROR_REASON_SOURCE_NOT_FOUND};
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::Stream;
+use tokio_stream::wrappers::{ReceiverStream, TcpListenerStream};
 use tonic::transport::Server;
 use tonic::{Code, Request, Response, Status};
+use tonic_types::{ErrorDetail, StatusExt as _};
 
 fn workspace() -> Workspace {
     Workspace {
@@ -47,6 +54,7 @@ fn mock_source() -> Source {
         secrets: Vec::new(),
         variables: Vec::new(),
         origin: SourceOrigin::Bundled as i32,
+        credential_storage: SourceCredentialStorage::File as i32,
     }
 }
 
@@ -270,13 +278,15 @@ fn mock_discover_response() -> DiscoverSourcesResponse {
                 version: "1.0.0".to_string(),
                 inputs: vec![SourceInputSpec {
                     key: "GITHUB_TOKEN".to_string(),
-                    kind: SourceInputKind::Secret as i32,
                     required: true,
-                    default_value: String::new(),
                     hint: "Create a token at github.com/settings/tokens".to_string(),
+                    input: Some(ProtoSourceInput::Secret(SourceSecretInput {
+                        credential: None,
+                    })),
                 }],
                 installed: true,
                 origin: SourceOrigin::Bundled as i32,
+                credential_storage: SourceCredentialStorage::File as i32,
             },
             SourceInfo {
                 name: "slack".to_string(),
@@ -285,6 +295,7 @@ fn mock_discover_response() -> DiscoverSourcesResponse {
                 inputs: Vec::new(),
                 installed: false,
                 origin: SourceOrigin::Bundled as i32,
+                credential_storage: SourceCredentialStorage::Unspecified as i32,
             },
         ],
     }
@@ -310,13 +321,15 @@ fn mock_source_info(name: &str) -> Result<SourceInfo, Status> {
             version: "1.0.0".to_string(),
             inputs: vec![SourceInputSpec {
                 key: "GITHUB_TOKEN".to_string(),
-                kind: SourceInputKind::Secret as i32,
                 required: true,
-                default_value: String::new(),
                 hint: "Create a token at github.com/settings/tokens".to_string(),
+                input: Some(ProtoSourceInput::Secret(SourceSecretInput {
+                    credential: None,
+                })),
             }],
             installed: true,
             origin: SourceOrigin::Bundled as i32,
+            credential_storage: SourceCredentialStorage::File as i32,
         }),
         "slack" => Ok(SourceInfo {
             name: "slack".to_string(),
@@ -325,6 +338,7 @@ fn mock_source_info(name: &str) -> Result<SourceInfo, Status> {
             inputs: Vec::new(),
             installed: false,
             origin: SourceOrigin::Bundled as i32,
+            credential_storage: SourceCredentialStorage::Unspecified as i32,
         }),
         "jira" => Ok(SourceInfo {
             name: "jira".to_string(),
@@ -333,6 +347,7 @@ fn mock_source_info(name: &str) -> Result<SourceInfo, Status> {
             inputs: Vec::new(),
             installed: true,
             origin: SourceOrigin::Imported as i32,
+            credential_storage: SourceCredentialStorage::File as i32,
         }),
         _ => Err(Status::not_found(format!("unknown source '{name}'"))),
     }
@@ -342,6 +357,11 @@ fn mock_source_info(name: &str) -> Result<SourceInfo, Status> {
 struct MockError {
     code: Code,
     message: String,
+    /// When `Some`, the error carries an AIP-193 `ErrorInfo` matching what
+    /// the real server attaches via `app_status` for the
+    /// `AppError::SourceNotFound` variant. Set via
+    /// `MockError::source_not_found(qualified)`.
+    source_not_found_qualified: Option<String>,
 }
 
 impl MockError {
@@ -349,10 +369,31 @@ impl MockError {
         Self {
             code,
             message: message.into(),
+            source_not_found_qualified: None,
+        }
+    }
+
+    fn source_not_found(qualified: impl Into<String>) -> Self {
+        let qualified = qualified.into();
+        Self {
+            code: Code::NotFound,
+            message: format!("source '{qualified}' not found"),
+            source_not_found_qualified: Some(qualified),
         }
     }
 
     fn status(&self) -> Status {
+        if self.source_not_found_qualified.is_some() {
+            // Mirrors `coral_app::bootstrap::error::app_status`: the
+            // reason alone discriminates the error class — no unbounded
+            // identifier is echoed into structured metadata.
+            let details = vec![ErrorDetail::ErrorInfo(tonic_types::ErrorInfo::new(
+                CORAL_ERROR_REASON_SOURCE_NOT_FOUND,
+                CORAL_ERROR_DOMAIN,
+                std::collections::HashMap::new(),
+            ))];
+            return Status::with_error_details_vec(self.code, self.message.clone(), details);
+        }
         Status::new(self.code, self.message.clone())
     }
 }
@@ -370,6 +411,10 @@ impl<T> MockResult<T> {
 
     fn err(code: Code, message: impl Into<String>) -> Self {
         Self::Err(MockError::new(code, message))
+    }
+
+    fn source_not_found(qualified: impl Into<String>) -> Self {
+        Self::Err(MockError::source_not_found(qualified))
     }
 
     fn into_tonic_result(self) -> Result<T, Status> {
@@ -403,6 +448,7 @@ impl Default for MockServerConfig {
                         secrets: Vec::new(),
                         variables: Vec::new(),
                         origin: SourceOrigin::Bundled as i32,
+                        credential_storage: SourceCredentialStorage::File as i32,
                     },
                     Source {
                         workspace: Some(workspace()),
@@ -411,6 +457,7 @@ impl Default for MockServerConfig {
                         secrets: Vec::new(),
                         variables: Vec::new(),
                         origin: SourceOrigin::Imported as i32,
+                        credential_storage: SourceCredentialStorage::File as i32,
                     },
                 ],
             }),
@@ -457,6 +504,31 @@ impl MockServerConfig {
         self.validate_source = MockResult::ok(response);
         self
     }
+
+    /// Mirrors what the real server emits for `AppError::SourceNotFound`
+    /// from `validate_source` (a `Code::NotFound` Status carrying an
+    /// AIP-193 `ErrorInfo` with `reason = "SOURCE_NOT_FOUND"`).
+    pub(crate) fn with_validate_source_not_found(mut self, qualified: impl Into<String>) -> Self {
+        self.validate_source = MockResult::source_not_found(qualified);
+        self
+    }
+
+    pub(crate) fn with_delete_source_error(
+        mut self,
+        code: Code,
+        message: impl Into<String>,
+    ) -> Self {
+        self.delete_source = MockResult::err(code, message);
+        self
+    }
+
+    /// Mirrors what the real server emits for `AppError::SourceNotFound`
+    /// from `delete_source` (a `Code::NotFound` Status carrying an
+    /// AIP-193 `ErrorInfo` with `reason = "SOURCE_NOT_FOUND"`).
+    pub(crate) fn with_delete_source_not_found(mut self, qualified: impl Into<String>) -> Self {
+        self.delete_source = MockResult::source_not_found(qualified);
+        self
+    }
 }
 
 fn list_catalog_response(request: &ListCatalogRequest) -> ListCatalogResponse {
@@ -493,6 +565,7 @@ struct Captured {
     get_source: Mutex<Vec<GetSourceRequest>>,
     get_source_info: Mutex<Vec<GetSourceInfoRequest>>,
     create_bundled_source: Mutex<Vec<CreateBundledSourceRequest>>,
+    create_bundled_source_with_oauth: Mutex<Vec<CreateBundledSourceWithOAuthRequest>>,
     import_source: Mutex<Vec<ImportSourceRequest>>,
     delete_source: Mutex<Vec<DeleteSourceRequest>>,
     validate_source: Mutex<Vec<ValidateSourceRequest>>,
@@ -724,8 +797,37 @@ struct MockSourceService {
     captured: Arc<Captured>,
 }
 
+type MockBundledSourceStream =
+    Pin<Box<dyn Stream<Item = Result<CreateBundledSourceWithOAuthResponse, Status>> + Send>>;
+type MockImportSourceStream =
+    Pin<Box<dyn Stream<Item = Result<ImportSourceResponse, Status>> + Send>>;
+
+fn mock_bundled_source_stream() -> MockBundledSourceStream {
+    let (tx, rx) =
+        tokio::sync::mpsc::channel::<Result<CreateBundledSourceWithOAuthResponse, Status>>(1);
+    tx.try_send(Ok(CreateBundledSourceWithOAuthResponse {
+        event: Some(create_bundled_source_with_o_auth_response::Event::Source(
+            mock_source(),
+        )),
+    }))
+    .expect("send mock bundled source credential event");
+    Box::pin(ReceiverStream::new(rx))
+}
+
+fn mock_import_source_stream() -> MockImportSourceStream {
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<ImportSourceResponse, Status>>(1);
+    tx.try_send(Ok(ImportSourceResponse {
+        event: Some(import_source_response::Event::Source(mock_source())),
+    }))
+    .expect("send mock import source credential event");
+    Box::pin(ReceiverStream::new(rx))
+}
+
 #[tonic::async_trait]
 impl SourceService for MockSourceService {
+    type CreateBundledSourceWithOAuthStream = MockBundledSourceStream;
+    type ImportSourceStream = MockImportSourceStream;
+
     async fn discover_sources(
         &self,
         request: Request<DiscoverSourcesRequest>,
@@ -797,18 +899,28 @@ impl SourceService for MockSourceService {
         }))
     }
 
+    async fn create_bundled_source_with_o_auth(
+        &self,
+        request: Request<CreateBundledSourceWithOAuthRequest>,
+    ) -> Result<Response<Self::CreateBundledSourceWithOAuthStream>, Status> {
+        self.captured
+            .create_bundled_source_with_oauth
+            .lock()
+            .expect("create_bundled_source_with_oauth capture")
+            .push(request.into_inner());
+        Ok(Response::new(mock_bundled_source_stream()))
+    }
+
     async fn import_source(
         &self,
         request: Request<ImportSourceRequest>,
-    ) -> Result<Response<ImportSourceResponse>, Status> {
+    ) -> Result<Response<Self::ImportSourceStream>, Status> {
         self.captured
             .import_source
             .lock()
             .expect("import_source capture")
             .push(request.into_inner());
-        Ok(Response::new(ImportSourceResponse {
-            source: Some(mock_source()),
-        }))
+        Ok(Response::new(mock_import_source_stream()))
     }
 
     async fn delete_source(

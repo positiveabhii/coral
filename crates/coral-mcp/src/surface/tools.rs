@@ -53,7 +53,7 @@ pub(crate) fn sql_tool(sources: &[Source], visible_table_count: usize) -> Tool {
             "properties": {
                 "sql": {
                     "type": "string",
-                    "description": "A single SQL statement to execute."
+                    "description": "One read-only SQL statement to execute against the Coral database."
                 }
             }
         })),
@@ -135,7 +135,7 @@ pub(crate) fn search_catalog_tool(
             "properties": {
                 "pattern": {
                     "type": "string",
-                    "description": "Rust regex pattern to match catalog metadata."
+                    "description": "Rust regex pattern to match database catalog metadata."
                 },
                 "schema": {
                     "type": "string",
@@ -187,18 +187,18 @@ pub(crate) fn search_catalog_tool(
 pub(crate) fn describe_table_tool() -> Tool {
     Tool::new(
         "describe_table",
-        "Describe one queryable table without returning full column definitions.",
+        "Describe one database table without returning full column definitions.",
         json_object_schema(&json!({
             "type": "object",
             "required": ["schema", "table"],
             "properties": {
                 "schema": {
                     "type": "string",
-                    "description": "Exact schema/source name."
+                    "description": "Exact SQL schema name."
                 },
                 "table": {
                     "type": "string",
-                    "description": "Exact table name within the schema."
+                    "description": "Exact table name within the SQL schema."
                 }
             }
         })),
@@ -215,18 +215,18 @@ pub(crate) fn describe_table_tool() -> Tool {
 pub(crate) fn list_columns_tool() -> Tool {
     Tool::new(
         "list_columns",
-        "List columns for one table with optional regex and required-filter narrowing.",
+        "List columns for one database table with optional regex and required-filter narrowing.",
         json_object_schema(&json!({
             "type": "object",
             "required": ["schema", "table"],
             "properties": {
                 "schema": {
                     "type": "string",
-                    "description": "Exact schema/source name."
+                    "description": "Exact SQL schema name."
                 },
                 "table": {
                     "type": "string",
-                    "description": "Exact table name within the schema."
+                    "description": "Exact table name within the SQL schema."
                 },
                 "pattern": {
                     "type": "string",
@@ -386,11 +386,11 @@ fn sql_tool_description(sources: &[Source], visible_table_count: usize) -> Strin
     let source_count = sources.len();
     if visible_table_count == 0 {
         format!(
-            "Run a SQL query against all configured Coral sources in one statement. Coral exposes each source as a SQL schema (e.g. `github.pulls`, `slack.messages`) so you can JOIN across sources in a single query — prefer one cross-source JOIN over separate per-source calls. {source_count} configured source(s), but no visible SQL tables are currently available."
+            "Run a SQL query against all configured Coral sources in one statement. Coral exposes each source as a SQL schema (e.g. `github.pulls`, `slack.messages`) so you can JOIN across sources in a single query — prefer one cross-source JOIN over separate per-source calls. {source_count} configured source(s); No user tables are currently visible."
         )
     } else {
         format!(
-            "Run a SQL query against all configured Coral sources in one statement. Coral exposes each source as a SQL schema (e.g. `github.pulls`, `slack.messages`) so you can JOIN across sources in a single query — prefer one cross-source JOIN over separate per-source calls. {visible_table_count} table(s) are currently visible across {source_count} source(s)."
+            "Run a SQL query against all configured Coral sources in one statement. Coral exposes each source as a SQL schema (e.g. `github.pulls`, `slack.messages`) so you can JOIN across sources in a single query — prefer one cross-source JOIN over separate per-source calls. Use JOIN, CROSS JOIN, CTEs, subqueries, and aggregates to combine tables. {visible_table_count} table(s) are currently visible across {source_count} source(s)."
         )
     }
 }
