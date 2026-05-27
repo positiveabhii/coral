@@ -1,10 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
-import {
-  type Source,
-  type SourceCredentialMethod,
-  type SourceInputSpec,
-} from '@/generated/coral/v1/sources_pb'
+import { type Source, type SourceInputSpec } from '@/generated/coral/v1/sources_pb'
 
 import { Container as ButtonContainer } from '@/wax/components/button/container'
 import { Icon as ButtonIcon } from '@/wax/components/button/icon'
@@ -190,18 +186,13 @@ function SourceDetailDialogContent({
 
 function Bindings({
   source,
-  inputs,
   onSaved,
 }: {
   source: Source
   inputs: SourceInputSpec[]
   onSaved: () => Promise<void>
 }) {
-  const inputsByKey = useMemo(() => {
-    const out = new Map<string, SourceInputSpec>()
-    for (const input of inputs) out.set(input.key, input)
-    return out
-  }, [inputs])
+  const editable = originLabel(source.origin) === 'bundled'
 
   if (source.variables.length === 0 && source.secrets.length === 0) {
     return (
@@ -215,6 +206,12 @@ function Bindings({
   return (
     <section className={styles.section}>
       <Typography.HeadingXSmall as="h3">Configuration</Typography.HeadingXSmall>
+      {!editable ? (
+        <Typography.BodySmall variant="tertiary">
+          Imported sources can't be edited here yet — re-import the source spec to change its
+          credentials.
+        </Typography.BodySmall>
+      ) : null}
       <div className={styles.bindingList}>
         {source.variables.map((v) => (
           <BindingRow
@@ -224,6 +221,7 @@ function Bindings({
             keyName={v.key}
             currentValue={v.value}
             source={source}
+            editable={editable}
             onSaved={onSaved}
           />
         ))}
@@ -235,7 +233,7 @@ function Bindings({
             keyName={s.key}
             currentValue={null}
             source={source}
-            inputSpec={inputsByKey.get(s.key)}
+            editable={editable}
             onSaved={onSaved}
           />
         ))}
@@ -250,7 +248,7 @@ function BindingRow({
   keyName,
   currentValue,
   source,
-  inputSpec,
+  editable,
   onSaved,
 }: {
   sourceName: string
@@ -258,14 +256,12 @@ function BindingRow({
   keyName: string
   currentValue: string | null
   source: Source
-  inputSpec?: SourceInputSpec
+  editable: boolean
   onSaved: () => Promise<void>
 }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
-
-  const oauthBacked = kind === 'secret' && isOAuthSecret(inputSpec)
 
   function startEdit() {
     setDraft(kind === 'variable' ? (currentValue ?? '') : '')
@@ -308,9 +304,7 @@ function BindingRow({
         <span className={styles.keyValueText}>
           {kind === 'variable' ? currentValue || '—' : '•••••••• (secret)'}
         </span>
-        {oauthBacked ? (
-          <Typography.BodySmall variant="tertiary">Managed by OAuth</Typography.BodySmall>
-        ) : (
+        {editable ? (
           <button
             type="button"
             className={styles.editButton}
@@ -319,7 +313,7 @@ function BindingRow({
           >
             <Icon name="Pencil" size="14" color="secondary" />
           </button>
-        )}
+        ) : null}
       </div>
     )
   }
@@ -353,12 +347,6 @@ function BindingRow({
       </div>
     </div>
   )
-}
-
-function isOAuthSecret(input: SourceInputSpec | undefined): boolean {
-  if (!input || input.input.case !== 'secret') return false
-  const methods: SourceCredentialMethod[] = input.input.value.credential?.methods ?? []
-  return methods.some((m) => m.method.case === 'oauth')
 }
 
 function originBadgeLabel(origin: SourceOriginLabel): string {
