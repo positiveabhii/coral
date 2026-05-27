@@ -19,6 +19,16 @@ impl Tuple {
     pub(crate) fn values(&self) -> &[BindingValue] {
         &self.values
     }
+
+    pub(crate) fn retained_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.values.capacity() * std::mem::size_of::<BindingValue>()
+            + self
+                .values
+                .iter()
+                .map(BindingValue::retained_payload_size)
+                .sum::<usize>()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -34,6 +44,13 @@ impl BindingValue {
             Self::String(value) => value.clone(),
             Self::Int64(value) => value.to_string(),
             Self::Boolean(value) => value.to_string(),
+        }
+    }
+
+    fn retained_payload_size(&self) -> usize {
+        match self {
+            Self::String(value) => value.len(),
+            Self::Int64(_) | Self::Boolean(_) => 0,
         }
     }
 }

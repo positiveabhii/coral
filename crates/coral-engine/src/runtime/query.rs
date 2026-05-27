@@ -25,9 +25,9 @@ use crate::runtime::registry::{
 };
 use crate::runtime::source_functions::SourceFunctionRegistry;
 use crate::{
-    CoreError, DependentJoinConfig, QueryExecution, QueryResultObserver, QueryResultObserverError,
-    QueryRuntimeConfig, QueryRuntimeContext, QuerySource, RequestAuthenticator, SourceDecorator,
-    TableInfo,
+    CoreError, DependentJoinConfig, QueryExecution, QueryMemoryConfig, QueryResultObserver,
+    QueryResultObserverError, QueryRuntimeConfig, QueryRuntimeContext, QuerySource,
+    RequestAuthenticator, SourceDecorator, TableInfo,
 };
 
 pub(crate) struct QueryRuntimeAdapter {
@@ -43,6 +43,7 @@ struct FallbackRuntimeConfig {
     sources: Vec<QuerySource>,
     runtime_context: QueryRuntimeContext,
     dependent_join: DependentJoinConfig,
+    memory: QueryMemoryConfig,
     request_authenticators: HashMap<String, Arc<dyn RequestAuthenticator>>,
 }
 
@@ -64,6 +65,7 @@ pub(crate) async fn build_runtime(
 ) -> Result<QueryRuntimeAdapter, CoreError> {
     let QueryRuntimeConfig {
         context: runtime_context,
+        memory,
         dependent_join,
         mut extensions,
     } = runtime;
@@ -78,6 +80,7 @@ pub(crate) async fn build_runtime(
         sources: sources.to_vec(),
         runtime_context: runtime_context.clone(),
         dependent_join: dependent_join.clone(),
+        memory: memory.clone(),
         request_authenticators: request_authenticators.clone(),
     });
 
@@ -87,6 +90,7 @@ pub(crate) async fn build_runtime(
         &request_authenticators,
         extensions.source_decorators.as_mut_slice(),
         &dependent_join,
+        &memory,
     )
     .await?;
 
@@ -105,8 +109,9 @@ async fn build_registered_runtime(
     request_authenticators: &HashMap<String, Arc<dyn RequestAuthenticator>>,
     source_decorators: &mut [Box<dyn SourceDecorator>],
     dependent_join: &DependentJoinConfig,
+    memory: &QueryMemoryConfig,
 ) -> Result<RegisteredRuntime, CoreError> {
-    let ctx = build_session_context(dependent_join)?;
+    let ctx = build_session_context(dependent_join, memory)?;
     let registration = register_runtime_sources(
         &ctx,
         sources,
@@ -145,11 +150,15 @@ async fn build_registered_runtime(
 
 fn build_session_context(
     dependent_join: &DependentJoinConfig,
+    memory: &QueryMemoryConfig,
 ) -> Result<Arc<SessionContext>, CoreError> {
     let session_config = SessionConfig::new().with_information_schema(true);
+    let mut runtime_env_builder = RuntimeEnvBuilder::new().with_object_list_cache_limit(0);
+    if let Some(limit) = memory.limit {
+        runtime_env_builder = runtime_env_builder.with_memory_limit(limit.as_bytes(), 1.0);
+    }
     let runtime_env = Arc::new(
-        RuntimeEnvBuilder::new()
-            .with_object_list_cache_limit(0)
+        runtime_env_builder
             .build()
             .map_err(|err| datafusion_to_core(&err, &[]))?,
     );
@@ -322,6 +331,7 @@ impl FallbackRuntimeConfig {
             &self.request_authenticators,
             source_decorators.as_mut_slice(),
             &self.dependent_join.without_rewrites(),
+            &self.memory,
         )
         .await
     }
@@ -344,5 +354,73 @@ fn query_result_observer_error(name: &str, error: &QueryResultObserverError) -> 
             CoreError::FailedPrecondition(format!("query result observer '{name}': {detail}"))
         }
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::str::FromStr as _;
+
+    use datafusion::execution::memory_pool::MemoryConsumer;
+
+    use super::{FallbackRuntimeConfig, build_session_context};
+    use crate::{DependentJoinConfig, MemorySize, QueryMemoryConfig, QueryRuntimeContext};
+
+    #[test]
+    fn build_session_context_applies_memory_limit() {
+        let ctx = build_session_context(
+            &DependentJoinConfig::default(),
+            &QueryMemoryConfig {
+                limit: Some(MemorySize::from_str("1Ki").unwrap()),
+            },
+        )
+        .expect("session context should build");
+        let pool = ctx.runtime_env().memory_pool.clone();
+        let reservation = MemoryConsumer::new("test").register(&pool);
+
+        reservation
+            .try_grow(512)
+            .expect("reservation below limit should succeed");
+        let error = reservation
+            .try_grow(1024)
+            .expect_err("reservation above limit should fail");
+
+        assert!(
+            error.to_string().contains("Resources exhausted"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fallback_runtime_preserves_memory_limit() {
+        let fallback = FallbackRuntimeConfig {
+            sources: Vec::new(),
+            runtime_context: QueryRuntimeContext::default(),
+            dependent_join: DependentJoinConfig::default(),
+            memory: QueryMemoryConfig {
+                limit: Some(MemorySize::from_str("1Ki").unwrap()),
+            },
+            request_authenticators: HashMap::new(),
+        };
+
+        let runtime = fallback
+            .build_without_dependent_join()
+            .await
+            .expect("fallback runtime should build");
+        let pool = runtime.ctx.runtime_env().memory_pool.clone();
+        let reservation = MemoryConsumer::new("fallback-test").register(&pool);
+
+        reservation
+            .try_grow(512)
+            .expect("reservation below fallback limit should succeed");
+        let error = reservation
+            .try_grow(1024)
+            .expect_err("reservation above fallback limit should fail");
+
+        assert!(
+            error.to_string().contains("Resources exhausted"),
+            "unexpected error: {error}"
+        );
     }
 }

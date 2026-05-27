@@ -8,9 +8,9 @@ mod query_error;
 pub use catalog::{ColumnInfo, TableInfo};
 pub use error::{CoreError, StatusCode, StructuredQueryError};
 pub use query::{
-    DependentJoinConfig, DependentJoinSourceConfig, EffectiveDependentJoinConfig, QueryExecution,
-    QueryRuntimeConfig, QueryRuntimeContext, QuerySource, QueryTestFailure, QueryTestResult,
-    QueryTestSuccess, SourceValidationReport,
+    DependentJoinConfig, DependentJoinSourceConfig, EffectiveDependentJoinConfig, MemorySize,
+    QueryExecution, QueryMemoryConfig, QueryRuntimeConfig, QueryRuntimeContext, QuerySource,
+    QueryTestFailure, QueryTestResult, QueryTestSuccess, SourceValidationReport,
 };
 pub(crate) use query_error::{ColumnParts, TableRefParts};
 

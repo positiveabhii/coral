@@ -67,9 +67,9 @@ pub use composition::{
 };
 pub use contracts::{
     ColumnInfo, CoreError, DependentJoinConfig, DependentJoinSourceConfig,
-    EffectiveDependentJoinConfig, QueryExecution, QueryRuntimeConfig, QueryRuntimeContext,
-    QuerySource, QueryTestFailure, QueryTestResult, QueryTestSuccess, SourceValidationReport,
-    StatusCode, StructuredQueryError, TableInfo,
+    EffectiveDependentJoinConfig, MemorySize, QueryExecution, QueryMemoryConfig,
+    QueryRuntimeConfig, QueryRuntimeContext, QuerySource, QueryTestFailure, QueryTestResult,
+    QueryTestSuccess, SourceValidationReport, StatusCode, StructuredQueryError, TableInfo,
 };
 
 /// High-level query operations for the local query engine.
