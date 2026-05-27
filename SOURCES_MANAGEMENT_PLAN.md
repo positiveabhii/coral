@@ -84,7 +84,7 @@ InstallCommunitySource    ──→  GET /v1/community/:name → manifest
 
 ## 7. Verification
 - `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test -p coral-app` — 117 lib tests + 56 gRPC integration tests
+- `cargo test -p coral-app` — 138 lib tests + 56 gRPC integration tests
 - `npm run build` (type-check + Vite) clean
 - `npx oxlint --deny-warnings` clean
 - Manual: `cd ui && npm run dev:local`, open `http://localhost:5173/#/sources`. Install Slack via Paste, via OAuth (`SLACK_OAUTH_CLIENT_ID`). Validate + delete from detail page.

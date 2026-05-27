@@ -38,6 +38,7 @@ export function SourcesIndex() {
       ])
       setInstalled(installedRes)
       setBundled(bundledRes)
+      setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -50,12 +51,27 @@ export function SourcesIndex() {
   const loading = installed === null && bundled === null && !error
 
   const allEntries = useMemo<IndexEntry[]>(() => {
-    const installedByName = new Map((installed ?? []).map((s) => [s.name, s]))
-    const merged: IndexEntry[] = (bundled ?? []).map((entry) => ({
-      ...entry,
-      installed: entry.installed || installedByName.has(entry.name),
-      installedVersion: installedByName.get(entry.name)?.version,
-    }))
+    const bundledByName = new Map((bundled ?? []).map((entry) => [entry.name, entry]))
+    const merged: IndexEntry[] = (bundled ?? []).map((entry) => ({ ...entry }))
+    for (const installedSource of installed ?? []) {
+      const bundledEntry = bundledByName.get(installedSource.name)
+      if (bundledEntry) {
+        const target = merged.find((entry) => entry.name === installedSource.name)
+        if (target) {
+          target.installed = true
+          target.installedVersion = installedSource.version
+        }
+      } else {
+        merged.push({
+          name: installedSource.name,
+          description: '',
+          version: installedSource.version,
+          installed: true,
+          origin: installedSource.origin === 'bundled' ? 'bundled' : 'imported',
+          installedVersion: installedSource.version,
+        })
+      }
+    }
     merged.sort((a, b) => a.name.localeCompare(b.name))
     return merged
   }, [bundled, installed])

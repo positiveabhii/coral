@@ -30,7 +30,7 @@ export interface CatalogEntry {
   description: string
   version: string
   installed: boolean
-  origin: 'bundled'
+  origin: SourceOriginLabel
 }
 
 export interface ResolvedSourceInfo {
@@ -43,7 +43,7 @@ export interface InstallInput {
   secret: boolean
 }
 
-function originLabel(origin: SourceOrigin): SourceOriginLabel {
+export function originLabel(origin: SourceOrigin): SourceOriginLabel {
   if (origin === SourceOrigin.BUNDLED) return 'bundled'
   if (origin === SourceOrigin.IMPORTED) return 'imported'
   return 'unknown'

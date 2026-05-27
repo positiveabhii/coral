@@ -14,6 +14,7 @@ import { providerIcon } from '@/lib/provider-icons'
 import {
   deleteSource,
   getInstalledSource,
+  originLabel,
   validateSource,
   type SourceOriginLabel,
 } from '@/lib/sources'
@@ -44,6 +45,7 @@ export function SourceDetailDialog({
         <Dialog.Popup size="l">
           {name ? (
             <SourceDetailDialogContent
+              key={name}
               name={name}
               onClose={() => onOpenChange(false)}
               onRemoved={onRemoved}
@@ -273,12 +275,6 @@ function Validation({ state, onValidate }: { state: ValidationState; onValidate:
       )}
     </section>
   )
-}
-
-function originLabel(origin: number): SourceOriginLabel {
-  if (origin === 1) return 'bundled'
-  if (origin === 2) return 'imported'
-  return 'unknown'
 }
 
 function originBadgeLabel(origin: SourceOriginLabel): string {
