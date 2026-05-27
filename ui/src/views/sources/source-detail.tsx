@@ -4,6 +4,7 @@ import { type Source, type SourceInputSpec } from '@/generated/coral/v1/sources_
 
 import { Container as ButtonContainer } from '@/wax/components/button/container'
 import { Icon as ButtonIcon } from '@/wax/components/button/icon'
+import { IconButton } from '@/wax/components/button/icon-button'
 import { Text as ButtonText } from '@/wax/components/button/text'
 import * as Dialog from '@/wax/components/dialog'
 import { Icon } from '@/wax/components/icon'
@@ -305,14 +306,13 @@ function BindingRow({
           {kind === 'variable' ? currentValue || '—' : '•••••••• (secret)'}
         </span>
         {editable ? (
-          <button
-            type="button"
-            className={styles.editButton}
+          <IconButton
+            name="Pencil"
+            variant="bare"
+            size="22"
+            ariaLabel={`Edit ${keyName}`}
             onClick={startEdit}
-            aria-label={`Edit ${keyName}`}
-          >
-            <Icon name="Pencil" size="14" color="secondary" />
-          </button>
+          />
         ) : null}
       </div>
     )

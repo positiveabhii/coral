@@ -21,16 +21,3 @@ export const text = style({
   gap: 2,
   minWidth: 0,
 })
-
-export const retry = style({
-  alignItems: 'center',
-  background: 'transparent',
-  border: 'none',
-  color: theme.content.secondary,
-  cursor: 'pointer',
-  display: 'inline-flex',
-  fontFamily: 'inherit',
-  fontSize: 13,
-  gap: 6,
-  padding: 6,
-})

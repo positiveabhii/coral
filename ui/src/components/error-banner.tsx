@@ -1,3 +1,6 @@
+import { Container as ButtonContainer } from '@/wax/components/button/container'
+import { Icon as ButtonIcon } from '@/wax/components/button/icon'
+import { Text as ButtonText } from '@/wax/components/button/text'
 import { Icon } from '@/wax/components/icon'
 import { Typography } from '@/wax/components/typography'
 
@@ -18,10 +21,10 @@ export function ErrorBanner({ title, message, onRetry }: ErrorBannerProps) {
         <Typography.BodySmall variant="secondary">{message}</Typography.BodySmall>
       </div>
       {onRetry ? (
-        <button type="button" className={styles.retry} onClick={onRetry}>
-          <Icon name="RefreshCw" size="14" color="secondary" />
-          Retry
-        </button>
+        <ButtonContainer variant="secondary" size="22" onClick={onRetry}>
+          <ButtonIcon name="RefreshCw" />
+          <ButtonText>Retry</ButtonText>
+        </ButtonContainer>
       ) : null}
     </div>
   )

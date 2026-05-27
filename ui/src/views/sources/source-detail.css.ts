@@ -89,24 +89,6 @@ export const keyValueEdit = style({
   rowGap: 8,
 })
 
-export const editButton = style({
-  alignItems: 'center',
-  background: 'transparent',
-  border: 0,
-  borderRadius: 4,
-  color: theme.content.secondary,
-  cursor: 'pointer',
-  display: 'inline-flex',
-  height: 24,
-  justifyContent: 'center',
-  padding: 0,
-  width: 24,
-  ':hover': {
-    background: theme.surface.onMainContentHover,
-    color: theme.content.primary,
-  },
-})
-
 export const editActions = style({
   display: 'flex',
   gap: 8,
