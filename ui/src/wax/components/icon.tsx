@@ -1,5 +1,5 @@
 import classnames from 'classnames'
-import { Activity, Check, CircleCheck, Loader, Plus, RefreshCw } from 'lucide-react'
+import { Activity, Check, CircleCheck, Loader, Pencil, Plus, RefreshCw } from 'lucide-react'
 
 import { customIcons, isCustomIcon } from '@/wax/components/icon/custom-icons/custom-icons'
 import { iconContainer } from '@/wax/components/icon.css'
@@ -28,6 +28,7 @@ export type IconName =
   | 'Coral'
   | 'Loader'
   | 'PanelLeft'
+  | 'Pencil'
   | 'Plug'
   | 'Plus'
   | 'RefreshCw'
@@ -47,6 +48,7 @@ const lucideIcons = {
   Check,
   CircleCheck,
   Loader,
+  Pencil,
   Plus,
   RefreshCw,
 } as const

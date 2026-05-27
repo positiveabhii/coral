@@ -18,6 +18,8 @@ const PROVIDER_ICONS: Record<string, string> = {
   cloudwatch_metrics: '/images/providers/aws.svg',
   gcp: '/images/providers/gcp.png',
   google: '/images/providers/google.svg',
+  google_calendar: '/images/providers/google.svg',
+  google_contacts: '/images/providers/google.svg',
   google_drive: '/images/providers/google.svg',
 
   // Atlassian suite
@@ -54,6 +56,8 @@ const PROVIDER_ICONS: Record<string, string> = {
 
   // LLM providers
   anthropic: '/images/providers/anthropic.svg',
+  claude: '/images/providers/anthropic.svg',
+  codex: '/images/providers/openai.svg',
   openai: '/images/providers/openai.svg',
   xai: '/images/providers/xai.svg',
 

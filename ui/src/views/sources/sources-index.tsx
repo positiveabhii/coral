@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { Icon } from '@/wax/components/icon'
 import { TextInput } from '@/wax/components/inputs/text'
@@ -29,6 +29,21 @@ export function SourcesIndex() {
   const [search, setSearch] = useState('')
   const [installingName, setInstallingName] = useState<string | null>(null)
   const [detailName, setDetailName] = useState<string | null>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+        const input = searchInputRef.current
+        if (!input) return
+        event.preventDefault()
+        input.focus()
+        input.select()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const refresh = useCallback(async () => {
     const [installedRes, bundledRes] = await Promise.allSettled([
@@ -125,6 +140,7 @@ export function SourcesIndex() {
 
         <div className={styles.searchBar}>
           <TextInput
+            ref={searchInputRef}
             value={search}
             onChange={setSearch}
             placeholder="Search sources…"

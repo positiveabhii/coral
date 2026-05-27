@@ -76,10 +76,42 @@ export const bindingList = style({
 })
 
 export const keyValue = style({
-  alignItems: 'baseline',
+  alignItems: 'center',
+  display: 'grid',
+  gap: 10,
+  gridTemplateColumns: 'minmax(120px, max-content) 1fr auto',
+})
+
+export const keyValueEdit = style({
   display: 'grid',
   gap: 10,
   gridTemplateColumns: 'minmax(120px, max-content) 1fr',
+  rowGap: 8,
+})
+
+export const editButton = style({
+  alignItems: 'center',
+  background: 'transparent',
+  border: 0,
+  borderRadius: 4,
+  color: theme.content.secondary,
+  cursor: 'pointer',
+  display: 'inline-flex',
+  height: 24,
+  justifyContent: 'center',
+  padding: 0,
+  width: 24,
+  ':hover': {
+    background: theme.surface.onMainContentHover,
+    color: theme.content.primary,
+  },
+})
+
+export const editActions = style({
+  display: 'flex',
+  gap: 8,
+  gridColumn: '1 / -1',
+  justifyContent: 'flex-end',
 })
 
 export const keyLabel = style({
