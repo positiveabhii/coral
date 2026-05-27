@@ -44,14 +44,12 @@ impl ValidatedSourceManifest {
             }
         }
 
-        if let Some(parquet) = self.as_parquet() {
-            for table in &parquet.tables {
-                collect_host(&mut hosts, &table.source.location);
-            }
-        }
-        if let Some(jsonl) = self.as_jsonl() {
-            for table in &jsonl.tables {
-                collect_host(&mut hosts, &table.source.location);
+        if let Some(file) = self.as_file() {
+            for table in &file.tables {
+                collect_host(
+                    &mut hosts,
+                    &render_with_defaults(&table.source.location, inputs),
+                );
             }
         }
 
@@ -79,13 +77,12 @@ fn render_with_defaults(template: &ParsedTemplate, inputs: &[ManifestInputSpec])
                         None
                     }
                 });
-                match resolved {
-                    Some(value) => rendered.push_str(&value),
-                    None => {
-                        rendered.push_str("{{");
-                        rendered.push_str(token.raw());
-                        rendered.push_str("}}");
-                    }
+                if let Some(value) = resolved {
+                    rendered.push_str(&value);
+                } else {
+                    rendered.push_str("{{");
+                    rendered.push_str(token.raw());
+                    rendered.push_str("}}");
                 }
             }
         }
@@ -272,10 +269,11 @@ tables:
 name: demo
 version: 1.0.0
 dsl_version: 3
-backend: jsonl
+backend: file
 tables:
   - name: events
     description: Demo events
+    format: jsonl
     source:
       location: file:///tmp/demo/
     columns:

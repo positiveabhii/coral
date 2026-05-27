@@ -80,6 +80,7 @@ pub(crate) fn resolve_installed_manifest(
         )));
     }
     candidate.installed = true;
+    candidate.credential_storage = Some(source.effective_credential_storage());
     Ok(InstalledSourceManifest {
         source_spec,
         candidate,
@@ -109,6 +110,7 @@ fn candidate_from_manifest(
         hosts: manifest.outbound_hosts(),
         installed,
         origin,
+        credential_storage: None,
     })
 }
 
