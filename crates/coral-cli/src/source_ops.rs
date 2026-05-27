@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 use std::io::{IsTerminal, Read as _, Write as _, stdin, stdout};
 use std::net::TcpStream;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use coral_api::CORAL_ERROR_REASON_SOURCE_NOT_FOUND;
@@ -21,6 +24,7 @@ use coral_spec::{
     ManifestInputKind, ManifestInputSpec, ManifestOAuthCredentialSpec, ValidatedSourceManifest,
     parse_source_manifest_yaml,
 };
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use dialoguer::console::style;
 use dialoguer::{Input, Password, Select, theme::ColorfulTheme};
 use tonic::Request;
@@ -194,38 +198,58 @@ async fn source_from_bundled_credential_stream(
     mut stream: tonic::Streaming<CreateBundledSourceWithOAuthResponse>,
     oauth_labels: &BTreeMap<String, String>,
 ) -> Result<Source, anyhow::Error> {
-    while let Some(response) = stream
-        .message()
-        .await
-        .map_err(|error| oauth_error("retrieve", &error))?
-    {
+    let mut redirect_prompt = OAuthRedirectPastePrompt::default();
+    loop {
+        let response = match stream.message().await {
+            Ok(Some(response)) => response,
+            Ok(None) => {
+                redirect_prompt.cancel_and_join();
+                return Err(anyhow::anyhow!(
+                    "source credential retrieval stream ended before source installation completed"
+                ));
+            }
+            Err(error) => {
+                redirect_prompt.cancel_and_join();
+                return Err(oauth_error("retrieve", &error));
+            }
+        };
         let event = response.event.map(CredentialStreamEvent::from);
-        if let Some(source) = handle_credential_stream_event(event, oauth_labels) {
+        if let Some(source) =
+            handle_credential_stream_event(event, oauth_labels, &mut redirect_prompt)
+        {
+            redirect_prompt.cancel_and_join();
             return Ok(source);
         }
     }
-    Err(anyhow::anyhow!(
-        "source credential retrieval stream ended before source installation completed"
-    ))
 }
 
 async fn source_from_import_credential_stream(
     mut stream: tonic::Streaming<ImportSourceResponse>,
     oauth_labels: &BTreeMap<String, String>,
 ) -> Result<Source, anyhow::Error> {
-    while let Some(response) = stream
-        .message()
-        .await
-        .map_err(|error| oauth_error("retrieve", &error))?
-    {
+    let mut redirect_prompt = OAuthRedirectPastePrompt::default();
+    loop {
+        let response = match stream.message().await {
+            Ok(Some(response)) => response,
+            Ok(None) => {
+                redirect_prompt.cancel_and_join();
+                return Err(anyhow::anyhow!(
+                    "source credential retrieval stream ended before source import completed"
+                ));
+            }
+            Err(error) => {
+                redirect_prompt.cancel_and_join();
+                return Err(oauth_error("retrieve", &error));
+            }
+        };
         let event = response.event.map(CredentialStreamEvent::from);
-        if let Some(source) = handle_credential_stream_event(event, oauth_labels) {
+        if let Some(source) =
+            handle_credential_stream_event(event, oauth_labels, &mut redirect_prompt)
+        {
+            redirect_prompt.cancel_and_join();
             return Ok(source);
         }
     }
-    Err(anyhow::anyhow!(
-        "source credential retrieval stream ended before source import completed"
-    ))
 }
 
 enum CredentialStreamEvent {
@@ -277,6 +301,7 @@ impl From<import_source_response::Event> for CredentialStreamEvent {
 fn handle_credential_stream_event(
     event: Option<CredentialStreamEvent>,
     oauth_labels: &BTreeMap<String, String>,
+    redirect_prompt: &mut OAuthRedirectPastePrompt,
 ) -> Option<Source> {
     match event {
         Some(CredentialStreamEvent::OAuthAuthorization {
@@ -289,8 +314,10 @@ fn handle_credential_stream_event(
                 .map_or(input_key.as_str(), String::as_str);
             println!("Open this URL to connect {label}:");
             println!("{authorization_url}");
+            redirect_prompt.cancel_and_join();
             if user_code.is_empty() {
-                spawn_oauth_redirect_paste_prompt(&authorization_url, label);
+                redirect_prompt
+                    .replace(spawn_oauth_redirect_paste_prompt(&authorization_url, label));
             } else {
                 println!("Enter this code when prompted: {user_code}");
             }
@@ -299,8 +326,15 @@ fn handle_credential_stream_event(
             }
             None
         }
-        Some(CredentialStreamEvent::Source(source)) => Some(source),
-        Some(CredentialStreamEvent::OAuthCompleted) | None => None,
+        Some(CredentialStreamEvent::Source(source)) => {
+            redirect_prompt.cancel_and_join();
+            Some(source)
+        }
+        Some(CredentialStreamEvent::OAuthCompleted) => {
+            redirect_prompt.cancel_and_join();
+            None
+        }
+        None => None,
     }
 }
 
@@ -997,9 +1031,51 @@ fn oauth_error(action: &str, error: &tonic::Status) -> anyhow::Error {
     )
 }
 
-fn spawn_oauth_redirect_paste_prompt(authorization_url: &str, label: &str) {
+#[derive(Default)]
+struct OAuthRedirectPastePrompt {
+    cancel: Option<Arc<AtomicBool>>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl OAuthRedirectPastePrompt {
+    fn new(cancel: Arc<AtomicBool>, handle: JoinHandle<()>) -> Self {
+        Self {
+            cancel: Some(cancel),
+            handle: Some(handle),
+        }
+    }
+
+    fn replace(&mut self, next: Option<Self>) {
+        self.cancel_and_join();
+        if let Some(next) = next {
+            *self = next;
+        }
+    }
+
+    fn cancel_and_join(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        if let Some(handle) = self.handle.take()
+            && handle.join().is_err()
+        {
+            eprintln!("OAuth redirect paste prompt stopped unexpectedly");
+        }
+    }
+}
+
+impl Drop for OAuthRedirectPastePrompt {
+    fn drop(&mut self) {
+        self.cancel_and_join();
+    }
+}
+
+fn spawn_oauth_redirect_paste_prompt(
+    authorization_url: &str,
+    label: &str,
+) -> Option<OAuthRedirectPastePrompt> {
     if !stdin().is_terminal() || !stdout().is_terminal() {
-        return;
+        return None;
     }
     let expected_redirect_uri = match expected_oauth_redirect_uri(authorization_url) {
         Ok(redirect_uri) => redirect_uri,
@@ -1008,7 +1084,7 @@ fn spawn_oauth_redirect_paste_prompt(authorization_url: &str, label: &str) {
                 "{}",
                 style(format!("Could not enable redirect paste fallback: {error}")).dim()
             );
-            return;
+            return None;
         }
     };
     let label = label.to_string();
@@ -1019,23 +1095,72 @@ fn spawn_oauth_redirect_paste_prompt(authorization_url: &str, label: &str) {
         )
         .dim()
     );
-    drop(thread::spawn(move || {
-        let theme = ColorfulTheme::default();
-        let callback_url = Input::<String>::with_theme(&theme)
-            .with_prompt("Redirect URL")
-            .allow_empty(true)
-            .interact_text();
-        match callback_url {
-            Ok(value) if !value.trim().is_empty() => {
-                match submit_oauth_redirect_url(value.trim(), &expected_redirect_uri) {
-                    Ok(()) => println!("Submitted OAuth redirect for {label}."),
-                    Err(error) => eprintln!("Could not submit OAuth redirect URL: {error}"),
-                }
+    print!("Redirect URL: ");
+    if let Err(error) = stdout().flush() {
+        eprintln!("Could not render OAuth redirect prompt: {error}");
+        return None;
+    }
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = Arc::clone(&cancel);
+    let handle = thread::spawn(move || match read_oauth_redirect_prompt(&worker_cancel) {
+        Ok(Some(value)) if !value.trim().is_empty() => {
+            match submit_oauth_redirect_url(value.trim(), &expected_redirect_uri) {
+                Ok(()) => println!("Submitted OAuth redirect for {label}."),
+                Err(error) => eprintln!("Could not submit OAuth redirect URL: {error}"),
             }
-            Ok(_) => {}
-            Err(error) => eprintln!("Could not read OAuth redirect URL: {error}"),
         }
-    }));
+        Ok(Some(_) | None) => {}
+        Err(error) => eprintln!("Could not read OAuth redirect URL: {error}"),
+    });
+    Some(OAuthRedirectPastePrompt::new(cancel, handle))
+}
+
+fn read_oauth_redirect_prompt(cancel: &AtomicBool) -> Result<Option<String>, anyhow::Error> {
+    let mut value = String::new();
+    while !cancel.load(Ordering::Relaxed) {
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
+        if let Event::Key(key) = event::read()? {
+            match apply_redirect_prompt_key(key, &mut value) {
+                RedirectPromptAction::Continue => {}
+                RedirectPromptAction::Submit => return Ok(Some(value)),
+                RedirectPromptAction::Cancel => return Ok(None),
+            }
+        }
+    }
+    println!();
+    Ok(None)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RedirectPromptAction {
+    Continue,
+    Submit,
+    Cancel,
+}
+
+fn apply_redirect_prompt_key(key: KeyEvent, value: &mut String) -> RedirectPromptAction {
+    if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+        return RedirectPromptAction::Continue;
+    }
+    match key.code {
+        KeyCode::Enter => RedirectPromptAction::Submit,
+        KeyCode::Esc => RedirectPromptAction::Cancel,
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            RedirectPromptAction::Cancel
+        }
+        KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+            value.push(ch);
+            RedirectPromptAction::Continue
+        }
+        KeyCode::Backspace => {
+            value.pop();
+            RedirectPromptAction::Continue
+        }
+        _ => RedirectPromptAction::Continue,
+    }
 }
 
 fn expected_oauth_redirect_uri(authorization_url: &str) -> Result<Url, anyhow::Error> {
@@ -1253,6 +1378,7 @@ mod tests {
 
     use coral_api::v1::ValidateSourceResponse;
     use coral_spec::{ManifestInputKind, ManifestInputSpec};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use std::collections::HashMap;
     use std::io::{Read as _, Write as _};
@@ -1261,9 +1387,10 @@ mod tests {
     use url::Url;
 
     use super::{
-        ValidationFollowUp, ValidationSeverityMode, collect_inputs_with_hint,
-        expected_oauth_redirect_uri, finalize_input_value, shell_quote_arg, source_name_arg,
-        submit_oauth_redirect_url, validate_oauth_redirect_url, validation_follow_up,
+        RedirectPromptAction, ValidationFollowUp, ValidationSeverityMode,
+        apply_redirect_prompt_key, collect_inputs_with_hint, expected_oauth_redirect_uri,
+        finalize_input_value, shell_quote_arg, source_name_arg, submit_oauth_redirect_url,
+        validate_oauth_redirect_url, validation_follow_up,
     };
 
     #[test]
@@ -1499,6 +1626,65 @@ mod tests {
 
         submit_oauth_redirect_url(&callback_url, &expected).expect("submit redirect url");
         server.join().expect("callback server");
+    }
+
+    #[test]
+    fn redirect_prompt_key_events_collect_submit_and_edit_url() {
+        let mut value = String::new();
+
+        for ch in "http://localhost/callback".chars() {
+            assert_eq!(
+                apply_redirect_prompt_key(
+                    KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+                    &mut value
+                ),
+                RedirectPromptAction::Continue
+            );
+        }
+        assert_eq!(
+            apply_redirect_prompt_key(
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+                &mut value
+            ),
+            RedirectPromptAction::Continue
+        );
+        assert_eq!(
+            apply_redirect_prompt_key(
+                KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE),
+                &mut value
+            ),
+            RedirectPromptAction::Continue
+        );
+        assert_eq!(
+            apply_redirect_prompt_key(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &mut value
+            ),
+            RedirectPromptAction::Submit
+        );
+
+        assert_eq!(value, "http://localhost/callback");
+    }
+
+    #[test]
+    fn redirect_prompt_key_events_cancel_without_appending_control_input() {
+        let mut value = String::from("http://localhost/callback");
+
+        assert_eq!(
+            apply_redirect_prompt_key(
+                KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+                &mut value
+            ),
+            RedirectPromptAction::Continue
+        );
+        assert_eq!(
+            apply_redirect_prompt_key(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                &mut value
+            ),
+            RedirectPromptAction::Cancel
+        );
+        assert_eq!(value, "http://localhost/callback");
     }
 
     #[test]
