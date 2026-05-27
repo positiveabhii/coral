@@ -51,6 +51,14 @@ pub(crate) struct ListColumnsArguments {
     pub(crate) pagination: Pagination,
 }
 
+pub(crate) struct SearchColumnsArguments {
+    pub(crate) pattern: String,
+    pub(crate) schema: Option<String>,
+    pub(crate) ignore_case: bool,
+    pub(crate) required_only: bool,
+    pub(crate) pagination: Pagination,
+}
+
 pub(crate) fn sql_tool(sources: &[Source], visible_table_count: usize) -> Tool {
     Tool::new(
         "sql",
@@ -284,6 +292,57 @@ pub(crate) fn list_columns_tool() -> Tool {
     )
 }
 
+pub(crate) fn search_columns_tool() -> Tool {
+    Tool::new(
+        "search_columns",
+        "Search columns across database tables. Use this when you know a column, field, or data type but not the exact table.",
+        json_object_schema(&json!({
+            "type": "object",
+            "required": ["pattern"],
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Rust regex matched against column names, descriptions, and data types."
+                },
+                "schema": {
+                    "type": "string",
+                    "description": "Optional exact SQL schema name to search."
+                },
+                "ignore_case": {
+                    "type": "boolean",
+                    "description": "Whether regex matching is case-insensitive. Defaults to true."
+                },
+                "required_only": {
+                    "type": "boolean",
+                    "description": "Only return columns that are required filters. Defaults to false."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum column matches to return, from 1 to 50. Defaults to 20.",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 20
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of matching columns to skip. Defaults to 0.",
+                    "minimum": 0,
+                    "maximum": u32::MAX,
+                    "default": 0
+                }
+            }
+        })),
+    )
+    .with_raw_output_schema(search_columns_output_schema())
+    .with_annotations(
+        ToolAnnotations::with_title("Search Columns")
+            .read_only(true)
+            .destructive(false)
+            .idempotent(true)
+            .open_world(false),
+    )
+}
+
 pub(crate) fn feedback_tool() -> Tool {
     Tool::new(
         "feedback",
@@ -406,6 +465,18 @@ pub(crate) fn list_columns_arguments(
         ignore_case: optional_bool_argument(arguments, "ignore_case", true)?,
         required_only: optional_bool_argument(arguments, "required_only", false)?,
         pagination: parse_pagination(arguments)?,
+    })
+}
+
+pub(crate) fn search_columns_arguments(
+    arguments: Option<&Map<String, Value>>,
+) -> Result<SearchColumnsArguments, ErrorData> {
+    Ok(SearchColumnsArguments {
+        pattern: required_string_argument(arguments, "pattern")?,
+        schema: optional_string_argument(arguments, "schema")?,
+        ignore_case: optional_bool_argument(arguments, "ignore_case", true)?,
+        required_only: optional_bool_argument(arguments, "required_only", false)?,
+        pagination: parse_pagination_with_limits(arguments, 20, 50)?,
     })
 }
 
@@ -655,6 +726,87 @@ fn list_columns_output_schema() -> Arc<Map<String, Value>> {
             missing_table_output_schema()
         ]
     }))
+}
+
+fn search_columns_output_schema() -> Arc<Map<String, Value>> {
+    json_object_schema(&json!({
+        "type": "object",
+        "required": ["columns", "total", "limit", "offset", "has_more"],
+        "additionalProperties": false,
+        "properties": {
+            "columns": {
+                "type": "array",
+                "items": table_column_search_result_output_schema()
+            },
+            "total": {
+                "type": "integer",
+                "minimum": 0
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1
+            },
+            "offset": {
+                "type": "integer",
+                "minimum": 0
+            },
+            "has_more": { "type": "boolean" },
+            "next_offset": {
+                "type": "integer",
+                "minimum": 0
+            }
+        }
+    }))
+}
+
+fn table_column_search_result_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": [
+            "schema_name",
+            "table_name",
+            "sql_reference",
+            "table_description",
+            "required_filters",
+            "column_name",
+            "data_type",
+            "is_nullable",
+            "is_virtual",
+            "is_required_filter",
+            "description",
+            "ordinal_position",
+            "matched_fields"
+        ],
+        "additionalProperties": false,
+        "properties": {
+            "schema_name": { "type": "string" },
+            "table_name": { "type": "string" },
+            "sql_reference": { "type": "string" },
+            "table_description": { "type": "string" },
+            "required_filters": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "column_name": { "type": "string" },
+            "data_type": { "type": "string" },
+            "is_nullable": { "type": "boolean" },
+            "is_virtual": { "type": "boolean" },
+            "is_required_filter": { "type": "boolean" },
+            "description": { "type": "string" },
+            "ordinal_position": {
+                "type": "integer",
+                "minimum": 0
+            },
+            "matched_fields": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "string",
+                    "enum": ["column_name", "description", "data_type"]
+                }
+            }
+        }
+    })
 }
 
 fn list_columns_page_output_schema() -> Value {

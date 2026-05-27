@@ -8,9 +8,10 @@ use coral_api::{
         CatalogItem as ProtoCatalogItem, CatalogSearchResult as ProtoCatalogSearchResult, Column,
         ColumnSearchResult as ProtoColumnSearchResult,
         DescribeTableResponse as ProtoDescribeTableResponse, PaginationResponse, QueryTestFailure,
-        QueryTestResult, QueryTestSuccess, Source, Table, TableFunction, TableFunctionArgument,
-        TableFunctionResultColumn, TableSummary, ValidateSourceResponse, Workspace, catalog_item,
-        query_test_result,
+        QueryTestResult, QueryTestSuccess, Source, Table,
+        TableColumnSearchResult as ProtoTableColumnSearchResult, TableFunction,
+        TableFunctionArgument, TableFunctionResultColumn, TableSummary, ValidateSourceResponse,
+        Workspace, catalog_item, query_test_result,
     },
 };
 use opentelemetry::propagation::Extractor;
@@ -24,7 +25,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt as _;
 use crate::bootstrap::{AppError, app_status, core_status};
 use crate::catalog::discovery::{
     CatalogItem, CatalogMetadataField, CatalogSearchResult, ColumnMetadataField,
-    ColumnSearchResult, DescribeTableResult,
+    ColumnSearchResult, DescribeTableResult, TableColumnSearchResult,
 };
 use crate::query::manager::QueryManagerError;
 use crate::workspaces::WorkspaceName;
@@ -368,6 +369,24 @@ pub(crate) fn describe_table_response_to_proto(
 
 pub(crate) fn column_search_result_to_proto(result: ColumnSearchResult) -> ProtoColumnSearchResult {
     ProtoColumnSearchResult {
+        column: Some(column_to_proto(result.column)),
+        matched_fields: result
+            .matched_fields
+            .into_iter()
+            .map(ColumnMetadataField::as_proto_name)
+            .map(str::to_string)
+            .collect(),
+    }
+}
+
+pub(crate) fn table_column_search_result_to_proto(
+    result: TableColumnSearchResult,
+) -> ProtoTableColumnSearchResult {
+    ProtoTableColumnSearchResult {
+        schema_name: result.schema_name,
+        table_name: result.table_name,
+        table_description: result.table_description,
+        required_filters: result.required_filters,
         column: Some(column_to_proto(result.column)),
         matched_fields: result
             .matched_fields

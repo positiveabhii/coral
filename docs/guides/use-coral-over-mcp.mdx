@@ -19,6 +19,7 @@ Before setting up a client, make sure you have [connected at least one source](/
 | Tool     | `search_catalog` | Search compact catalog summaries with a Rust regex      |
 | Tool     | `describe_table` | Show compact metadata for one database table            |
 | Tool     | `list_columns`   | List columns for one database table with pagination     |
+| Tool     | `search_columns` | Search columns across database tables                   |
 | Resource | `coral://guide`  | Database workflow guide for agents                     |
 | Resource | `coral://tables` | JSON summaries of database tables and required filters  |
 
@@ -41,6 +42,12 @@ Agents should treat the discovery tools as catalog helpers, not as replacement p
 
 - Arguments: required `pattern` plus optional `schema`, `kind`, `detail`, `ignore_case`, `limit`, `offset`.
 - The default `detail: "summary"` is intended for normal agent discovery. Use `detail: "full"` only for small result sets.
+- `limit` accepts `1` through `50`.
+
+**`search_columns`**: deterministic regex matching over column metadata across tables.
+
+- Arguments: required `pattern` plus optional `schema`, `ignore_case`, `required_only`, `limit`, `offset`.
+- Use this when you know a field, column, or data type but not the exact table. This avoids probing several candidate tables with `describe_table` and `list_columns`.
 - `limit` accepts `1` through `50`.
 
 **`describe_table`**: compact metadata for one table.
@@ -238,7 +245,7 @@ Once your client is connected, ask the agent to list available tables or run a s
 
 > "Run a small Coral query against `coral.tables`."
 
-The agent should call `list_catalog`, `search_catalog`, or query `coral.tables` and `coral.table_functions` to return SQL schemas and catalog items, and use `describe_table` or `list_columns` for table-specific metadata. Large catalogs should be paged with `limit` and `offset`.
+The agent should call `list_catalog`, `search_catalog`, or query `coral.tables` and `coral.table_functions` to return SQL schemas and catalog items, use `search_columns` when it knows a field but not the table, and use `describe_table` or `list_columns` for table-specific metadata. Large catalogs should be paged with `limit` and `offset`.
 
 ## Troubleshooting
 

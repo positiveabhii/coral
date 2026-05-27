@@ -26,8 +26,9 @@ use coral_api::v1::{
     ImportSourceRequest, ImportSourceResponse, ListCatalogRequest, ListCatalogResponse,
     ListColumnsRequest, ListColumnsResponse, ListSourcesRequest, ListSourcesResponse,
     PaginationRequest, PaginationResponse, QueryPlan, SearchCatalogRequest, SearchCatalogResponse,
-    Source, SourceCredentialStorage, SourceInfo, SourceInputSpec, SourceOrigin, SourceSecretInput,
-    Table, TableSummary, ValidateSourceRequest, ValidateSourceResponse, Workspace, catalog_item,
+    SearchColumnsRequest, SearchColumnsResponse, Source, SourceCredentialStorage, SourceInfo,
+    SourceInputSpec, SourceOrigin, SourceSecretInput, Table, TableColumnSearchResult, TableSummary,
+    ValidateSourceRequest, ValidateSourceResponse, Workspace, catalog_item,
     create_bundled_source_with_o_auth_response, import_source_response,
     source_input_spec::Input as ProtoSourceInput,
 };
@@ -562,6 +563,7 @@ struct Captured {
     search_catalog: Mutex<Vec<SearchCatalogRequest>>,
     describe_table: Mutex<Vec<DescribeTableRequest>>,
     list_columns: Mutex<Vec<ListColumnsRequest>>,
+    search_columns: Mutex<Vec<SearchColumnsRequest>>,
     discover_sources: Mutex<Vec<DiscoverSourcesRequest>>,
     list_sources: Mutex<Vec<ListSourcesRequest>>,
     get_source: Mutex<Vec<GetSourceRequest>>,
@@ -787,6 +789,55 @@ impl CatalogService for MockCatalogService {
             }),
         );
         Ok(Response::new(ListColumnsResponse {
+            columns,
+            pagination: Some(pagination),
+        }))
+    }
+
+    async fn search_columns(
+        &self,
+        request: Request<SearchColumnsRequest>,
+    ) -> Result<Response<SearchColumnsResponse>, Status> {
+        let request = request.into_inner();
+        self.captured
+            .search_columns
+            .lock()
+            .expect("search_columns capture")
+            .push(request.clone());
+        let pattern = regex::RegexBuilder::new(&request.pattern)
+            .case_insensitive(request.ignore_case)
+            .build()
+            .map_err(|error| Status::invalid_argument(format!("invalid regex pattern: {error}")))?;
+        let mut columns = Vec::new();
+        for table in mock_visible_tables().into_iter().filter(|table| {
+            request.schema_name.is_empty() || table.schema_name == request.schema_name
+        }) {
+            for column in table.columns {
+                if request.required_only && !column.is_required_filter {
+                    continue;
+                }
+                let matched_fields = column_matched_fields(&column, &pattern);
+                if matched_fields.is_empty() {
+                    continue;
+                }
+                columns.push(TableColumnSearchResult {
+                    schema_name: table.schema_name.clone(),
+                    table_name: table.name.clone(),
+                    table_description: table.description.clone(),
+                    required_filters: table.required_filters.clone(),
+                    column: Some(column),
+                    matched_fields,
+                });
+            }
+        }
+        let (columns, pagination) = paginate(
+            columns,
+            request.pagination.unwrap_or(PaginationRequest {
+                limit: 20,
+                offset: 0,
+            }),
+        );
+        Ok(Response::new(SearchColumnsResponse {
             columns,
             pagination: Some(pagination),
         }))
@@ -1078,6 +1129,14 @@ impl MockServer {
             .list_columns
             .lock()
             .expect("list_columns capture")
+            .clone()
+    }
+
+    pub(crate) fn search_columns_requests(&self) -> Vec<SearchColumnsRequest> {
+        self.captured
+            .search_columns
+            .lock()
+            .expect("search_columns capture")
             .clone()
     }
 

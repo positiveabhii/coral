@@ -5,7 +5,7 @@
 
 use coral_api::v1::{
     DescribeTableRequest, ListCatalogRequest, ListColumnsRequest, PaginationRequest,
-    SearchCatalogRequest, catalog_item,
+    SearchCatalogRequest, SearchColumnsRequest, catalog_item,
 };
 use coral_client::default_workspace;
 use tonic::Request;
@@ -179,6 +179,7 @@ async fn list_columns_filters_required_columns_and_patterns() {
         .into_inner();
     let pagination = required.pagination.expect("required pagination");
     assert_eq!(pagination.total_count, 1);
+    assert_eq!(pagination.limit, 50);
     let required_column = required.columns[0].column.as_ref().expect("column");
     assert_eq!(required_column.name, "channel");
     assert!(required_column.is_required_filter);
@@ -218,6 +219,142 @@ async fn list_columns_filters_required_columns_and_patterns() {
             .iter()
             .any(|field| field == "column_name")
     );
+}
+
+#[tokio::test]
+async fn search_columns_matches_across_tables_and_paginates_after_filtering() {
+    let harness = GrpcHarness::new().await;
+    harness
+        .import_source(
+            fixture_manifest_with_multiple_tables_yaml(harness.temp_path()),
+            Vec::new(),
+            Vec::new(),
+        )
+        .await;
+
+    let response = harness
+        .catalog_client()
+        .search_columns(Request::new(SearchColumnsRequest {
+            workspace: Some(default_workspace()),
+            pattern: "session".to_string(),
+            ignore_case: true,
+            schema_name: "local_messages".to_string(),
+            required_only: false,
+            pagination: Some(PaginationRequest {
+                limit: 2,
+                offset: 0,
+            }),
+        }))
+        .await
+        .expect("search columns")
+        .into_inner();
+
+    let pagination = response.pagination.expect("pagination");
+    assert_eq!(pagination.total_count, 3);
+    assert_eq!(pagination.limit, 2);
+    assert_eq!(pagination.offset, 0);
+    assert!(pagination.has_more);
+    assert_eq!(pagination.next_offset, 2);
+    assert_eq!(response.columns.len(), 2);
+    assert_eq!(response.columns[0].schema_name, "local_messages");
+    assert_eq!(response.columns[0].table_name, "events");
+    let column = response.columns[0].column.as_ref().expect("column");
+    assert_eq!(column.name, "sessionId");
+    assert!(
+        response.columns[0]
+            .matched_fields
+            .iter()
+            .any(|field| field == "column_name")
+    );
+}
+
+#[tokio::test]
+async fn search_columns_filters_required_only() {
+    let harness = GrpcHarness::new().await;
+    harness
+        .import_source(
+            fixture_manifest_with_required_filter_yaml(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .await;
+
+    let response = harness
+        .catalog_client()
+        .search_columns(Request::new(SearchColumnsRequest {
+            workspace: Some(default_workspace()),
+            pattern: "Utf8".to_string(),
+            ignore_case: true,
+            schema_name: String::new(),
+            required_only: true,
+            pagination: None,
+        }))
+        .await
+        .expect("search required columns")
+        .into_inner();
+
+    let pagination = response.pagination.expect("pagination");
+    assert_eq!(pagination.total_count, 1);
+    assert_eq!(pagination.limit, 20);
+    assert_eq!(response.columns[0].table_name, "messages");
+    let column = response.columns[0].column.as_ref().expect("column");
+    assert_eq!(column.name, "channel");
+    assert!(column.is_required_filter);
+    assert!(
+        response.columns[0]
+            .matched_fields
+            .iter()
+            .any(|field| field == "data_type")
+    );
+}
+
+#[tokio::test]
+async fn column_endpoint_pagination_limits_match_endpoint_contracts() {
+    let harness = GrpcHarness::new().await;
+    harness
+        .import_source(
+            fixture_manifest_with_required_filter_yaml(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .await;
+
+    let error = harness
+        .catalog_client()
+        .list_columns(Request::new(ListColumnsRequest {
+            workspace: Some(default_workspace()),
+            schema_name: "filtered_messages".to_string(),
+            table_name: "messages".to_string(),
+            pattern: None,
+            ignore_case: true,
+            required_only: false,
+            pagination: Some(PaginationRequest {
+                limit: 201,
+                offset: 0,
+            }),
+        }))
+        .await
+        .expect_err("list_columns should reject limits above 200");
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert!(error.message().contains("between 1 and 200"));
+
+    let error = harness
+        .catalog_client()
+        .search_columns(Request::new(SearchColumnsRequest {
+            workspace: Some(default_workspace()),
+            pattern: "Utf8".to_string(),
+            ignore_case: true,
+            schema_name: String::new(),
+            required_only: false,
+            pagination: Some(PaginationRequest {
+                limit: 101,
+                offset: 0,
+            }),
+        }))
+        .await
+        .expect_err("search_columns should reject limits above 100");
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert!(error.message().contains("between 1 and 100"));
 }
 
 #[tokio::test]
@@ -343,6 +480,21 @@ async fn invalid_regex_returns_invalid_argument() {
         }))
         .await
         .expect_err("invalid column regex should fail");
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert!(error.message().contains("invalid regex pattern"));
+
+    let error = harness
+        .catalog_client()
+        .search_columns(Request::new(SearchColumnsRequest {
+            workspace: Some(default_workspace()),
+            pattern: "[".to_string(),
+            ignore_case: true,
+            schema_name: String::new(),
+            required_only: false,
+            pagination: None,
+        }))
+        .await
+        .expect_err("invalid cross-table column regex should fail");
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
     assert!(error.message().contains("invalid regex pattern"));
 }

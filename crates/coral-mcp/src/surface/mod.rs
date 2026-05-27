@@ -9,6 +9,7 @@ mod values;
 
 pub(crate) use catalog::{
     describe_table_value, list_catalog_value, list_columns_value, search_catalog_value,
+    search_columns_value,
 };
 pub(crate) use discovery::{Pagination, parse_pagination, parse_pagination_with_limits};
 pub(crate) use errors::{
@@ -22,5 +23,5 @@ pub(crate) use tools::{
     CatalogToolKind, build_tool_result, describe_table_arguments, describe_table_tool,
     feedback_tool, list_catalog_arguments, list_catalog_tool, list_columns_arguments,
     list_columns_tool, required_string_argument, search_catalog_arguments, search_catalog_tool,
-    sql_tool,
+    search_columns_arguments, search_columns_tool, sql_tool,
 };

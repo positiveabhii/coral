@@ -302,7 +302,8 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             "list_catalog",
             "search_catalog",
             "describe_table",
-            "list_columns"
+            "list_columns",
+            "search_columns"
         ]
     );
     assert!(
@@ -360,6 +361,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     let list_catalog_tool = tool_by_name(&updated_tools, "list_catalog");
     let search_catalog_tool = tool_by_name(&updated_tools, "search_catalog");
     let list_columns_tool = tool_by_name(&updated_tools, "list_columns");
+    let search_columns_tool = tool_by_name(&updated_tools, "search_columns");
     assert!(
         updated_tools[0]
             .description
@@ -705,6 +707,51 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     );
     assert_matches_output_schema(list_columns_tool, &filtered_columns);
 
+    let searched_columns = client
+        .call_tool(
+            CallToolRequestParams::new("search_columns").with_arguments(json_object(&json!({
+                "pattern": "SESSION",
+                "schema": "local_messages",
+                "limit": 2
+            }))),
+        )
+        .await
+        .expect("search columns");
+    let searched_columns = searched_columns
+        .structured_content
+        .expect("structured content");
+    assert_eq!(searched_columns["total"], 3);
+    assert_eq!(searched_columns["limit"], 2);
+    assert_eq!(searched_columns["has_more"], true);
+    assert_eq!(searched_columns["next_offset"], 2);
+    assert_eq!(
+        searched_columns["columns"][0]["schema_name"],
+        "local_messages"
+    );
+    assert_eq!(searched_columns["columns"][0]["table_name"], "events");
+    assert_eq!(
+        searched_columns["columns"][0]["sql_reference"],
+        "local_messages.events"
+    );
+    assert_eq!(searched_columns["columns"][0]["column_name"], "sessionId");
+    assert!(
+        searched_columns["columns"][0]["matched_fields"]
+            .as_array()
+            .expect("matched fields")
+            .iter()
+            .any(|field| field == "column_name")
+    );
+    assert_matches_output_schema(search_columns_tool, &searched_columns);
+
+    client
+        .call_tool(
+            CallToolRequestParams::new("search_columns").with_arguments(json_object(&json!({
+                "pattern": "["
+            }))),
+        )
+        .await
+        .expect_err("invalid cross-table column regex should fail");
+
     let empty_column_filter = client
         .call_tool(
             CallToolRequestParams::new("list_columns").with_arguments(json_object(&json!({
@@ -930,10 +977,11 @@ async fn mcp_feedback_tool_persists_blocked_agent_report() {
             "search_catalog",
             "describe_table",
             "list_columns",
+            "search_columns",
             "feedback"
         ]
     );
-    let feedback_annotations = tools[5].annotations.as_ref().expect("feedback annotations");
+    let feedback_annotations = tools[6].annotations.as_ref().expect("feedback annotations");
     assert_eq!(feedback_annotations.read_only_hint, Some(false));
     assert_eq!(feedback_annotations.destructive_hint, Some(false));
     assert_eq!(feedback_annotations.idempotent_hint, Some(false));

@@ -13,6 +13,8 @@ const DEFAULT_SEARCH_LIMIT: u32 = 20;
 const MAX_SEARCH_LIMIT: u32 = 100;
 const DEFAULT_COLUMN_LIMIT: u32 = 50;
 const MAX_COLUMN_LIMIT: u32 = 200;
+const DEFAULT_COLUMN_SEARCH_LIMIT: u32 = 20;
+const MAX_COLUMN_SEARCH_LIMIT: u32 = 100;
 const MAX_METADATA_PATTERN_BYTES: usize = 256;
 const REGEX_SIZE_LIMIT_BYTES: usize = 1 << 20;
 const MISSING_TABLE_SUGGESTION_LIMIT: usize = 10;
@@ -99,6 +101,16 @@ pub(crate) struct ColumnSearchResult {
     pub(crate) matched_fields: Vec<ColumnMetadataField>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct TableColumnSearchResult {
+    pub(crate) schema_name: String,
+    pub(crate) table_name: String,
+    pub(crate) table_description: String,
+    pub(crate) required_filters: Vec<String>,
+    pub(crate) column: ColumnInfo,
+    pub(crate) matched_fields: Vec<ColumnMetadataField>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ColumnMetadataField {
     ColumnName,
@@ -134,6 +146,14 @@ impl<'a> CatalogTableRef<'a> {
 pub(crate) struct ListColumnsQuery<'a> {
     pub(crate) table_ref: CatalogTableRef<'a>,
     pub(crate) pattern: Option<&'a str>,
+    pub(crate) ignore_case: bool,
+    pub(crate) required_only: bool,
+    pub(crate) pagination: Pagination,
+}
+
+pub(crate) struct SearchColumnsQuery<'a> {
+    pub(crate) pattern: &'a str,
+    pub(crate) schema_name: Option<&'a str>,
     pub(crate) ignore_case: bool,
     pub(crate) required_only: bool,
     pub(crate) pagination: Pagination,
@@ -311,6 +331,44 @@ impl CatalogDiscovery {
             .collect();
         Ok(Some(page_items(matches, query.pagination)))
     }
+
+    pub(crate) async fn search_columns(
+        &self,
+        workspace_name: &WorkspaceName,
+        query: SearchColumnsQuery<'_>,
+    ) -> Result<Page<TableColumnSearchResult>, QueryManagerError> {
+        let regex = compile_metadata_regex(query.pattern, query.ignore_case)
+            .map_err(QueryManagerError::App)?;
+        let tables = self
+            .queries
+            .list_tables(workspace_name, query.schema_name, None)
+            .await?;
+        let mut matches = Vec::new();
+        for table in tables {
+            for column in &table.columns {
+                if query.required_only && !column.is_required_filter {
+                    continue;
+                }
+                let matched_fields = column_matched_fields(column, &regex);
+                if matched_fields.is_empty() {
+                    continue;
+                }
+                matches.push(TableColumnSearchResult {
+                    schema_name: table.schema_name.clone(),
+                    table_name: table.table_name.clone(),
+                    table_description: table.description.clone(),
+                    required_filters: table.required_filters.clone(),
+                    column: column.clone(),
+                    matched_fields,
+                });
+            }
+        }
+        matches.sort_by(|left, right| {
+            table_column_search_result_sort_key(left)
+                .cmp(&table_column_search_result_sort_key(right))
+        });
+        Ok(page_items(matches, query.pagination))
+    }
 }
 
 fn catalog_item_sort_key(item: &CatalogItem) -> (&str, &str, &'static str) {
@@ -324,12 +382,33 @@ fn catalog_item_sort_key(item: &CatalogItem) -> (&str, &str, &'static str) {
     }
 }
 
+fn table_column_search_result_sort_key(
+    result: &TableColumnSearchResult,
+) -> (&str, &str, u32, &str) {
+    (
+        &result.schema_name,
+        &result.table_name,
+        result.column.ordinal_position,
+        &result.column.name,
+    )
+}
+
 pub(crate) fn search_pagination(pagination: Option<Pagination>) -> Result<Pagination, AppError> {
     pagination_with_limits(pagination, DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT)
 }
 
 pub(crate) fn column_pagination(pagination: Option<Pagination>) -> Result<Pagination, AppError> {
     pagination_with_limits(pagination, DEFAULT_COLUMN_LIMIT, MAX_COLUMN_LIMIT)
+}
+
+pub(crate) fn column_search_pagination(
+    pagination: Option<Pagination>,
+) -> Result<Pagination, AppError> {
+    pagination_with_limits(
+        pagination,
+        DEFAULT_COLUMN_SEARCH_LIMIT,
+        MAX_COLUMN_SEARCH_LIMIT,
+    )
 }
 
 fn pagination_with_limits(

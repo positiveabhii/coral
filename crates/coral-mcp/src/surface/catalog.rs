@@ -1,7 +1,7 @@
 use coral_api::v1::{
     ColumnSearchResult, DescribeTableResponse, ListCatalogResponse, ListColumnsResponse,
-    SearchCatalogResponse, Table as ProtoTable, TableFunction as ProtoTableFunction,
-    TableFunctionArgument as ProtoTableFunctionArgument,
+    SearchCatalogResponse, SearchColumnsResponse, Table as ProtoTable, TableColumnSearchResult,
+    TableFunction as ProtoTableFunction, TableFunctionArgument as ProtoTableFunctionArgument,
     TableFunctionResultColumn as ProtoTableFunctionResultColumn, TableSummary as ProtoTableSummary,
     catalog_item,
 };
@@ -182,6 +182,36 @@ pub(crate) fn list_columns_value(
     ]);
     insert_pagination_fields(&mut value, &pagination);
     Value::Object(value)
+}
+
+pub(crate) fn search_columns_value(response: &SearchColumnsResponse) -> Value {
+    let pagination = response.pagination.unwrap_or_default();
+    let columns = response
+        .columns
+        .iter()
+        .filter_map(table_column_search_result_value)
+        .collect::<Vec<_>>();
+    paged_collection_value("columns", columns, &pagination)
+}
+
+fn table_column_search_result_value(result: &TableColumnSearchResult) -> Option<Value> {
+    let column = result.column.as_ref()?;
+    serde_json::to_value(TableColumnSearchResultValue {
+        schema_name: &result.schema_name,
+        table_name: &result.table_name,
+        sql_reference: format_schema_table_equivalent(&result.schema_name, &result.table_name),
+        table_description: &result.table_description,
+        required_filters: &result.required_filters,
+        column_name: &column.name,
+        data_type: &column.data_type,
+        is_nullable: column.nullable,
+        is_virtual: column.is_virtual,
+        is_required_filter: column.is_required_filter,
+        description: &column.description,
+        ordinal_position: column.ordinal_position,
+        matched_fields: &result.matched_fields,
+    })
+    .ok()
 }
 
 fn column_search_result_value(result: &ColumnSearchResult) -> Option<Value> {
@@ -466,6 +496,23 @@ struct ColumnValue<'a> {
     is_required_filter: bool,
     description: &'a str,
     ordinal_position: u32,
+}
+
+#[derive(Serialize)]
+struct TableColumnSearchResultValue<'a> {
+    schema_name: &'a str,
+    table_name: &'a str,
+    sql_reference: String,
+    table_description: &'a str,
+    required_filters: &'a [String],
+    column_name: &'a str,
+    data_type: &'a str,
+    is_nullable: bool,
+    is_virtual: bool,
+    is_required_filter: bool,
+    description: &'a str,
+    ordinal_position: u32,
+    matched_fields: &'a [String],
 }
 
 impl<'a> From<&'a coral_api::v1::Column> for ColumnValue<'a> {

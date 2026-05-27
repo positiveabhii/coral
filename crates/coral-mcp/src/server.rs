@@ -3,8 +3,8 @@
 use coral_api::v1::{
     CatalogItemKind as ProtoCatalogItemKind, DescribeTableRequest, DescribeTableResponse,
     ExecuteSqlRequest, ListCatalogRequest, ListCatalogResponse, ListColumnsRequest,
-    ListSourcesRequest, PaginationRequest, SearchCatalogRequest, Source, SubmitFeedbackRequest,
-    TableSummary as ProtoTableSummary, catalog_item,
+    ListSourcesRequest, PaginationRequest, SearchCatalogRequest, SearchColumnsRequest, Source,
+    SubmitFeedbackRequest, TableSummary as ProtoTableSummary, catalog_item,
 };
 use coral_client::{
     AppClient, CatalogClient, FeedbackClient, QueryClient, SourceClient, batches_to_json_rows,
@@ -31,8 +31,9 @@ use crate::{
         initial_instructions, internal_status, list_catalog_arguments, list_catalog_tool,
         list_catalog_value, list_columns_arguments, list_columns_tool, list_columns_value,
         required_string_argument, search_catalog_arguments, search_catalog_tool,
-        search_catalog_value, sql_tool, status_to_error_data, tables_resource,
-        tables_resource_content, tool_error_from_status, tool_error_result,
+        search_catalog_value, search_columns_arguments, search_columns_tool, search_columns_value,
+        sql_tool, status_to_error_data, tables_resource, tables_resource_content,
+        tool_error_from_status, tool_error_result,
     },
     telemetry,
 };
@@ -362,6 +363,38 @@ impl CoralMcpServer {
         }
     }
 
+    async fn search_columns_tool_result(
+        &self,
+        request_arguments: Option<&Map<String, Value>>,
+    ) -> Result<ToolCallOutcome, ErrorData> {
+        let arguments = search_columns_arguments(request_arguments)?;
+        let mut catalog_client = self.catalog.clone();
+        match catalog_client
+            .search_columns(Request::new(SearchColumnsRequest {
+                workspace: Some(default_workspace()),
+                pattern: arguments.pattern,
+                ignore_case: arguments.ignore_case,
+                schema_name: arguments.schema.unwrap_or_default(),
+                required_only: arguments.required_only,
+                pagination: Some(PaginationRequest {
+                    limit: arguments.pagination.limit,
+                    offset: arguments.pagination.offset,
+                }),
+            }))
+            .await
+            .map(|response| search_columns_value(&response.into_inner()))
+        {
+            Ok(value) => Ok(ToolCallOutcome::Success(value)),
+            Err(status) if status.code() == tonic::Code::InvalidArgument => {
+                Err(status_to_error_data(&status))
+            }
+            Err(status) => Ok(ToolCallOutcome::ToolError {
+                operation: "Column search",
+                status,
+            }),
+        }
+    }
+
     async fn dispatch_tool(
         &self,
         request: CallToolRequestParams,
@@ -388,6 +421,10 @@ impl CoralMcpServer {
             }
             "list_columns" => {
                 self.list_columns_tool_result(request.arguments.as_ref())
+                    .await
+            }
+            "search_columns" => {
+                self.search_columns_tool_result(request.arguments.as_ref())
                     .await
             }
             "feedback" if self.options.feedback_enabled => {
@@ -490,6 +527,7 @@ impl ServerHandler for CoralMcpServer {
                 search_catalog_tool(visible_table_count, visible_function_count),
                 describe_table_tool(),
                 list_columns_tool(),
+                search_columns_tool(),
             ];
             if self.options.feedback_enabled {
                 tools.push(feedback_tool());

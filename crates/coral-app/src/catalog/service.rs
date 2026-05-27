@@ -4,20 +4,21 @@ use coral_api::v1::catalog_service_server::CatalogService as CatalogServiceApi;
 use coral_api::v1::{
     CatalogItemKind as ProtoCatalogItemKind, DescribeTableRequest, DescribeTableResponse,
     ListCatalogRequest, ListCatalogResponse, ListColumnsRequest, ListColumnsResponse,
-    PaginationRequest, SearchCatalogRequest, SearchCatalogResponse,
+    PaginationRequest, SearchCatalogRequest, SearchCatalogResponse, SearchColumnsRequest,
+    SearchColumnsResponse,
 };
 use tonic::{Request, Response, Status};
 
 use crate::bootstrap::app_status;
 use crate::catalog::discovery::{
     CatalogDiscovery, CatalogItemKind, CatalogTableRef, ListColumnsQuery, Pagination,
-    column_pagination, search_pagination,
+    SearchColumnsQuery, column_pagination, column_search_pagination, search_pagination,
 };
 use crate::query::manager::QueryManager;
 use crate::transport::{
     catalog_item_to_proto, catalog_search_result_to_proto, column_search_result_to_proto,
     describe_table_response_to_proto, grpc_span, instrument_grpc, pagination_to_proto,
-    query_status, workspace_name_from_proto,
+    query_status, table_column_search_result_to_proto, workspace_name_from_proto,
 };
 
 #[derive(Clone)]
@@ -180,6 +181,51 @@ impl CatalogServiceApi for CatalogService {
                     .items
                     .into_iter()
                     .map(column_search_result_to_proto)
+                    .collect(),
+                pagination: Some(pagination),
+            }))
+        })
+        .await
+    }
+
+    async fn search_columns(
+        &self,
+        request: Request<SearchColumnsRequest>,
+    ) -> Result<Response<SearchColumnsResponse>, Status> {
+        let span = grpc_span(&request);
+        let catalog = self.catalog.clone();
+        instrument_grpc(span, async move {
+            let request = request.into_inner();
+            let workspace_name = workspace_name_from_proto(request.workspace.as_ref())?;
+            let schema_name = optional_trimmed(&request.schema_name);
+            let pagination =
+                column_search_pagination(request.pagination.map(pagination_from_proto))
+                    .map_err(app_status)?;
+            let page = catalog
+                .search_columns(
+                    &workspace_name,
+                    SearchColumnsQuery {
+                        pattern: &request.pattern,
+                        schema_name,
+                        ignore_case: request.ignore_case,
+                        required_only: request.required_only,
+                        pagination,
+                    },
+                )
+                .await
+                .map_err(query_status)?;
+            let pagination = pagination_to_proto(
+                page.total,
+                page.limit,
+                page.offset,
+                page.has_more,
+                page.next_offset,
+            );
+            Ok(Response::new(SearchColumnsResponse {
+                columns: page
+                    .items
+                    .into_iter()
+                    .map(table_column_search_result_to_proto)
                     .collect(),
                 pagination: Some(pagination),
             }))

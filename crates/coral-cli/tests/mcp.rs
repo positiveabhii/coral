@@ -265,7 +265,8 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             "list_catalog",
             "search_catalog",
             "describe_table",
-            "list_columns"
+            "list_columns",
+            "search_columns"
         ]
     );
     assert!(
@@ -338,6 +339,7 @@ async fn mcp_stdio_enable_feedback_flag_lists_feedback_tool()
             "search_catalog",
             "describe_table",
             "list_columns",
+            "search_columns",
             "feedback"
         ]
     );
