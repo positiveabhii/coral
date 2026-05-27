@@ -233,6 +233,21 @@ impl McpToolCaller for StreamableHttpMcpToolCaller {
     }
 }
 
+/// Install the `ring` `rustls::CryptoProvider` as the process-wide
+/// default for rustls 0.23. rmcp's reqwest 0.13 is configured with the
+/// `rustls-no-provider` feature so it does not pull `aws-lc-rs` (whose
+/// `aws-lc-sys` carries an `OpenSSL` license clause our workspace
+/// rejects). reqwest 0.12 in the same workspace links `ring` already;
+/// this just registers it as the rustls default. Idempotent — a second
+/// call is a no-op and any error from a competing initializer is
+/// ignored.
+fn ensure_default_crypto_provider() {
+    static PROVIDER_INIT: std::sync::Once = std::sync::Once::new();
+    PROVIDER_INIT.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 impl StreamableHttpMcpToolCaller {
     async fn call_tool_inner(
         &self,
@@ -243,6 +258,7 @@ impl StreamableHttpMcpToolCaller {
         arguments: JsonObject,
         request_id: u64,
     ) -> Result<Value> {
+        ensure_default_crypto_provider();
         let span = tracing::Span::current();
 
         let mut config = StreamableHttpClientTransportConfig::with_uri(url.to_string())
