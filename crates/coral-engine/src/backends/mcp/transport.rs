@@ -244,7 +244,14 @@ impl McpToolCaller for StreamableHttpMcpToolCaller {
 fn ensure_default_crypto_provider() {
     static PROVIDER_INIT: std::sync::Once = std::sync::Once::new();
     PROVIDER_INIT.call_once(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        // `install_default` returns `Err` if a provider is already
+        // installed by another part of the workspace (for example,
+        // reqwest 0.12 elsewhere in the process). Either way the rustls
+        // 0.23 default is now set; ignore the Result deliberately rather
+        // than panic.
+        match rustls::crypto::ring::default_provider().install_default() {
+            Ok(()) | Err(_) => {}
+        }
     });
 }
 
