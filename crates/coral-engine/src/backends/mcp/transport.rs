@@ -279,7 +279,7 @@ impl StreamableHttpMcpToolCaller {
             .map_err(|error| {
                 DataFusionError::External(Box::new(mcp_http_initialize_error(
                     &self.source_name,
-                    error.to_string(),
+                    &error,
                 )))
             })?;
         let raw = client
@@ -290,7 +290,7 @@ impl StreamableHttpMcpToolCaller {
                     &self.source_name,
                     relation,
                     tool_name,
-                    error.to_string(),
+                    &error,
                 )))
             })?;
         let payload = normalize_tool_result(&self.source_name, relation, tool_name, raw)?;
@@ -340,48 +340,135 @@ fn value_to_env_string(value: Value) -> String {
     }
 }
 
-fn mcp_http_initialize_error(source_schema: &str, detail: String) -> McpProviderQueryError {
-    if detail.contains("Auth required") {
-        return McpProviderQueryError::AuthRequired {
-            source_schema: source_schema.to_string(),
-            detail,
-        };
-    }
-    if detail.contains("Insufficient scope") {
-        return McpProviderQueryError::AuthFailed {
-            source_schema: source_schema.to_string(),
-            detail,
-        };
-    }
-    McpProviderQueryError::Initialize {
-        source_schema: source_schema.to_string(),
-        detail,
-    }
+fn mcp_http_initialize_error(
+    source_schema: &str,
+    error: &(dyn std::error::Error + 'static),
+) -> McpProviderQueryError {
+    classify_streamable_http_error(source_schema, None, error)
 }
 
 fn mcp_http_tool_call_error(
     source_schema: &str,
     relation: &str,
     tool: &str,
-    detail: String,
+    error: &(dyn std::error::Error + 'static),
 ) -> McpProviderQueryError {
-    if detail.contains("Auth required") {
-        return McpProviderQueryError::AuthRequired {
-            source_schema: source_schema.to_string(),
-            detail,
+    classify_streamable_http_error(source_schema, Some((relation, tool)), error)
+}
+
+/// Walk the rmcp error chain looking for a `StreamableHttpError` and map
+/// its variants to the matching `McpProviderQueryError`. Falls back to the
+/// generic Initialize/ToolCall variants when the chain doesn't expose a
+/// typed transport error we recognize.
+/// Classify an rmcp `ClientInitializeError` / `ServiceError` raised by the
+/// Streamable HTTP transport into a structured `McpProviderQueryError`.
+///
+/// rmcp wraps the underlying `StreamableHttpError` in a `DynamicTransportError`
+/// whose inner `Box<dyn Error>` we cannot typed-downcast: rmcp parameterizes
+/// the box with its own `reqwest::Error` (rmcp 1.6 pulls reqwest 0.13) while
+/// coral-engine uses reqwest 0.12, so the `StreamableHttpError<reqwest::Error>`
+/// `TypeId`s do not match across the crate boundary. Instead we match on the
+/// inner error's stable `#[error("...")]` display prefix from
+/// `rmcp::transport::streamable_http_client::StreamableHttpError`.
+fn classify_streamable_http_error(
+    source_schema: &str,
+    relation_and_tool: Option<(&str, &str)>,
+    error: &(dyn std::error::Error + 'static),
+) -> McpProviderQueryError {
+    let inner_detail = match error.downcast_ref::<rmcp::service::ClientInitializeError>() {
+        Some(rmcp::service::ClientInitializeError::TransportError { error: dyn_err, .. }) => {
+            Some(dyn_err.error.to_string())
+        }
+        _ => None,
+    }
+    .or_else(
+        || match error.downcast_ref::<rmcp::service::ServiceError>() {
+            Some(rmcp::service::ServiceError::TransportSend(dyn_err)) => {
+                Some(dyn_err.error.to_string())
+            }
+            _ => None,
+        },
+    );
+
+    let full_detail = error.to_string();
+
+    if let Some(inner) = inner_detail.as_deref()
+        && let Some(variant) = classify_streamable_http_inner(inner)
+    {
+        return match variant {
+            StreamableVariant::AuthRequired => McpProviderQueryError::AuthRequired {
+                source_schema: source_schema.to_string(),
+                detail: full_detail,
+            },
+            StreamableVariant::AuthFailed => McpProviderQueryError::AuthFailed {
+                source_schema: source_schema.to_string(),
+                detail: full_detail,
+            },
+            StreamableVariant::SessionExpired => McpProviderQueryError::SessionExpired {
+                source_schema: source_schema.to_string(),
+            },
+            StreamableVariant::HttpStatusFailed => McpProviderQueryError::HttpStatusFailed {
+                source_schema: source_schema.to_string(),
+                detail: full_detail,
+            },
+            StreamableVariant::HttpSseDecodeFailed => McpProviderQueryError::HttpSseDecodeFailed {
+                source_schema: source_schema.to_string(),
+                detail: full_detail,
+            },
+            StreamableVariant::HttpRequestFailed => McpProviderQueryError::HttpRequestFailed {
+                source_schema: source_schema.to_string(),
+                detail: full_detail,
+            },
         };
     }
-    if detail.contains("Insufficient scope") {
-        return McpProviderQueryError::AuthFailed {
+
+    match relation_and_tool {
+        Some((relation, tool)) => McpProviderQueryError::ToolCall {
             source_schema: source_schema.to_string(),
-            detail,
-        };
+            relation: relation.to_string(),
+            tool: tool.to_string(),
+            detail: full_detail,
+        },
+        None => McpProviderQueryError::Initialize {
+            source_schema: source_schema.to_string(),
+            detail: full_detail,
+        },
     }
-    McpProviderQueryError::ToolCall {
-        source_schema: source_schema.to_string(),
-        relation: relation.to_string(),
-        tool: tool.to_string(),
-        detail,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StreamableVariant {
+    AuthRequired,
+    AuthFailed,
+    SessionExpired,
+    HttpStatusFailed,
+    HttpSseDecodeFailed,
+    HttpRequestFailed,
+}
+
+/// Match the `Display` output of an `rmcp::transport::streamable_http_client::
+/// StreamableHttpError` to one of our structured variants. Prefixes come from
+/// the `#[error("...")]` thiserror derives on each enum variant and are stable
+/// per rmcp 1.6.
+fn classify_streamable_http_inner(detail: &str) -> Option<StreamableVariant> {
+    if detail.starts_with("Auth required") {
+        Some(StreamableVariant::AuthRequired)
+    } else if detail.starts_with("Insufficient scope") {
+        Some(StreamableVariant::AuthFailed)
+    } else if detail.starts_with("Session expired") {
+        Some(StreamableVariant::SessionExpired)
+    } else if detail.starts_with("unexpected server response") {
+        Some(StreamableVariant::HttpStatusFailed)
+    } else if detail.starts_with("SSE error")
+        || detail.starts_with("Unexpected content type")
+        || detail.starts_with("Deserialize error")
+        || detail.starts_with("Server does not support SSE")
+    {
+        Some(StreamableVariant::HttpSseDecodeFailed)
+    } else if detail.starts_with("Client error") || detail.starts_with("Io error") {
+        Some(StreamableVariant::HttpRequestFailed)
+    } else {
+        None
     }
 }
 
@@ -396,6 +483,61 @@ mod tests {
     use rmcp::model::JsonObject;
     use serde_json::{Value, json};
     use tracing::subscriber::DefaultGuard;
+
+    use super::{StreamableVariant, classify_streamable_http_inner};
+
+    #[test]
+    fn classify_streamable_http_inner_matches_known_prefixes() {
+        // Pin the prefix→variant map against the rmcp 1.6 `#[error("...")]`
+        // strings. If rmcp bumps and renames a variant's display message,
+        // this test fails — we'd update both this table and
+        // `classify_streamable_http_inner` together.
+        let cases = &[
+            ("Auth required", Some(StreamableVariant::AuthRequired)),
+            ("Insufficient scope", Some(StreamableVariant::AuthFailed)),
+            (
+                "Session expired (HTTP 404)",
+                Some(StreamableVariant::SessionExpired),
+            ),
+            (
+                "unexpected server response: HTTP 502",
+                Some(StreamableVariant::HttpStatusFailed),
+            ),
+            (
+                "Unexpected content type: \"text/plain\"",
+                Some(StreamableVariant::HttpSseDecodeFailed),
+            ),
+            (
+                "SSE error: invalid frame",
+                Some(StreamableVariant::HttpSseDecodeFailed),
+            ),
+            (
+                "Deserialize error: expected value",
+                Some(StreamableVariant::HttpSseDecodeFailed),
+            ),
+            (
+                "Server does not support SSE",
+                Some(StreamableVariant::HttpSseDecodeFailed),
+            ),
+            (
+                "Client error: connection refused",
+                Some(StreamableVariant::HttpRequestFailed),
+            ),
+            (
+                "Io error: broken pipe",
+                Some(StreamableVariant::HttpRequestFailed),
+            ),
+            ("Transport channel closed", None),
+            ("Missing session id in HTTP response", None),
+        ];
+        for (detail, expected) in cases {
+            assert_eq!(
+                classify_streamable_http_inner(detail),
+                *expected,
+                "unexpected classification for `{detail}`"
+            );
+        }
+    }
     use tracing_subscriber::layer::SubscriberExt;
     use wiremock::matchers::{body_partial_json, header, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -790,6 +932,76 @@ mod tests {
             "exception.message should carry the underlying error"
         );
 
+        capture.provider.shutdown().expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn streamable_http_caller_classifies_non_auth_5xx_as_http_status_failed() {
+        let capture = TraceCapture::install();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(502).set_body_string("bad gateway"))
+            .mount(&server)
+            .await;
+        let manifest = streamable_http_manifest(&server.uri());
+        let caller = make_caller(manifest, McpBodyCapture::default());
+
+        let error = caller
+            .call_tool("issues", "list_issues", JsonObject::new())
+            .await
+            .expect_err("5xx should surface as error");
+        assert!(
+            error.to_string().contains("unexpected status")
+                || error.to_string().contains("unexpected server response"),
+            "expected http-status-failed error message, got: {error}"
+        );
+        drop(caller);
+        drop(server);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let spans = capture.finished_spans();
+        let parent = find_call_span(&spans, "remote_mcp").expect("parent span");
+        assert_eq!(
+            span_attr_string(parent, "error.type").as_deref(),
+            Some("HTTP_STATUS_FAILED")
+        );
+        capture.provider.shutdown().expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn streamable_http_caller_classifies_unexpected_content_type_as_sse_decode_failed() {
+        let capture = TraceCapture::install();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("Content-Type", "text/plain")
+                    .set_body_string("hello"),
+            )
+            .mount(&server)
+            .await;
+        let manifest = streamable_http_manifest(&server.uri());
+        let caller = make_caller(manifest, McpBodyCapture::default());
+
+        let error = caller
+            .call_tool("issues", "list_issues", JsonObject::new())
+            .await
+            .expect_err("unexpected content type should surface as error");
+        assert!(
+            error.to_string().contains("undecodable SSE stream")
+                || error.to_string().contains("Unexpected content type"),
+            "expected sse-decode-failed error message, got: {error}"
+        );
+        drop(caller);
+        drop(server);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let spans = capture.finished_spans();
+        let parent = find_call_span(&spans, "remote_mcp").expect("parent span");
+        assert_eq!(
+            span_attr_string(parent, "error.type").as_deref(),
+            Some("HTTP_SSE_DECODE_FAILED")
+        );
         capture.provider.shutdown().expect("shutdown");
     }
 }

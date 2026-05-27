@@ -681,6 +681,10 @@ each carrying source, relation, tool, and stage metadata:
 | `MCP_INITIALIZE_FAILED` | The MCP `initialize` handshake failed. Retryable. |
 | `MCP_AUTH_REQUIRED` | A Streamable HTTP server returned 401 with `WWW-Authenticate`. Reinstall the source with a valid credential. |
 | `MCP_AUTH_FAILED` | A Streamable HTTP server returned 403 with insufficient scope. Update the manifest scopes and reinstall. |
+| `MCP_HTTP_REQUEST_FAILED` | The HTTP request to a Streamable HTTP MCP server failed before a response was received (connect, DNS, TLS). Retryable. |
+| `MCP_HTTP_STATUS_FAILED` | A Streamable HTTP MCP server returned a non-success status that is not an authentication failure. Retryable. |
+| `MCP_HTTP_SSE_DECODE_FAILED` | A Streamable HTTP MCP server returned an undecodable SSE stream or an unexpected content type. |
+| `MCP_SESSION_EXPIRED` | A Streamable HTTP MCP session was rejected (HTTP 404) and the transport could not transparently reinitialize. Retryable. |
 | `MCP_TOOL_CALL_FAILED` | The transport or protocol layer rejected the `tools/call`. Retryable. |
 | `MCP_TOOL_RETURNED_ERROR` | The tool ran and reported a business-logic failure on the manifest's declared `response.error_path`. |
 | `MCP_RESULT_DECODE_FAILED` | The tool's structured content did not match the declared `response.rows_path` or column types. |

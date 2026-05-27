@@ -161,6 +161,10 @@ pub(super) fn mcp_error_type(error: &McpProviderQueryError) -> &'static str {
         McpProviderQueryError::ToolReturnedError { .. } => "TOOL_RETURNED_ERROR",
         McpProviderQueryError::ResultDecode { .. } => "RESULT_DECODE",
         McpProviderQueryError::Pagination { .. } => "PAGINATION",
+        McpProviderQueryError::HttpRequestFailed { .. } => "HTTP_REQUEST_FAILED",
+        McpProviderQueryError::HttpStatusFailed { .. } => "HTTP_STATUS_FAILED",
+        McpProviderQueryError::HttpSseDecodeFailed { .. } => "HTTP_SSE_DECODE_FAILED",
+        McpProviderQueryError::SessionExpired { .. } => "SESSION_EXPIRED",
     }
 }
 
