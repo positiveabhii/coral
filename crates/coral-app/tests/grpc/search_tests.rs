@@ -5,9 +5,11 @@
 
 use coral_api::v1::search_result::Payload;
 use coral_api::v1::{
-    SearchProvider, SearchProviderState, SearchRequest, SearchResultType, SearchSurfaceKind,
+    DeleteSourceRequest, SearchProvider, SearchProviderState, SearchRequest, SearchResultType,
+    SearchSurfaceKind,
 };
 use coral_client::default_workspace;
+use rusqlite::Connection;
 use tonic::Request;
 
 use super::harness::{GrpcHarness, fixture_manifest_with_functions_yaml};
@@ -45,6 +47,16 @@ async fn search_returns_typed_metadata_and_native_search_results() {
         SearchProviderState::NotEnabled,
     );
     assert!(!response.truncation.expect("truncation").truncated);
+    assert!(
+        harness
+            .config_dir()
+            .join("workspaces")
+            .join("default")
+            .join("search")
+            .join("search.sqlite")
+            .exists(),
+        "search should create the workspace SQLite search index"
+    );
     assert!(response.results.iter().any(|result| result.r#type
         == SearchResultType::NativeSearchPath as i32
         && matches!(
@@ -137,6 +149,55 @@ async fn search_applies_limit_and_reports_truncation() {
     assert_eq!(truncation.max_results, 1);
 }
 
+#[tokio::test]
+async fn source_mutations_mark_catalog_search_index_dirty() {
+    let harness = GrpcHarness::new().await;
+    let manifest_yaml = fixture_manifest_with_functions_yaml();
+    harness
+        .import_source(manifest_yaml.clone(), Vec::new(), Vec::new())
+        .await;
+
+    assert!(!search_index_path(&harness).exists());
+    search(&harness, "issue search title").await;
+    assert!(catalog_entity_count(&harness, "search_issues") > 0);
+
+    let updated_manifest_yaml = manifest_yaml.replace("search_issues", "search_tasks");
+    harness
+        .import_source(updated_manifest_yaml, Vec::new(), Vec::new())
+        .await;
+    assert!(catalog_entity_count(&harness, "search_issues") > 0);
+    assert_eq!(catalog_entity_count(&harness, "search_tasks"), 0);
+
+    search(&harness, "task search title").await;
+    assert_eq!(catalog_entity_count(&harness, "search_issues"), 0);
+    assert!(catalog_entity_count(&harness, "search_tasks") > 0);
+
+    harness
+        .source_client()
+        .delete_source(Request::new(DeleteSourceRequest {
+            workspace: Some(default_workspace()),
+            name: "searchy".to_string(),
+        }))
+        .await
+        .expect("delete source");
+    assert!(total_catalog_entity_count(&harness) > 0);
+
+    search(&harness, "task search title").await;
+    assert_eq!(total_catalog_entity_count(&harness), 0);
+}
+
+async fn search(harness: &GrpcHarness, query: &str) {
+    harness
+        .search_client()
+        .search(Request::new(SearchRequest {
+            workspace: Some(default_workspace()),
+            query: query.to_string(),
+            limit: 10,
+        }))
+        .await
+        .expect("search");
+}
+
 fn assert_provider_state(
     response: &coral_api::v1::SearchResponse,
     provider: SearchProvider,
@@ -148,4 +209,35 @@ fn assert_provider_state(
         .find(|status| status.provider == provider as i32)
         .expect("provider status");
     assert_eq!(status.state, state as i32);
+}
+
+fn catalog_entity_count(harness: &GrpcHarness, surface_name: &str) -> u32 {
+    let connection = Connection::open(search_index_path(harness)).expect("open search index");
+    connection
+        .query_row(
+            "SELECT count(*) FROM catalog_entities WHERE workspace = 'default' AND surface_name = ?1",
+            [surface_name],
+            |row| row.get(0),
+        )
+        .expect("catalog entity count")
+}
+
+fn total_catalog_entity_count(harness: &GrpcHarness) -> u32 {
+    let connection = Connection::open(search_index_path(harness)).expect("open search index");
+    connection
+        .query_row(
+            "SELECT count(*) FROM catalog_entities WHERE workspace = 'default'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("total catalog entity count")
+}
+
+fn search_index_path(harness: &GrpcHarness) -> std::path::PathBuf {
+    harness
+        .config_dir()
+        .join("workspaces")
+        .join("default")
+        .join("search")
+        .join("search.sqlite")
 }

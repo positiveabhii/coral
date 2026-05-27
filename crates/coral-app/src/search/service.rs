@@ -2,6 +2,7 @@
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use coral_api::v1::search_result::Payload;
 use coral_api::v1::search_service_server::SearchService as SearchServiceApi;
@@ -10,19 +11,22 @@ use coral_api::v1::{
     SearchRequest, SearchResponse, SearchResult, SearchResultTruncation, SearchResultType,
     SearchSurfaceKind,
 };
-use coral_engine::{
-    CatalogInfo, ColumnInfo, TableFunctionArgumentInfo, TableFunctionInfo,
-    TableFunctionResultColumnInfo, TableInfo,
-};
+use coral_engine::{CatalogInfo, TableFunctionInfo, TableInfo};
 use tonic::{Request, Response, Status};
 
 use crate::bootstrap::{AppError, app_status};
 use crate::query::manager::{QueryManager, QueryManagerError};
+use crate::search::index::{
+    CatalogSearchHit, CatalogSearchResultType, CatalogSearchSurfaceKind, SearchIndexError,
+    SearchIndexStore,
+};
+use crate::state::AppStateLayout;
 use crate::transport::{
     catalog_item_to_proto, grpc_span, instrument_grpc, query_status, table_function_to_proto,
     workspace_name_from_proto, workspace_to_proto,
 };
 use crate::workspaces::WorkspaceName;
+use tokio::sync::Mutex;
 
 const DEFAULT_SEARCH_LIMIT: u32 = 10;
 const MAX_SEARCH_LIMIT: u32 = 50;
@@ -35,10 +39,46 @@ pub(crate) struct SearchService {
 }
 
 impl SearchService {
-    pub(crate) fn new(query_manager: QueryManager) -> Self {
+    pub(crate) fn new(query_manager: QueryManager, indexes: SearchIndexRefresher) -> Self {
         Self {
-            search: UniversalSearch::new(query_manager),
+            search: UniversalSearch::new(query_manager, indexes),
         }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SearchIndexRefresher {
+    layout: AppStateLayout,
+    refreshed_workspaces: Arc<Mutex<BTreeSet<WorkspaceName>>>,
+}
+
+impl SearchIndexRefresher {
+    pub(crate) fn new(layout: AppStateLayout) -> Self {
+        Self {
+            layout,
+            refreshed_workspaces: Arc::new(Mutex::new(BTreeSet::new())),
+        }
+    }
+
+    async fn refresh_catalog_if_needed(
+        &self,
+        workspace_name: &WorkspaceName,
+        catalog: &CatalogInfo,
+    ) -> Result<SearchIndexStore, SearchIndexError> {
+        let mut refreshed_workspaces = self.refreshed_workspaces.lock().await;
+        let index = SearchIndexStore::open_workspace(&self.layout, workspace_name)?;
+        if !refreshed_workspaces.contains(workspace_name) {
+            index.replace_catalog(workspace_name, catalog)?;
+            refreshed_workspaces.insert(workspace_name.clone());
+        }
+        Ok(index)
+    }
+
+    pub(crate) async fn mark_catalog_dirty(&self, workspace_name: &WorkspaceName) {
+        self.refreshed_workspaces
+            .lock()
+            .await
+            .remove(workspace_name);
     }
 }
 
@@ -67,12 +107,14 @@ impl SearchServiceApi for SearchService {
 #[derive(Clone)]
 struct UniversalSearch {
     queries: QueryManager,
+    indexes: SearchIndexRefresher,
 }
 
 impl UniversalSearch {
-    fn new(query_manager: QueryManager) -> Self {
+    fn new(query_manager: QueryManager, indexes: SearchIndexRefresher) -> Self {
         Self {
             queries: query_manager,
+            indexes,
         }
     }
 
@@ -84,8 +126,9 @@ impl UniversalSearch {
     ) -> Result<SearchResponse, QueryManagerError> {
         let terms = query_terms(query).map_err(QueryManagerError::App)?;
         let catalog = self.queries.list_catalog(workspace_name, None).await?;
-        let mut candidates =
-            dedupe_candidates(catalog_candidates(workspace_name, &catalog, &terms));
+        let (mut candidates, catalog_status) = self
+            .catalog_metadata_candidates(workspace_name, &catalog, &terms, limit)
+            .await;
         candidates.sort();
 
         let total_count = candidates.len();
@@ -97,19 +140,13 @@ impl UniversalSearch {
             .map(|candidate| candidate.result)
             .collect::<Vec<_>>();
         let returned_count = u32::try_from(results.len()).unwrap_or(u32::MAX);
-        let provider_state = if total_count == 0 {
-            SearchProviderState::Empty
-        } else {
-            SearchProviderState::ResultsFound
-        };
-
         Ok(SearchResponse {
             results,
             provider_statuses: vec![
                 SearchProviderStatus {
                     provider: SearchProvider::CatalogMetadata as i32,
-                    state: provider_state as i32,
-                    note: catalog_provider_note(provider_state, total_count),
+                    state: catalog_status.state as i32,
+                    note: catalog_status.note,
                 },
                 SearchProviderStatus {
                     provider: SearchProvider::ObservedValues as i32,
@@ -125,6 +162,53 @@ impl UniversalSearch {
             }),
         })
     }
+
+    async fn catalog_metadata_candidates(
+        &self,
+        workspace_name: &WorkspaceName,
+        catalog: &CatalogInfo,
+        terms: &QueryTerms,
+        limit: u32,
+    ) -> (Vec<Candidate>, CatalogProviderStatus) {
+        let index = match self
+            .indexes
+            .refresh_catalog_if_needed(workspace_name, catalog)
+            .await
+        {
+            Ok(index) => index,
+            Err(error) => return (Vec::new(), catalog_index_error_status(&error)),
+        };
+        let capabilities = index.capabilities();
+        tracing::debug!(
+            workspace = %workspace_name,
+            sqlite_version = %capabilities.sqlite_version,
+            fts5 = capabilities.fts5,
+            trigram = capabilities.trigram,
+            "using SQLite catalog search index"
+        );
+        let search_limit = usize::try_from(limit)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(5)
+            .max(25);
+        let hits = match index.search_catalog(workspace_name, &terms.terms, search_limit) {
+            Ok(hits) => hits,
+            Err(error) => return (Vec::new(), catalog_index_error_status(&error)),
+        };
+        let candidates =
+            dedupe_candidates(catalog_candidates_from_hits(workspace_name, catalog, hits));
+        let state = if candidates.is_empty() {
+            SearchProviderState::Empty
+        } else {
+            SearchProviderState::ResultsFound
+        };
+        let note = catalog_provider_note(state, candidates.len());
+        (candidates, CatalogProviderStatus { state, note })
+    }
+}
+
+struct CatalogProviderStatus {
+    state: SearchProviderState,
+    note: String,
 }
 
 #[derive(Clone)]
@@ -176,7 +260,6 @@ fn dedupe_candidates(candidates: Vec<Candidate>) -> Vec<Candidate> {
 
 #[derive(Clone, Debug)]
 struct QueryTerms {
-    normalized_query: String,
     terms: Vec<String>,
 }
 
@@ -219,10 +302,7 @@ fn query_terms(query: &str) -> Result<QueryTerms, AppError> {
     terms.sort();
     terms.dedup();
 
-    Ok(QueryTerms {
-        normalized_query,
-        terms,
-    })
+    Ok(QueryTerms { terms })
 }
 
 fn is_query_token_char(ch: char) -> bool {
@@ -233,223 +313,97 @@ fn normalize(value: &str) -> String {
     value.trim().to_ascii_lowercase()
 }
 
-fn catalog_candidates(
+fn catalog_candidates_from_hits(
     workspace_name: &WorkspaceName,
     catalog: &CatalogInfo,
-    terms: &QueryTerms,
+    hits: Vec<CatalogSearchHit>,
 ) -> Vec<Candidate> {
     let mut candidates = Vec::new();
-    for table in &catalog.tables {
-        table_candidates(workspace_name, table, terms, &mut candidates);
+    let mut column_hints_by_surface =
+        BTreeMap::<(CatalogSearchSurfaceKind, String, String), usize>::new();
+    for hit in hits {
+        match hit.result_type {
+            Some(CatalogSearchResultType::CatalogTable) => {
+                if let Some(table) = find_table(catalog, &hit.schema_name, &hit.surface_name) {
+                    candidates.push(Candidate {
+                        key: hit.entity_key,
+                        score: hit.score,
+                        type_order: 1,
+                        result: SearchResult {
+                            r#type: SearchResultType::CatalogItem as i32,
+                            payload: Some(Payload::CatalogItem(catalog_item_to_proto(
+                                workspace_name,
+                                crate::catalog::discovery::CatalogItem::Table(table_summary(table)),
+                            ))),
+                        },
+                    });
+                }
+            }
+            Some(CatalogSearchResultType::CatalogTableFunction) => {
+                if let Some(function) = find_function(catalog, &hit.schema_name, &hit.surface_name)
+                {
+                    candidates.push(Candidate {
+                        key: hit.entity_key,
+                        score: hit.score,
+                        type_order: 1,
+                        result: SearchResult {
+                            r#type: SearchResultType::CatalogItem as i32,
+                            payload: Some(Payload::CatalogItem(catalog_item_to_proto(
+                                workspace_name,
+                                crate::catalog::discovery::CatalogItem::TableFunction(
+                                    function.clone(),
+                                ),
+                            ))),
+                        },
+                    });
+                }
+            }
+            Some(CatalogSearchResultType::ColumnHint) => {
+                let Some(surface_kind) = hit.surface_kind else {
+                    continue;
+                };
+                let count_key = (
+                    surface_kind,
+                    hit.schema_name.clone(),
+                    hit.surface_name.clone(),
+                );
+                let count = column_hints_by_surface.entry(count_key).or_default();
+                if *count >= MAX_COLUMN_HINTS_PER_SURFACE {
+                    continue;
+                }
+                candidates.push(column_hint_candidate(
+                    ColumnHintCandidate {
+                        workspace_name,
+                        schema_name: &hit.schema_name,
+                        surface_name: &hit.surface_name,
+                        surface_kind: surface_kind.to_proto(),
+                        name: &hit.name,
+                        data_type: &hit.data_type,
+                        required: hit.required,
+                        description: &hit.description,
+                        matched_fields: hit.matched_fields,
+                    },
+                    hit.score,
+                ));
+                *count += 1;
+            }
+            Some(CatalogSearchResultType::NativeSearchPath) => {
+                if let Some(function) = find_function(catalog, &hit.schema_name, &hit.surface_name)
+                    && function.kind == "search"
+                {
+                    candidates.push(native_search_path_candidate(
+                        workspace_name,
+                        function,
+                        hit.matched_fields,
+                        hit.score,
+                    ));
+                }
+            }
+            None => {}
+        }
     }
-    for function in &catalog.table_functions {
-        table_function_candidates(workspace_name, function, terms, &mut candidates);
-    }
+
     candidates
-}
-
-fn table_candidates(
-    workspace_name: &WorkspaceName,
-    table: &TableInfo,
-    terms: &QueryTerms,
-    candidates: &mut Vec<Candidate>,
-) {
-    let name = qualified_name(&table.schema_name, &table.table_name);
-    let fields = [
-        ("schema_name", table.schema_name.as_str(), 2),
-        ("table_name", table.table_name.as_str(), 4),
-        ("name", name.as_str(), 4),
-        ("description", table.description.as_str(), 2),
-        ("guide", table.guide.as_str(), 1),
-    ];
-    if let Some((score, _matched_fields)) = score_fields(terms, fields) {
-        candidates.push(Candidate {
-            key: format!("catalog:table:{}.{}", table.schema_name, table.table_name),
-            score,
-            type_order: 1,
-            result: SearchResult {
-                r#type: SearchResultType::CatalogItem as i32,
-                payload: Some(Payload::CatalogItem(catalog_item_to_proto(
-                    workspace_name,
-                    crate::catalog::discovery::CatalogItem::Table(table_summary(table)),
-                ))),
-            },
-        });
-    }
-
-    let mut hints_for_surface = 0usize;
-    for column in &table.columns {
-        if hints_for_surface >= MAX_COLUMN_HINTS_PER_SURFACE {
-            break;
-        }
-        let fields = [
-            ("column_name", column.name.as_str(), 4),
-            ("description", column.description.as_str(), 2),
-            ("data_type", column.data_type.as_str(), 1),
-        ];
-        if let Some((score, matched_fields)) = score_fields(terms, fields) {
-            candidates.push(column_hint_candidate(
-                ColumnHintCandidate {
-                    workspace_name,
-                    schema_name: &table.schema_name,
-                    surface_name: &table.table_name,
-                    surface_kind: SearchSurfaceKind::Table,
-                    name: &column.name,
-                    data_type: &column.data_type,
-                    required: column.is_required_filter,
-                    description: &column.description,
-                    matched_fields,
-                },
-                score + required_filter_boost(column),
-            ));
-            hints_for_surface += 1;
-        }
-    }
-
-    for filter in &table.required_filters {
-        if hints_for_surface >= MAX_COLUMN_HINTS_PER_SURFACE {
-            break;
-        }
-        let fields = [("required_filter", filter.as_str(), 5)];
-        if let Some((score, matched_fields)) = score_fields(terms, fields) {
-            candidates.push(column_hint_candidate(
-                ColumnHintCandidate {
-                    workspace_name,
-                    schema_name: &table.schema_name,
-                    surface_name: &table.table_name,
-                    surface_kind: SearchSurfaceKind::Table,
-                    name: filter,
-                    data_type: "",
-                    required: true,
-                    description: "Required table filter",
-                    matched_fields,
-                },
-                score + 2,
-            ));
-            hints_for_surface += 1;
-        }
-    }
-}
-
-fn table_function_candidates(
-    workspace_name: &WorkspaceName,
-    function: &TableFunctionInfo,
-    terms: &QueryTerms,
-    candidates: &mut Vec<Candidate>,
-) {
-    let name = qualified_name(&function.schema_name, &function.function_name);
-    let fields = [
-        ("schema_name", function.schema_name.as_str(), 2),
-        ("function_name", function.function_name.as_str(), 5),
-        ("name", name.as_str(), 5),
-        ("description", function.description.as_str(), 2),
-        ("kind", function.kind.as_str(), 2),
-    ];
-    if let Some((score, matched_fields)) = score_fields(terms, fields) {
-        candidates.push(Candidate {
-            key: format!(
-                "catalog:function:{}.{}",
-                function.schema_name, function.function_name
-            ),
-            score,
-            type_order: 1,
-            result: SearchResult {
-                r#type: SearchResultType::CatalogItem as i32,
-                payload: Some(Payload::CatalogItem(catalog_item_to_proto(
-                    workspace_name,
-                    crate::catalog::discovery::CatalogItem::TableFunction(function.clone()),
-                ))),
-            },
-        });
-
-        if function.kind == "search" {
-            candidates.push(native_search_path_candidate(
-                workspace_name,
-                function,
-                matched_fields,
-                score + 4,
-            ));
-        }
-    }
-
-    let mut hints_for_surface = 0usize;
-    for argument in &function.arguments {
-        if hints_for_surface >= MAX_COLUMN_HINTS_PER_SURFACE {
-            break;
-        }
-        if let Some(candidate) = argument_hint_candidate(workspace_name, function, argument, terms)
-        {
-            candidates.push(candidate);
-            hints_for_surface += 1;
-        }
-    }
-    for column in &function.result_columns {
-        if hints_for_surface >= MAX_COLUMN_HINTS_PER_SURFACE {
-            break;
-        }
-        if let Some(candidate) =
-            result_column_hint_candidate(workspace_name, function, column, terms)
-        {
-            candidates.push(candidate);
-            hints_for_surface += 1;
-        }
-    }
-}
-
-fn argument_hint_candidate(
-    workspace_name: &WorkspaceName,
-    function: &TableFunctionInfo,
-    argument: &TableFunctionArgumentInfo,
-    terms: &QueryTerms,
-) -> Option<Candidate> {
-    let values = argument.values.join(" ");
-    let fields = [
-        ("argument", argument.name.as_str(), 5),
-        ("allowed_values", values.as_str(), 2),
-    ];
-    let (score, matched_fields) = score_fields(terms, fields)?;
-    Some(column_hint_candidate(
-        ColumnHintCandidate {
-            workspace_name,
-            schema_name: &function.schema_name,
-            surface_name: &function.function_name,
-            surface_kind: SearchSurfaceKind::TableFunction,
-            name: &argument.name,
-            data_type: "",
-            required: argument.required,
-            description: "Table function argument",
-            matched_fields,
-        },
-        score + u32::from(argument.required),
-    ))
-}
-
-fn result_column_hint_candidate(
-    workspace_name: &WorkspaceName,
-    function: &TableFunctionInfo,
-    column: &TableFunctionResultColumnInfo,
-    terms: &QueryTerms,
-) -> Option<Candidate> {
-    let fields = [
-        ("result_column", column.name.as_str(), 4),
-        ("description", column.description.as_str(), 2),
-        ("data_type", column.data_type.as_str(), 1),
-    ];
-    let (score, matched_fields) = score_fields(terms, fields)?;
-    Some(column_hint_candidate(
-        ColumnHintCandidate {
-            workspace_name,
-            schema_name: &function.schema_name,
-            surface_name: &function.function_name,
-            surface_kind: SearchSurfaceKind::TableFunction,
-            name: &column.name,
-            data_type: &column.data_type,
-            required: false,
-            description: &column.description,
-            matched_fields,
-        },
-        score,
-    ))
 }
 
 struct ColumnHintCandidate<'a> {
@@ -462,6 +416,15 @@ struct ColumnHintCandidate<'a> {
     required: bool,
     description: &'a str,
     matched_fields: Vec<String>,
+}
+
+impl CatalogSearchSurfaceKind {
+    fn to_proto(self) -> SearchSurfaceKind {
+        match self {
+            Self::Table => SearchSurfaceKind::Table,
+            Self::TableFunction => SearchSurfaceKind::TableFunction,
+        }
+    }
 }
 
 fn column_hint_candidate(input: ColumnHintCandidate<'_>, score: u32) -> Candidate {
@@ -516,52 +479,10 @@ fn native_search_path_candidate(
     }
 }
 
-fn score_fields<const N: usize>(
-    terms: &QueryTerms,
-    fields: [(&'static str, &str, u32); N],
-) -> Option<(u32, Vec<String>)> {
-    let mut score = 0u32;
-    let mut matched_fields = BTreeSet::<&'static str>::new();
-    for (field, value, weight) in fields {
-        if value.trim().is_empty() {
-            continue;
-        }
-        let normalized = normalize(value);
-        let exact_bonus = u32::from(normalized == terms.normalized_query) * weight * 2;
-        let matched_term_count = terms
-            .terms
-            .iter()
-            .filter(|term| normalized.contains(term.as_str()))
-            .count();
-        let term_score = u32::try_from(matched_term_count).unwrap_or(u32::MAX) * weight;
-        if exact_bonus > 0 || term_score > 0 {
-            score += exact_bonus + term_score;
-            matched_fields.insert(field);
-        }
-    }
-    (score > 0).then(|| {
-        (
-            score,
-            matched_fields
-                .into_iter()
-                .map(str::to_string)
-                .collect::<Vec<_>>(),
-        )
-    })
-}
-
 fn table_summary(table: &TableInfo) -> TableInfo {
     let mut table = table.clone();
     table.columns.clear();
     table
-}
-
-fn required_filter_boost(column: &ColumnInfo) -> u32 {
-    if column.is_required_filter { 2 } else { 0 }
-}
-
-fn qualified_name(schema_name: &str, name: &str) -> String {
-    format!("{schema_name}.{name}")
 }
 
 fn sql_call_example(function: &TableFunctionInfo) -> String {
@@ -579,6 +500,27 @@ fn sql_call_example(function: &TableFunctionInfo) -> String {
     )
 }
 
+fn find_table<'a>(
+    catalog: &'a CatalogInfo,
+    schema_name: &str,
+    table_name: &str,
+) -> Option<&'a TableInfo> {
+    catalog
+        .tables
+        .iter()
+        .find(|table| table.schema_name == schema_name && table.table_name == table_name)
+}
+
+fn find_function<'a>(
+    catalog: &'a CatalogInfo,
+    schema_name: &str,
+    function_name: &str,
+) -> Option<&'a TableFunctionInfo> {
+    catalog.table_functions.iter().find(|function| {
+        function.schema_name == schema_name && function.function_name == function_name
+    })
+}
+
 fn catalog_provider_note(state: SearchProviderState, total_count: usize) -> String {
     match state {
         SearchProviderState::ResultsFound => {
@@ -586,6 +528,17 @@ fn catalog_provider_note(state: SearchProviderState, total_count: usize) -> Stri
         }
         SearchProviderState::Empty => "Catalog metadata returned no search hints".to_string(),
         _ => String::new(),
+    }
+}
+
+fn catalog_index_error_status(error: &SearchIndexError) -> CatalogProviderStatus {
+    let state = match error {
+        SearchIndexError::UnsupportedCapability { .. } => SearchProviderState::Partial,
+        SearchIndexError::Io(_) | SearchIndexError::Sqlite(_) => SearchProviderState::Error,
+    };
+    CatalogProviderStatus {
+        state,
+        note: format!("Catalog metadata search index is unavailable: {error}"),
     }
 }
 
@@ -600,8 +553,12 @@ fn truncation_note(truncated: bool, total_count: usize, max_results: usize) -> S
 #[cfg(test)]
 mod tests {
     use coral_api::v1::SearchSurfaceKind;
+    use coral_engine::{CatalogInfo, TableInfo};
+    use tempfile::tempdir;
 
-    use super::{query_terms, score_fields};
+    use super::{SearchIndexRefresher, query_terms};
+    use crate::state::AppStateLayout;
+    use crate::workspaces::WorkspaceName;
 
     #[test]
     fn query_terms_preserve_identifier_punctuation() {
@@ -613,23 +570,69 @@ mod tests {
     }
 
     #[test]
-    fn score_fields_matches_terms_and_exact_query() {
-        let terms = query_terms("issue title").expect("terms");
-        let (score, fields) = score_fields(
-            &terms,
-            [("name", "title", 4), ("description", "Issue title", 2)],
-        )
-        .expect("score");
-
-        assert!(score >= 8);
-        assert_eq!(fields, vec!["description", "name"]);
-    }
-
-    #[test]
     fn surface_kind_has_stable_proto_names() {
         assert_eq!(
             SearchSurfaceKind::Table.as_str_name(),
             "SEARCH_SURFACE_KIND_TABLE"
         );
+    }
+
+    #[tokio::test]
+    async fn search_index_refresher_only_refreshes_once_until_forced() {
+        let temp = tempdir().expect("tempdir");
+        let layout =
+            AppStateLayout::discover(Some(temp.path().join("coral-config"))).expect("layout");
+        let workspace = WorkspaceName::parse("default").expect("workspace");
+        let refresher = SearchIndexRefresher::new(layout);
+
+        let first_catalog = catalog_with_table("messages", "Fixture messages");
+        let second_catalog = catalog_with_table("tasks", "Fixture tasks");
+
+        let index = refresher
+            .refresh_catalog_if_needed(&workspace, &first_catalog)
+            .await
+            .expect("initial refresh");
+        assert!(catalog_has_surface(&index, &workspace, "messages"));
+
+        let index = refresher
+            .refresh_catalog_if_needed(&workspace, &second_catalog)
+            .await
+            .expect("skipped refresh");
+        assert!(catalog_has_surface(&index, &workspace, "messages"));
+        assert!(!catalog_has_surface(&index, &workspace, "tasks"));
+
+        refresher.mark_catalog_dirty(&workspace).await;
+        let index = refresher
+            .refresh_catalog_if_needed(&workspace, &second_catalog)
+            .await
+            .expect("dirty refresh");
+        assert!(!catalog_has_surface(&index, &workspace, "messages"));
+        assert!(catalog_has_surface(&index, &workspace, "tasks"));
+    }
+
+    fn catalog_with_table(table_name: &str, description: &str) -> CatalogInfo {
+        CatalogInfo {
+            tables: vec![TableInfo {
+                schema_name: "fixture".to_string(),
+                table_name: table_name.to_string(),
+                description: description.to_string(),
+                guide: String::new(),
+                columns: Vec::new(),
+                required_filters: Vec::new(),
+            }],
+            table_functions: Vec::new(),
+        }
+    }
+
+    fn catalog_has_surface(
+        index: &crate::search::index::SearchIndexStore,
+        workspace: &WorkspaceName,
+        surface_name: &str,
+    ) -> bool {
+        index
+            .search_catalog(workspace, &[surface_name.to_string()], 10)
+            .expect("search catalog")
+            .iter()
+            .any(|hit| hit.surface_name == surface_name)
     }
 }
