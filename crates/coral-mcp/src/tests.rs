@@ -433,7 +433,13 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         catalog["items"][0]["sql_reference"],
         "local_messages.events"
     );
-    assert_eq!(catalog["items"][0]["table"]["table_name"], "events");
+    assert!(
+        catalog["items"][0]["required_filters"]
+            .as_array()
+            .expect("summary required filters")
+            .is_empty()
+    );
+    assert!(catalog["items"][0]["table"].is_null());
     assert_matches_output_schema(list_catalog_tool, &catalog);
 
     let catalog_page = client
@@ -514,10 +520,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
         search["items"][0]["sql_reference"],
         "local_messages.messages"
     );
-    assert!(
-        search["items"][0]["table"]["guide"].is_string(),
-        "search results should always expose guide text, even when empty"
-    );
+    assert!(search["items"][0]["table"].is_null());
     assert!(
         search["items"][0]["matched_fields"]
             .as_array()
@@ -566,8 +569,10 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
     assert_eq!(described["found"], true);
     assert_eq!(described["name"], "local_messages.messages");
     assert_eq!(described["column_count"], 3);
+    assert_eq!(described["columns_returned"], 3);
     assert!(described["columns_hint"].as_str().is_some());
-    assert!(described["columns"].is_null());
+    assert_eq!(described["columns"][0]["column_name"], "type");
+    assert_eq!(described["columns"][0]["data_type"], "Utf8");
 
     let missing_table = client
         .call_tool(
@@ -785,6 +790,10 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "This catalog coverage exercises summary and full table-function renderings in one session."
+)]
 async fn list_catalog_surfaces_table_functions() {
     let temp = TempDir::new().expect("temp dir");
     let manifest_path = write_function_fixture_manifest(temp.path());
@@ -821,17 +830,30 @@ async fn list_catalog_surfaces_table_functions() {
         catalog["items"][0]["sql_call_example"],
         "searchy.lookup_issue(number => '<value>')"
     );
-    assert_eq!(
-        catalog["items"][0]["table_function"]["arguments"][0]["name"],
-        "number"
-    );
-    assert_eq!(
-        catalog["items"][0]["table_function"]["result_columns"][0]["column_name"],
-        "title"
-    );
+    assert_eq!(catalog["items"][0]["arguments"][0]["name"], "number");
+    assert_eq!(catalog["items"][0]["result_column_count"], 1);
+    assert!(catalog["items"][0]["table_function"].is_null());
     assert_eq!(catalog["items"][1]["kind"], "table");
     assert_eq!(catalog["items"][1]["name"], "searchy.placeholder");
     assert_matches_output_schema(catalog_tool, &catalog);
+
+    let full_functions = client
+        .call_tool(
+            CallToolRequestParams::new("list_catalog").with_arguments(json_object(&json!({
+                "kind": "table_function",
+                "detail": "full",
+                "limit": 1
+            }))),
+        )
+        .await
+        .expect("list full table functions")
+        .structured_content
+        .expect("structured full functions");
+    assert_eq!(
+        full_functions["items"][0]["table_function"]["result_columns"][0]["column_name"],
+        "title"
+    );
+    assert_matches_output_schema(catalog_tool, &full_functions);
 
     let functions = client
         .call_tool(
@@ -870,6 +892,7 @@ async fn list_catalog_surfaces_table_functions() {
     assert_eq!(search["total"], 1);
     assert_eq!(search["items"][0]["kind"], "table_function");
     assert_eq!(search["items"][0]["name"], "searchy.search_issues");
+    assert_eq!(search["items"][0]["result_column_count"], 2);
     assert!(
         search["items"][0]["matched_fields"]
             .as_array()

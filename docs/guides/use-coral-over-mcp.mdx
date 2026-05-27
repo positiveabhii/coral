@@ -15,8 +15,8 @@ Before setting up a client, make sure you have [connected at least one source](/
 | Type     | Name             | Description                                             |
 | -------- | ---------------- | ------------------------------------------------------- |
 | Tool     | `sql`            | Execute read-only SQL against the Coral database        |
-| Tool     | `list_catalog`   | List database tables and table functions with pagination |
-| Tool     | `search_catalog` | Search database catalog metadata with a Rust regex      |
+| Tool     | `list_catalog`   | List compact table and table-function summaries with pagination |
+| Tool     | `search_catalog` | Search compact catalog summaries with a Rust regex      |
 | Tool     | `describe_table` | Show compact metadata for one database table            |
 | Tool     | `list_columns`   | List columns for one database table with pagination     |
 | Resource | `coral://guide`  | Database workflow guide for agents                     |
@@ -28,21 +28,25 @@ Agents should treat the discovery tools as catalog helpers, not as replacement p
 
 ### Discovery tools
 
-**`list_catalog`**: paginated list of database tables and parameterized table functions.
+**`list_catalog`**: paginated list of compact database table and parameterized table-function summaries.
 
-- Arguments: optional `schema`, `kind`, `limit`, `offset`. Omit `kind` (or pass `null`) to include both `"table"` and `"table_function"` items.
+- Arguments: optional `schema`, `kind`, `detail`, `limit`, `offset`. Omit `kind` (or pass `null`) to include both `"table"` and `"table_function"` items.
+- The default `detail: "summary"` omits bulky guides and table-function result-column lists. Use `detail: "full"` only with a narrow `schema`, `kind`, and `limit` when that metadata is required.
+- `limit` accepts `1` through `50`.
 - For tables, use `sql_reference` in `FROM` and `JOIN` clauses.
 - For table functions, use `sql_call_example` and fill in the required arguments.
 - Do not quote the whole `schema.item` string: write `github.pulls` or `"github"."pulls"`, not `"github.pulls"`.
 
 **`search_catalog`**: deterministic regex matching over database catalog metadata.
 
-- Arguments: required `pattern` plus optional `schema`, `kind`, `ignore_case`, `limit`, `offset`.
+- Arguments: required `pattern` plus optional `schema`, `kind`, `detail`, `ignore_case`, `limit`, `offset`.
+- The default `detail: "summary"` is intended for normal agent discovery. Use `detail: "full"` only for small result sets.
+- `limit` accepts `1` through `50`.
 
 **`describe_table`**: compact metadata for one table.
 
 - Arguments: exact `schema` and `table`.
-- Returns guide text, required filters, and a column count without dumping full columns.
+- Returns guide text, required filters, column count, and up to 50 compact column summaries. Use `list_columns` when you need regex filtering, `required_only`, or pagination over a wide table.
 
 **`list_columns`**: paginated columns for one table.
 

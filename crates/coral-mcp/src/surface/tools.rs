@@ -12,6 +12,7 @@ use super::{Pagination, parse_pagination, parse_pagination_with_limits};
 pub(crate) struct ListCatalogArguments {
     pub(crate) schema: Option<String>,
     pub(crate) kind: Option<CatalogToolKind>,
+    pub(crate) detail: CatalogToolDetail,
     pub(crate) pagination: Pagination,
 }
 
@@ -19,6 +20,7 @@ pub(crate) struct SearchCatalogArguments {
     pub(crate) pattern: String,
     pub(crate) schema: Option<String>,
     pub(crate) kind: Option<CatalogToolKind>,
+    pub(crate) detail: CatalogToolDetail,
     pub(crate) ignore_case: bool,
     pub(crate) pagination: Pagination,
 }
@@ -27,6 +29,12 @@ pub(crate) struct SearchCatalogArguments {
 pub(crate) enum CatalogToolKind {
     Table,
     TableFunction,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CatalogToolDetail {
+    Summary,
+    Full,
 }
 
 pub(crate) struct DescribeTableArguments {
@@ -71,7 +79,7 @@ pub(crate) fn list_catalog_tool(visible_table_count: usize, visible_function_cou
     Tool::new(
         "list_catalog",
         format!(
-            "List database catalog items. {visible_table_count} table(s) and {visible_function_count} table function(s) are currently visible."
+            "List compact database catalog summaries. {visible_table_count} table(s) and {visible_function_count} table function(s) are currently visible. Prefer search_catalog when you know the entity or task; use detail='full' only for small result sets that need guides, function result columns, or full argument metadata."
         ),
         json_object_schema(&json!({
             "type": "object",
@@ -92,11 +100,17 @@ pub(crate) fn list_catalog_tool(visible_table_count: usize, visible_function_cou
                         }
                     ]
                 },
+                "detail": {
+                    "type": "string",
+                    "description": "Output detail level. Defaults to compact summaries. Use 'full' only with a narrow schema/kind/limit when bulky guides, function result columns, and full argument metadata are required.",
+                    "enum": ["summary", "full"],
+                    "default": "summary"
+                },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum catalog items to return, from 1 to 200. Defaults to 50.",
+                    "description": "Maximum catalog items to return, from 1 to 50. Defaults to 50.",
                     "minimum": 1,
-                    "maximum": 200,
+                    "maximum": 50,
                     "default": 50
                 },
                 "offset": {
@@ -150,15 +164,21 @@ pub(crate) fn search_catalog_tool(
                         }
                     ]
                 },
+                "detail": {
+                    "type": "string",
+                    "description": "Output detail level. Defaults to compact summaries. Use 'full' only for small result sets that need guides, function result columns, or full argument metadata.",
+                    "enum": ["summary", "full"],
+                    "default": "summary"
+                },
                 "ignore_case": {
                     "type": "boolean",
                     "description": "Whether regex matching is case-insensitive. Defaults to true."
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum catalog items to return, from 1 to 100. Defaults to 20.",
+                    "description": "Maximum catalog items to return, from 1 to 50. Defaults to 20.",
                     "minimum": 1,
-                    "maximum": 100,
+                    "maximum": 50,
                     "default": 20
                 },
                 "offset": {
@@ -184,7 +204,7 @@ pub(crate) fn search_catalog_tool(
 pub(crate) fn describe_table_tool() -> Tool {
     Tool::new(
         "describe_table",
-        "Describe one database table without returning full column definitions.",
+        "Describe one database table, including required filters and compact column metadata.",
         json_object_schema(&json!({
             "type": "object",
             "required": ["schema", "table"],
@@ -317,7 +337,8 @@ pub(crate) fn list_catalog_arguments(
     Ok(ListCatalogArguments {
         schema: optional_string_argument(arguments, "schema")?,
         kind: optional_catalog_kind_argument(arguments)?,
-        pagination: parse_pagination(arguments)?,
+        detail: optional_catalog_detail_argument(arguments)?,
+        pagination: parse_pagination_with_limits(arguments, 50, 50)?,
     })
 }
 
@@ -328,8 +349,9 @@ pub(crate) fn search_catalog_arguments(
         pattern: required_string_argument(arguments, "pattern")?,
         schema: optional_string_argument(arguments, "schema")?,
         kind: optional_catalog_kind_argument(arguments)?,
+        detail: optional_catalog_detail_argument(arguments)?,
         ignore_case: optional_bool_argument(arguments, "ignore_case", true)?,
-        pagination: parse_pagination_with_limits(arguments, 20, 100)?,
+        pagination: parse_pagination_with_limits(arguments, 20, 50)?,
     })
 }
 
@@ -344,6 +366,22 @@ fn optional_catalog_kind_argument(
         "table_function" => Ok(Some(CatalogToolKind::TableFunction)),
         _ => Err(ErrorData::invalid_params(
             "argument 'kind' must be 'table' or 'table_function'",
+            None,
+        )),
+    }
+}
+
+fn optional_catalog_detail_argument(
+    arguments: Option<&Map<String, Value>>,
+) -> Result<CatalogToolDetail, ErrorData> {
+    let Some(detail) = optional_string_argument(arguments, "detail")? else {
+        return Ok(CatalogToolDetail::Summary);
+    };
+    match detail.as_str() {
+        "summary" => Ok(CatalogToolDetail::Summary),
+        "full" => Ok(CatalogToolDetail::Full),
+        _ => Err(ErrorData::invalid_params(
+            "argument 'detail' must be 'summary' or 'full'",
             None,
         )),
     }
@@ -392,7 +430,7 @@ fn sql_tool_description(_sources: &[Source], visible_table_count: usize) -> Stri
 
 fn search_catalog_description(visible_table_count: usize, visible_function_count: usize) -> String {
     format!(
-        "Search database catalog metadata with a Rust regex. {visible_table_count} table(s) and {visible_function_count} table function(s) are currently visible."
+        "Search compact database catalog summaries with a Rust regex. {visible_table_count} table(s) and {visible_function_count} table function(s) are currently visible. Use this before list_catalog when you know the entity or task; use detail='full' only for small result sets."
     )
 }
 
@@ -435,7 +473,7 @@ fn list_catalog_output_schema() -> Arc<Map<String, Value>> {
 fn catalog_table_item_output_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["kind", "schema_name", "name", "sql_reference", "description", "table"],
+        "required": ["kind", "schema_name", "name", "sql_reference", "description"],
         "additionalProperties": false,
         "properties": {
             "kind": { "enum": ["table"] },
@@ -443,6 +481,10 @@ fn catalog_table_item_output_schema() -> Value {
             "name": { "type": "string" },
             "sql_reference": { "type": "string" },
             "description": { "type": "string" },
+            "required_filters": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
             "table": {
                 "type": "object",
                 "required": ["table_name", "guide", "required_filters"],
@@ -469,8 +511,7 @@ fn catalog_table_function_item_output_schema() -> Value {
             "name",
             "sql_reference",
             "sql_call_example",
-            "description",
-            "table_function"
+            "description"
         ],
         "additionalProperties": false,
         "properties": {
@@ -480,6 +521,14 @@ fn catalog_table_function_item_output_schema() -> Value {
             "sql_reference": { "type": "string" },
             "sql_call_example": { "type": "string" },
             "description": { "type": "string" },
+            "arguments": {
+                "type": "array",
+                "items": table_function_argument_output_schema()
+            },
+            "result_column_count": {
+                "type": "integer",
+                "minimum": 0
+            },
             "table_function": {
                 "type": "object",
                 "required": ["function_name", "arguments", "result_columns"],
@@ -488,19 +537,7 @@ fn catalog_table_function_item_output_schema() -> Value {
                     "function_name": { "type": "string" },
                     "arguments": {
                         "type": "array",
-                        "items": {
-                            "type": "object",
-                            "required": ["name", "required", "values"],
-                            "additionalProperties": false,
-                            "properties": {
-                                "name": { "type": "string" },
-                                "required": { "type": "boolean" },
-                                "values": {
-                                    "type": "array",
-                                    "items": { "type": "string" }
-                                }
-                            }
-                        }
+                        "items": table_function_argument_output_schema()
                     },
                     "result_columns": {
                         "type": "array",
@@ -517,6 +554,22 @@ fn catalog_table_function_item_output_schema() -> Value {
                         }
                     }
                 }
+            }
+        }
+    })
+}
+
+fn table_function_argument_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["name", "required", "values"],
+        "additionalProperties": false,
+        "properties": {
+            "name": { "type": "string" },
+            "required": { "type": "boolean" },
+            "values": {
+                "type": "array",
+                "items": { "type": "string" }
             }
         }
     })
@@ -802,7 +855,7 @@ fn json_object_schema(value: &Value) -> Arc<Map<String, Value>> {
 mod tests {
     use serde_json::{Map, Value};
 
-    use super::{list_catalog_arguments, search_catalog_arguments};
+    use super::{CatalogToolDetail, list_catalog_arguments, search_catalog_arguments};
 
     #[test]
     fn catalog_kind_argument_accepts_null_as_all_kinds() {
@@ -810,9 +863,15 @@ mod tests {
         arguments.insert("kind".to_string(), Value::Null);
         let list = list_catalog_arguments(Some(&arguments)).expect("list arguments");
         assert_eq!(list.kind, None);
+        assert_eq!(list.detail, CatalogToolDetail::Summary);
 
         arguments.insert("pattern".to_string(), Value::String("issue".to_string()));
         let search = search_catalog_arguments(Some(&arguments)).expect("search arguments");
         assert_eq!(search.kind, None);
+        assert_eq!(search.detail, CatalogToolDetail::Summary);
+
+        arguments.insert("detail".to_string(), Value::String("full".to_string()));
+        let search = search_catalog_arguments(Some(&arguments)).expect("full search arguments");
+        assert_eq!(search.detail, CatalogToolDetail::Full);
     }
 }

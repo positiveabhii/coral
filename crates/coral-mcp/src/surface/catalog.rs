@@ -8,10 +8,13 @@ use coral_api::v1::{
 use serde::Serialize;
 use serde_json::{Map, Value};
 
+use super::tools::CatalogToolDetail;
 use super::values::{
     format_schema_table_equivalent, format_sql_identifier, insert_pagination_fields,
     missing_table_summary_value, paged_collection_value,
 };
+
+const DESCRIBE_TABLE_COLUMN_LIMIT: usize = 50;
 
 pub(crate) fn describe_table_value(
     schema: &str,
@@ -91,32 +94,47 @@ fn describe_missing_table_value(
     .expect("missing table value serializes")
 }
 
-pub(crate) fn search_catalog_value(response: &SearchCatalogResponse) -> Value {
+pub(crate) fn search_catalog_value(
+    response: &SearchCatalogResponse,
+    detail: CatalogToolDetail,
+) -> Value {
     let pagination = response.pagination.unwrap_or_default();
     let items = response
         .items
         .iter()
-        .filter_map(catalog_search_result_value)
+        .filter_map(|result| catalog_search_result_value(result, detail))
         .collect::<Vec<_>>();
     paged_collection_value("items", items, &pagination)
 }
 
-pub(crate) fn list_catalog_value(response: &ListCatalogResponse) -> Value {
+pub(crate) fn list_catalog_value(
+    response: &ListCatalogResponse,
+    detail: CatalogToolDetail,
+) -> Value {
     let pagination = response.pagination.unwrap_or_default();
     let items = response
         .items
         .iter()
-        .filter_map(catalog_item_value)
+        .filter_map(|item| catalog_item_value(item, detail))
         .collect::<Vec<_>>();
     paged_collection_value("items", items, &pagination)
 }
 
-fn catalog_item_value(item: &coral_api::v1::CatalogItem) -> Option<Value> {
-    match item.item.as_ref()? {
-        catalog_item::Item::Table(table) => {
+fn catalog_item_value(
+    item: &coral_api::v1::CatalogItem,
+    detail: CatalogToolDetail,
+) -> Option<Value> {
+    match (item.item.as_ref()?, detail) {
+        (catalog_item::Item::Table(table), CatalogToolDetail::Summary) => {
+            serde_json::to_value(CatalogTableSummaryItemValue::from(table)).ok()
+        }
+        (catalog_item::Item::Table(table), CatalogToolDetail::Full) => {
             serde_json::to_value(CatalogTableItemValue::from(table)).ok()
         }
-        catalog_item::Item::TableFunction(function) => {
+        (catalog_item::Item::TableFunction(function), CatalogToolDetail::Summary) => {
+            serde_json::to_value(CatalogTableFunctionSummaryItemValue::from(function)).ok()
+        }
+        (catalog_item::Item::TableFunction(function), CatalogToolDetail::Full) => {
             serde_json::to_value(CatalogTableFunctionItemValue::from(function)).ok()
         }
     }
@@ -134,8 +152,11 @@ fn minimal_table_function_call_example(function: &ProtoTableFunction) -> String 
     format!("{reference}({required_arguments})")
 }
 
-fn catalog_search_result_value(result: &coral_api::v1::CatalogSearchResult) -> Option<Value> {
-    let mut value = catalog_item_value(result.item.as_ref()?)?;
+fn catalog_search_result_value(
+    result: &coral_api::v1::CatalogSearchResult,
+    detail: CatalogToolDetail,
+) -> Option<Value> {
+    let mut value = catalog_item_value(result.item.as_ref()?, detail)?;
     value.as_object_mut()?.insert(
         "matched_fields".to_string(),
         serde_json::to_value(&result.matched_fields).ok()?,
@@ -187,6 +208,8 @@ struct FoundTableValue<'a> {
     guide: &'a str,
     required_filters: &'a [String],
     column_count: usize,
+    columns_returned: usize,
+    columns: Vec<DescribeColumnValue<'a>>,
     columns_hint: &'static str,
 }
 
@@ -201,7 +224,14 @@ impl<'a> From<&'a ProtoTable> for FoundTableValue<'a> {
             guide: &table.guide,
             required_filters: &table.required_filters,
             column_count: table.columns.len(),
-            columns_hint: "Use list_columns with this schema/table to inspect columns.",
+            columns_returned: table.columns.len().min(DESCRIBE_TABLE_COLUMN_LIMIT),
+            columns: table
+                .columns
+                .iter()
+                .take(DESCRIBE_TABLE_COLUMN_LIMIT)
+                .map(DescribeColumnValue::from)
+                .collect(),
+            columns_hint: "Columns are compact and capped. Use list_columns with pattern, required_only, or pagination when you need filtered or exhaustive column discovery.",
         }
     }
 }
@@ -241,6 +271,29 @@ struct SuggestedCallArguments<'a> {
 }
 
 #[derive(Serialize)]
+struct CatalogTableSummaryItemValue<'a> {
+    kind: &'static str,
+    schema_name: &'a str,
+    name: String,
+    sql_reference: String,
+    description: &'a str,
+    required_filters: &'a [String],
+}
+
+impl<'a> From<&'a ProtoTableSummary> for CatalogTableSummaryItemValue<'a> {
+    fn from(table: &'a ProtoTableSummary) -> Self {
+        Self {
+            kind: "table",
+            schema_name: &table.schema_name,
+            name: format!("{}.{}", table.schema_name, table.name),
+            sql_reference: format_schema_table_equivalent(&table.schema_name, &table.name),
+            description: &table.description,
+            required_filters: &table.required_filters,
+        }
+    }
+}
+
+#[derive(Serialize)]
 struct CatalogTableItemValue<'a> {
     kind: &'static str,
     schema_name: &'a str,
@@ -272,6 +325,37 @@ struct CatalogTableValue<'a> {
     table_name: &'a str,
     guide: &'a str,
     required_filters: &'a [String],
+}
+
+#[derive(Serialize)]
+struct CatalogTableFunctionSummaryItemValue<'a> {
+    kind: &'static str,
+    schema_name: &'a str,
+    name: String,
+    sql_reference: String,
+    sql_call_example: String,
+    description: &'a str,
+    arguments: Vec<TableFunctionArgumentValue<'a>>,
+    result_column_count: usize,
+}
+
+impl<'a> From<&'a ProtoTableFunction> for CatalogTableFunctionSummaryItemValue<'a> {
+    fn from(function: &'a ProtoTableFunction) -> Self {
+        Self {
+            kind: "table_function",
+            schema_name: &function.schema_name,
+            name: format!("{}.{}", function.schema_name, function.name),
+            sql_reference: format_schema_table_equivalent(&function.schema_name, &function.name),
+            sql_call_example: minimal_table_function_call_example(function),
+            description: &function.description,
+            arguments: function
+                .arguments
+                .iter()
+                .map(TableFunctionArgumentValue::from)
+                .collect(),
+            result_column_count: function.result_columns.len(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -350,6 +434,25 @@ impl<'a> From<&'a ProtoTableFunctionResultColumn> for TableFunctionResultColumnV
             data_type: &column.data_type,
             is_nullable: column.nullable,
             description: &column.description,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct DescribeColumnValue<'a> {
+    column_name: &'a str,
+    data_type: &'a str,
+    is_virtual: bool,
+    is_required_filter: bool,
+}
+
+impl<'a> From<&'a coral_api::v1::Column> for DescribeColumnValue<'a> {
+    fn from(column: &'a coral_api::v1::Column) -> Self {
+        Self {
+            column_name: &column.name,
+            data_type: &column.data_type,
+            is_virtual: column.is_virtual,
+            is_required_filter: column.is_required_filter,
         }
     }
 }

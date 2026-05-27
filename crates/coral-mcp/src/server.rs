@@ -304,7 +304,7 @@ impl CoralMcpServer {
                 }),
             }))
             .await
-            .map(|response| search_catalog_value(&response.into_inner()))
+            .map(|response| search_catalog_value(&response.into_inner(), arguments.detail))
         {
             Ok(value) => Ok(ToolCallOutcome::Success(value)),
             Err(status) if status.code() == tonic::Code::InvalidArgument => {
@@ -334,7 +334,7 @@ impl CoralMcpServer {
                 }),
             }))
             .await
-            .map(|response| list_catalog_value(&response.into_inner()));
+            .map(|response| list_catalog_value(&response.into_inner(), arguments.detail));
         Ok(ToolCallOutcome::from_value_result(
             "Catalog listing",
             result,
