@@ -65,13 +65,6 @@ export const section = style({
   gap: 8,
 })
 
-export const sectionHead = style({
-  alignItems: 'center',
-  display: 'flex',
-  gap: 8,
-  justifyContent: 'space-between',
-})
-
 export const bindingList = style({
   background: theme.surface.onMainContent,
   border: `1px solid ${theme.stroke.secondary}`,
@@ -100,23 +93,6 @@ export const keyValueText = style({
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
   fontSize: 12,
   wordBreak: 'break-all',
-})
-
-export const validateBox = style({
-  alignItems: 'flex-start',
-  background: theme.surface.onMainContent,
-  border: `1px solid ${theme.stroke.secondary}`,
-  borderRadius: 8,
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-  padding: 12,
-})
-
-export const validateRow = style({
-  alignItems: 'center',
-  display: 'flex',
-  gap: 8,
 })
 
 export const alertError = style({

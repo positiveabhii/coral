@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 
-import type { Source, ValidateSourceResponse } from '@/generated/coral/v1/sources_pb'
+import type { Source } from '@/generated/coral/v1/sources_pb'
 
 import { Container as ButtonContainer } from '@/wax/components/button/container'
 import { Icon as ButtonIcon } from '@/wax/components/button/icon'
@@ -15,17 +15,10 @@ import {
   deleteSource,
   getInstalledSource,
   originLabel,
-  validateSource,
   type SourceOriginLabel,
 } from '@/lib/sources'
 
 import * as styles from './source-detail.css'
-
-type ValidationState =
-  | { kind: 'idle' }
-  | { kind: 'busy' }
-  | { kind: 'ok'; tableCount: number; functionCount: number }
-  | { kind: 'failed'; message: string }
 
 export function SourceDetailDialog({
   name,
@@ -68,7 +61,6 @@ function SourceDetailDialogContent({
 }) {
   const [source, setSource] = useState<Source | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [validation, setValidation] = useState<ValidationState>({ kind: 'idle' })
   const [confirmingRemove, setConfirmingRemove] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
@@ -79,31 +71,6 @@ function SourceDetailDialogContent({
       .catch((e) => !cancelled && setLoadError(e instanceof Error ? e.message : String(e)))
     return () => {
       cancelled = true
-    }
-  }, [name])
-
-  const onValidate = useCallback(async () => {
-    setValidation({ kind: 'busy' })
-    try {
-      const result: ValidateSourceResponse = await validateSource(name)
-      const failed = result.queryTests.find((q) => q.outcome.case === 'failure')
-      if (failed && failed.outcome.case === 'failure') {
-        setValidation({
-          kind: 'failed',
-          message: failed.outcome.value.errorMessage || 'Validation failed',
-        })
-      } else {
-        setValidation({
-          kind: 'ok',
-          tableCount: result.tables.length,
-          functionCount: result.tableFunctions.length,
-        })
-      }
-    } catch (e) {
-      setValidation({
-        kind: 'failed',
-        message: e instanceof Error ? e.message : String(e),
-      })
     }
   }, [name])
 
@@ -189,10 +156,7 @@ function SourceDetailDialogContent({
       {!source && !loadError ? (
         <Typography.BodySmall variant="tertiary">Loading…</Typography.BodySmall>
       ) : !source ? null : (
-        <>
-          <Bindings source={source} />
-          <Validation state={validation} onValidate={onValidate} />
-        </>
+        <Bindings source={source} />
       )}
 
       <Dialog.Actions>
@@ -227,50 +191,6 @@ function Bindings({ source }: { source: Source }) {
               <span className={styles.keyValueText}>•••••••• (secret)</span>
             </div>
           ))}
-        </div>
-      )}
-    </section>
-  )
-}
-
-function Validation({ state, onValidate }: { state: ValidationState; onValidate: () => void }) {
-  return (
-    <section className={styles.section}>
-      <div className={styles.sectionHead}>
-        <Typography.HeadingXSmall as="h3">Connection</Typography.HeadingXSmall>
-        <ButtonContainer
-          variant="secondary"
-          size="32"
-          onClick={onValidate}
-          disabled={state.kind === 'busy'}
-        >
-          <ButtonIcon name={state.kind === 'busy' ? 'Loader' : 'RefreshCw'} />
-          <ButtonText>{state.kind === 'busy' ? 'Validating…' : 'Validate'}</ButtonText>
-        </ButtonContainer>
-      </div>
-      {state.kind === 'idle' ? (
-        <Typography.BodySmall variant="tertiary">
-          Run the source's authored test queries to confirm it's reachable.
-        </Typography.BodySmall>
-      ) : state.kind === 'busy' ? (
-        <Typography.BodySmall variant="tertiary">Running test queries…</Typography.BodySmall>
-      ) : state.kind === 'ok' ? (
-        <div className={styles.validateBox}>
-          <div className={styles.validateRow}>
-            <Icon name="CircleCheck" size="16" color="success" />
-            <Typography.BodySmall variant="primary">Ready</Typography.BodySmall>
-          </div>
-          <Typography.BodySmall variant="tertiary">
-            {state.tableCount} table{state.tableCount === 1 ? '' : 's'}
-            {state.functionCount > 0
-              ? ` · ${state.functionCount} function${state.functionCount === 1 ? '' : 's'}`
-              : null}
-          </Typography.BodySmall>
-        </div>
-      ) : (
-        <div className={styles.alertError}>
-          <Icon name="CircleAlert" size="14" color="inherit" />
-          <Typography.BodySmall>{state.message}</Typography.BodySmall>
         </div>
       )}
     </section>

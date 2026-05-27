@@ -9,7 +9,6 @@ import {
   GetSourceRequestSchema,
   ListSourcesRequestSchema,
   SourceOrigin,
-  ValidateSourceRequestSchema,
   type OAuthCredentialRetrieval,
   type Source,
   type SourceInfo,
@@ -97,12 +96,6 @@ export async function getInstalledSource(name: string): Promise<Source> {
 
 export async function deleteSource(name: string): Promise<void> {
   await sourceClient.deleteSource(create(DeleteSourceRequestSchema, { workspace: WORKSPACE, name }))
-}
-
-export async function validateSource(name: string) {
-  return sourceClient.validateSource(
-    create(ValidateSourceRequestSchema, { workspace: WORKSPACE, name }),
-  )
 }
 
 function splitBindings(inputs: InstallInput[]) {

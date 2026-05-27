@@ -21,13 +21,13 @@ Community sources are explicitly **out of scope for this PR**. See §3.
   - `DiscoverSources` — bundled catalog
   - `ListSources` / `GetSource` / `GetSourceInfo` — installed + per-source detail
   - `CreateBundledSource` / `CreateBundledSourceWithOAuth` (streaming) — install
-  - `ValidateSource` / `DeleteSource` — detail actions
+  - `DeleteSource` — detail action
 
 ### UI (`ui/src/`)
-- Hash router (`lib/router.ts`) with `traces`, `sources`, `source-install/:name`, `source-detail/:name` routes. Navbar gains a Sources entry with route-aware active state.
+- Hash router (`lib/router.ts`) gains a `sources` route. Install and detail are dialogs rendered on the sources page, not separate URLs. Navbar gains a Sources entry with route-aware active state.
 - **Sources index** (`views/sources/sources-index.tsx`) — centered max-width-960 layout modelled on `adp/web/src/views/plugins-view.tsx`. Flat alphabetical list with **Connected** above **Available**, both filtered by the same search box. Round provider logo, capitalised name, green Connected pill or grey Core pill in the header, 2-line description, version footer.
 - **Install / credential form** (`views/sources/source-install.tsx`) — layout ported from `adp/web/src/components/credential-form.tsx`. Centered max-width-720 page with round logo + capitalised name + Core pill at the top, description below; 2-column grid of fields with sentence-case labels (`API_TOKEN` → "Api token") and manifest `hint` rendered as secondary text; multi-method secrets get a compact segmented control; right-aligned action row with bare Cancel + primary Save.
-- **Installed-source detail** (`views/sources/source-detail.tsx`) — read-only surface: configured variables, masked secret keys, Validate (runs the manifest's test queries), Remove behind an inline confirm.
+- **Installed-source detail** (`views/sources/source-detail.tsx`) — read-only surface: configured variables, masked secret keys, Remove behind an inline confirm.
 - **Wax dialog primitives** (`wax/components/dialog/*`) — ported from ADP, **not yet used** in v1. Available for the follow-up modal-install pattern if we go that way.
 
 ## 3. Community sources — follow-up PR

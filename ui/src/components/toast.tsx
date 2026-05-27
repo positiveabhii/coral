@@ -41,7 +41,6 @@ export function ToastHost() {
     }
   }, [])
 
-  if (items.length === 0) return null
   return (
     <div className={styles.host} aria-live="polite">
       {items.map((t) => (

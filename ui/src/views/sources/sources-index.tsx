@@ -31,17 +31,19 @@ export function SourcesIndex() {
   const [detailName, setDetailName] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
-    try {
-      const [installedRes, bundledRes] = await Promise.all([
-        listInstalledSources(),
-        discoverBundled(),
-      ])
-      setInstalled(installedRes)
-      setBundled(bundledRes)
-      setError(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    }
+    const [installedRes, bundledRes] = await Promise.allSettled([
+      listInstalledSources(),
+      discoverBundled(),
+    ])
+    if (installedRes.status === 'fulfilled') setInstalled(installedRes.value)
+    if (bundledRes.status === 'fulfilled') setBundled(bundledRes.value)
+    const failure =
+      installedRes.status === 'rejected'
+        ? installedRes.reason
+        : bundledRes.status === 'rejected'
+          ? bundledRes.reason
+          : null
+    setError(failure ? (failure instanceof Error ? failure.message : String(failure)) : null)
   }, [])
 
   useEffect(() => {

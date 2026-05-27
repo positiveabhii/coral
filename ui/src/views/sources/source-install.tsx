@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import {
   OAuthCredentialRetrievalSchema,
-  type OAuthAuthorizationCodeCredentialMethod,
+  type OAuthCredentialMethod,
   type SourceCredentialMethod,
   type SourceInputSpec,
 } from '@/generated/coral/v1/sources_pb'
@@ -98,7 +98,7 @@ function SourceInstallDialogContent({
 
   const inputs: SourceInputSpec[] = resolved?.info.inputs ?? []
   const icon = providerIcon(name)
-  const busy = progress.kind !== 'idle' && progress.kind !== 'oauth-completed'
+  const busy = progress.kind !== 'idle'
 
   const effectiveChoice = (input: SourceInputSpec): number => methodChoices[input.key] ?? 0
 
@@ -116,7 +116,7 @@ function SourceInstallDialogContent({
         if (!method || method.method.case === 'sourceConfig') {
           return (values[input.key] ?? '').trim().length > 0
         }
-        if (method.method.case === 'oauthAuthorizationCode') {
+        if (method.method.case === 'oauth') {
           return oauthMethodReady(method.method.value, values)
         }
       }
@@ -147,7 +147,7 @@ function SourceInstallDialogContent({
           if (value.length > 0) bindings.push({ key: input.key, value, secret: true })
           continue
         }
-        if (method.method.case === 'oauthAuthorizationCode') {
+        if (method.method.case === 'oauth') {
           retrievalProtos.push(
             create(OAuthCredentialRetrievalSchema, {
               inputKey: input.key,
@@ -344,7 +344,7 @@ function InputRow({
           placeholder={formatFieldName(input.key)}
           disabled={disabled}
         />
-      ) : selected.method.case === 'oauthAuthorizationCode' ? (
+      ) : selected.method.case === 'oauth' ? (
         <OAuthFields
           oauth={selected.method.value}
           values={values}
@@ -380,29 +380,29 @@ function OAuthFields({
   disabled,
   onValueChange,
 }: {
-  oauth: OAuthAuthorizationCodeCredentialMethod
+  oauth: OAuthCredentialMethod
   values: Record<string, string>
   disabled: boolean
   onValueChange: (key: string, value: string) => void
 }) {
-  const requiredInputs = oauthRequiredInputs(oauth)
-  if (requiredInputs.length === 0) {
+  const fields = oauthInputs(oauth)
+  if (fields.length === 0) {
     return (
       <Typography.BodySmall variant="secondary">
-        Click Save to open your browser and complete sign-in.
+        Click Add source to open your browser and complete sign-in.
       </Typography.BodySmall>
     )
   }
   return (
     <div className={styles.oauthFields}>
-      {requiredInputs.map(({ key, secret }) => (
+      {fields.map(({ key, secret, defaultValue }) => (
         <div key={key} className={styles.fieldItem}>
           <Typography.Body className={styles.fieldLabel}>{formatFieldName(key)}</Typography.Body>
           <TextInput
             type={secret ? 'password' : 'text'}
             value={values[key] ?? ''}
             onChange={(value) => onValueChange(key, value)}
-            placeholder={formatFieldName(key)}
+            placeholder={defaultValue || formatFieldName(key)}
             disabled={disabled}
           />
         </div>
@@ -440,48 +440,57 @@ function OAuthProgress({
 function methodLabel(method: SourceCredentialMethod, index: number): string {
   if (method.label) return method.label
   if (method.method.case === 'sourceConfig') return 'Paste token'
-  if (method.method.case === 'oauthAuthorizationCode') return 'OAuth'
+  if (method.method.case === 'oauth') return 'OAuth'
   return `Method ${index + 1}`
 }
 
 function isOAuth(method: SourceCredentialMethod | undefined): boolean {
-  return method?.method.case === 'oauthAuthorizationCode'
+  return method?.method.case === 'oauth'
 }
 
-function oauthRequiredInputs(
-  oauth: OAuthAuthorizationCodeCredentialMethod,
-): { key: string; secret: boolean }[] {
-  const out: { key: string; secret: boolean }[] = []
+interface OAuthInput {
+  key: string
+  secret: boolean
+  defaultValue?: string
+  required: boolean
+}
+
+function oauthInputs(oauth: OAuthCredentialMethod): OAuthInput[] {
+  const out: OAuthInput[] = []
   const id = oauth.client?.id
-  if (id?.input && !id.defaultValue) {
-    out.push({ key: id.input, secret: false })
+  if (id?.input) {
+    out.push({
+      key: id.input,
+      secret: false,
+      defaultValue: id.defaultValue,
+      required: !id.defaultValue,
+    })
   }
   const secret = oauth.client?.secret
   if (secret?.input) {
-    out.push({ key: secret.input, secret: true })
+    out.push({ key: secret.input, secret: true, required: true })
   }
   return out
 }
 
-function oauthMethodReady(
-  oauth: OAuthAuthorizationCodeCredentialMethod,
-  values: Record<string, string>,
-): boolean {
-  return oauthRequiredInputs(oauth).every(({ key }) => (values[key] ?? '').trim().length > 0)
+function oauthMethodReady(oauth: OAuthCredentialMethod, values: Record<string, string>): boolean {
+  return oauthInputs(oauth)
+    .filter((input) => input.required)
+    .every(({ key }) => (values[key] ?? '').trim().length > 0)
 }
 
 function oauthCredentialInputs(
-  oauth: OAuthAuthorizationCodeCredentialMethod,
+  oauth: OAuthCredentialMethod,
   values: Record<string, string>,
 ): { key: string; value: string }[] {
-  return oauthRequiredInputs(oauth)
+  return oauthInputs(oauth)
     .map(({ key }) => ({ key, value: (values[key] ?? '').trim() }))
     .filter((entry) => entry.value.length > 0)
 }
 
 function busyLabel(progress: InstallProgress): string {
-  if (progress.kind === 'busy') return 'Saving…'
+  if (progress.kind === 'busy') return 'Adding…'
   if (progress.kind === 'awaiting-oauth') return 'Awaiting OAuth…'
   if (progress.kind === 'oauth-completed') return 'Finishing…'
-  return 'Save credentials'
+  return 'Add source'
 }
