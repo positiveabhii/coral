@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/withcoral/coral/compare/v0.4.1...v0.4.2) (2026-05-27)
+
+
+### Features
+
+* **sources/community/universities:** add Universities List source ([#858](https://github.com/withcoral/coral/issues/858)) ([0f23944](https://github.com/withcoral/coral/commit/0f239441e4edf3a70081d3cf62346dfb28c0d230))
+
 ## [0.4.1](https://github.com/withcoral/coral/compare/v0.4.0...v0.4.1) (2026-05-27)
 
 
