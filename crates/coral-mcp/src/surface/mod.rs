@@ -8,16 +8,16 @@ mod tools;
 mod values;
 
 pub(crate) use catalog::{
-    describe_table_value, list_catalog_value, list_columns_value, search_catalog_value,
-    search_columns_value,
+    catalog_resource_content, describe_table_value, list_catalog_value, list_columns_value,
+    search_catalog_value, search_columns_value,
 };
 pub(crate) use discovery::{Pagination, parse_pagination, parse_pagination_with_limits};
 pub(crate) use errors::{
     internal_status, status_to_error_data, tool_error_from_status, tool_error_result,
 };
 pub(crate) use resources::{
-    guide_resource, guide_resource_content, initial_instructions, tables_resource,
-    tables_resource_content,
+    catalog_resource, guide_resource, guide_resource_content, initial_instructions,
+    tables_resource, tables_resource_content,
 };
 pub(crate) use tools::{
     CatalogToolKind, build_tool_result, describe_table_arguments, describe_table_tool,

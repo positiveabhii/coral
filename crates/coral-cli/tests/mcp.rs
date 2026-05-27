@@ -87,6 +87,17 @@ fn text_content(result: &rmcp::model::ReadResourceResult) -> &str {
     }
 }
 
+fn text_mime_type(result: &rmcp::model::ReadResourceResult) -> Option<&str> {
+    match &result.contents[0] {
+        rmcp::model::ResourceContents::TextResourceContents { mime_type, .. } => {
+            mime_type.as_deref()
+        }
+        other @ rmcp::model::ResourceContents::BlobResourceContents { .. } => {
+            panic!("unexpected resource contents: {other:?}")
+        }
+    }
+}
+
 async fn structured_tool_content(
     client: &RunningService<RoleClient, ()>,
     request: CallToolRequestParams,
@@ -94,6 +105,17 @@ async fn structured_tool_content(
     let result = client.call_tool(request).await?;
     assert_eq!(result.is_error, Some(false));
     Ok(result.structured_content.expect("structured content"))
+}
+
+async fn read_json_resource(
+    client: &RunningService<RoleClient, ()>,
+    uri: &str,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    let resource = client
+        .read_resource(ReadResourceRequestParams::new(uri.to_string()))
+        .await?;
+    assert_eq!(text_mime_type(&resource), Some("application/json"));
+    Ok(serde_json::from_str(text_content(&resource))?)
 }
 
 async fn write_jsonrpc_message(
@@ -297,7 +319,7 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
             .iter()
             .map(|resource| resource.uri.as_str())
             .collect::<Vec<_>>(),
-        vec!["coral://guide", "coral://tables"]
+        vec!["coral://guide", "coral://catalog", "coral://tables"]
     );
     assert!(
         server.list_sources_requests().is_empty(),
@@ -318,6 +340,15 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
         "FROM coral.columns WHERE schema_name = 'local_messages' AND table_name = 'events'"
     ));
 
+    let catalog_json = read_json_resource(&client, "coral://catalog").await?;
+    assert_eq!(catalog_json["total"], 3);
+    assert_eq!(catalog_json["items"][0]["kind"], "table");
+    assert_eq!(catalog_json["items"][0]["name"], "local_messages.events");
+    assert_eq!(
+        catalog_json["items"][0]["sql_reference"],
+        "local_messages.events"
+    );
+
     let tables = client
         .read_resource(ReadResourceRequestParams::new("coral://tables"))
         .await?;
@@ -330,13 +361,29 @@ async fn mcp_stdio_lists_tools_and_resources() -> Result<(), Box<dyn std::error:
     );
     assert_eq!(
         server.list_catalog_requests().len(),
-        2,
-        "guide and tables resources should fetch live catalog metadata when read"
+        3,
+        "guide, catalog, and tables resources should fetch live catalog metadata when read"
     );
+    assert_catalog_resource_requests(&server);
 
     client.cancel().await?;
     server.shutdown().await;
     Ok(())
+}
+
+fn assert_catalog_resource_requests(server: &MockServer) {
+    let list_catalog_requests = server.list_catalog_requests();
+    let catalog_request = &list_catalog_requests[1];
+    assert_eq!(catalog_request.schema_name, "");
+    assert_eq!(catalog_request.kind, 0);
+    let catalog_pagination = catalog_request
+        .pagination
+        .as_ref()
+        .expect("catalog resource pagination");
+    assert_eq!(catalog_pagination.limit, 0);
+    assert_eq!(catalog_pagination.offset, 0);
+    let tables_request = &list_catalog_requests[2];
+    assert_eq!(tables_request.kind, 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]

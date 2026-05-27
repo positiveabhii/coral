@@ -120,6 +120,12 @@ pub(crate) fn list_catalog_value(
     paged_collection_value("items", items, &pagination)
 }
 
+pub(crate) fn catalog_resource_content(
+    response: &ListCatalogResponse,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(&list_catalog_value(response, CatalogToolDetail::Summary))
+}
+
 fn catalog_item_value(
     item: &coral_api::v1::CatalogItem,
     detail: CatalogToolDetail,

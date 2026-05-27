@@ -12,7 +12,7 @@
 //! The exposed MCP surface is intentionally small:
 //!
 //! - tools: `sql`, paginated `list_catalog`, `search_catalog`, `describe_table`, `list_columns`, `search_columns`, and optionally `feedback`
-//! - resources: `coral://guide`, `coral://tables`
+//! - resources: `coral://guide`, `coral://catalog`, `coral://tables`
 //!
 //! Protocol lifecycle, initialization, and stdio transport behavior should stay
 //! inside the SDK integration rather than being reimplemented locally.

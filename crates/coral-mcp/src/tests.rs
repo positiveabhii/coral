@@ -251,6 +251,17 @@ fn text_content(result: &rmcp::model::ReadResourceResult) -> &str {
     }
 }
 
+fn text_mime_type(result: &rmcp::model::ReadResourceResult) -> Option<&str> {
+    match &result.contents[0] {
+        rmcp::model::ResourceContents::TextResourceContents { mime_type, .. } => {
+            mime_type.as_deref()
+        }
+        other @ rmcp::model::ResourceContents::BlobResourceContents { .. } => {
+            panic!("unexpected resource contents: {other:?}")
+        }
+    }
+}
+
 fn tool_by_name<'a>(tools: &'a [Tool], name: &str) -> &'a Tool {
     tools
         .iter()
@@ -333,7 +344,7 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .iter()
             .map(|resource| resource.uri.as_str())
             .collect::<Vec<_>>(),
-        vec!["coral://guide", "coral://tables"]
+        vec!["coral://guide", "coral://catalog", "coral://tables"]
     );
     assert!(
         initial_resources[0]
@@ -341,6 +352,13 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .as_deref()
             .expect("guide description")
             .contains("generated from currently configured sources")
+    );
+    assert!(
+        initial_resources[1]
+            .description
+            .as_deref()
+            .expect("catalog description")
+            .contains("tables and table functions")
     );
 
     let initial_guide = client
@@ -394,6 +412,25 @@ async fn mcp_surface_refreshes_and_renders_dynamic_guide() {
             .as_deref()
             .expect("guide description")
             .contains("generated from currently configured sources")
+    );
+
+    let catalog_resource = client
+        .read_resource(ReadResourceRequestParams::new("coral://catalog"))
+        .await
+        .expect("read catalog resource");
+    assert_eq!(text_mime_type(&catalog_resource), Some("application/json"));
+    let catalog_resource_text = text_content(&catalog_resource);
+    let catalog_resource_json = serde_json::from_str::<serde_json::Value>(catalog_resource_text)
+        .expect("parse catalog resource");
+    assert_eq!(catalog_resource_json["total"], 3);
+    assert_eq!(catalog_resource_json["items"][0]["kind"], "table");
+    assert_eq!(
+        catalog_resource_json["items"][0]["name"],
+        "local_messages.events"
+    );
+    assert_eq!(
+        catalog_resource_json["items"][0]["sql_reference"],
+        "local_messages.events"
     );
 
     let tables_resource = client
@@ -883,6 +920,29 @@ async fn list_catalog_surfaces_table_functions() {
     assert_eq!(catalog["items"][1]["kind"], "table");
     assert_eq!(catalog["items"][1]["name"], "searchy.placeholder");
     assert_matches_output_schema(catalog_tool, &catalog);
+
+    let catalog_resource = client
+        .read_resource(ReadResourceRequestParams::new("coral://catalog"))
+        .await
+        .expect("read catalog resource");
+    assert_eq!(text_mime_type(&catalog_resource), Some("application/json"));
+    let catalog_resource_json: Value =
+        serde_json::from_str(text_content(&catalog_resource)).expect("catalog resource JSON");
+    assert_eq!(catalog_resource_json["total"], 3);
+    assert_eq!(catalog_resource_json["items"][0]["kind"], "table_function");
+    assert_eq!(
+        catalog_resource_json["items"][0]["name"],
+        "searchy.lookup_issue"
+    );
+    assert_eq!(
+        catalog_resource_json["items"][0]["sql_call_example"],
+        "searchy.lookup_issue(number => '<value>')"
+    );
+    assert_eq!(
+        catalog_resource_json["items"][0]["arguments"][0]["name"],
+        "number"
+    );
+    assert_eq!(catalog_resource_json["items"][1]["kind"], "table");
 
     let full_functions = client
         .call_tool(

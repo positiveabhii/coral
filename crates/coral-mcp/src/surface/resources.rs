@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::values::queryable_table_summary_values;
 
-static INITIAL_INSTRUCTIONS: &str = "You are connected to Coral, a read-only SQL database. Treat exposed data as database schemas, tables, and table functions. Use `list_catalog` and `search_catalog` as catalog helpers, use `search_columns` when you know a field but not the table, use `describe_table` and `list_columns` for table-specific metadata, use `sql` against `coral.tables`, `coral.columns`, `coral.filters`, `coral.table_functions`, and `coral.inputs` for deeper discovery, then answer with set-based SQL through `sql`. Prefer one SQL statement with joins, CROSS JOIN, CTEs, subqueries, and aggregates over row-by-row tool calls.";
+static INITIAL_INSTRUCTIONS: &str = "You are connected to Coral, a read-only SQL database. Treat exposed data as database schemas, tables, and table functions. Read `coral://catalog` when you need a compact all-source table and table-function index. Use `list_catalog` and `search_catalog` as catalog helpers, use `search_columns` when you know a field but not the table, use `describe_table` and `list_columns` for table-specific metadata, use `sql` against `coral.tables`, `coral.columns`, `coral.filters`, `coral.table_functions`, and `coral.inputs` for deeper discovery, then answer with set-based SQL through `sql`. Prefer one SQL statement with joins, CROSS JOIN, CTEs, subqueries, and aggregates over row-by-row tool calls.";
 static GUIDE_TEMPLATE: &str = include_str!("../guide_template.md");
 
 pub(crate) fn initial_instructions() -> &'static str {
@@ -25,6 +25,13 @@ pub(crate) fn guide_resource() -> Resource {
 pub(crate) fn tables_resource() -> Resource {
     RawResource::new("coral://tables", "tables")
         .with_description(tables_resource_description())
+        .with_mime_type("application/json")
+        .no_annotation()
+}
+
+pub(crate) fn catalog_resource() -> Resource {
+    RawResource::new("coral://catalog", "catalog")
+        .with_description(catalog_resource_description())
         .with_mime_type("application/json")
         .no_annotation()
 }
@@ -94,6 +101,10 @@ fn guide_resource_description() -> &'static str {
 
 fn tables_resource_description() -> &'static str {
     "JSON summaries of fully qualified database tables generated from currently configured sources when read."
+}
+
+fn catalog_resource_description() -> &'static str {
+    "JSON summaries of database tables and table functions generated from currently configured sources when read."
 }
 
 fn first_visible_table(tables: &[TableSummary]) -> Option<(&str, &str)> {
@@ -170,7 +181,7 @@ mod tests {
         assert!(content.contains("- slack"));
         assert!(
             content.contains(
-                "Use each table's `sql_reference` from `list_catalog` or `coral://tables`"
+                "Use each table's `sql_reference` from `list_catalog`, `coral://catalog`, or `coral://tables`"
             )
         );
     }
