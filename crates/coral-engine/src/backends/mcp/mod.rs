@@ -6,6 +6,7 @@ mod fetch;
 mod function;
 mod provider;
 mod response;
+mod trace;
 mod transport;
 
 pub(crate) use error::McpProviderQueryError;
@@ -48,16 +49,20 @@ pub(crate) fn compile_manifest(
         &request.source_secrets,
         &request.source_variables,
     ));
+    let body_capture =
+        self::trace::McpBodyCapture::new(request.runtime_context.body_capture_max_bytes);
     let caller: Arc<dyn McpToolCaller> = match &manifest.server {
         McpServerSpec::Stdio { .. } => Arc::new(StdioMcpToolCaller {
             source_name: manifest.common.name.clone(),
             server: manifest.server.clone(),
             resolved_inputs: Arc::clone(&resolved_inputs),
+            body_capture,
         }),
         McpServerSpec::StreamableHttp { .. } => Arc::new(StreamableHttpMcpToolCaller {
             source_name: manifest.common.name.clone(),
             server: manifest.server.clone(),
             resolved_inputs: Arc::clone(&resolved_inputs),
+            body_capture,
         }),
     };
     compile_source_with_caller(
