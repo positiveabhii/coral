@@ -233,6 +233,7 @@ enum CredentialStreamEvent {
     OAuthAuthorization {
         input_key: String,
         authorization_url: String,
+        user_code: String,
     },
     OAuthCompleted,
 }
@@ -248,6 +249,7 @@ impl From<create_bundled_source_with_o_auth_response::Event> for CredentialStrea
             ) => Self::OAuthAuthorization {
                 input_key: authorization.input_key,
                 authorization_url: authorization.authorization_url,
+                user_code: authorization.user_code,
             },
             create_bundled_source_with_o_auth_response::Event::OauthCompleted(_) => {
                 Self::OAuthCompleted
@@ -264,6 +266,7 @@ impl From<import_source_response::Event> for CredentialStreamEvent {
                 Self::OAuthAuthorization {
                     input_key: authorization.input_key,
                     authorization_url: authorization.authorization_url,
+                    user_code: authorization.user_code,
                 }
             }
             import_source_response::Event::OauthCompleted(_) => Self::OAuthCompleted,
@@ -279,13 +282,18 @@ fn handle_credential_stream_event(
         Some(CredentialStreamEvent::OAuthAuthorization {
             input_key,
             authorization_url,
+            user_code,
         }) => {
             let label = oauth_labels
                 .get(&input_key)
                 .map_or(input_key.as_str(), String::as_str);
             println!("Open this URL to connect {label}:");
             println!("{authorization_url}");
-            spawn_oauth_redirect_paste_prompt(&authorization_url, label);
+            if user_code.is_empty() {
+                spawn_oauth_redirect_paste_prompt(&authorization_url, label);
+            } else {
+                println!("Enter this code when prompted: {user_code}");
+            }
             if let Err(err) = crate::browser::open_url(&authorization_url) {
                 println!("{}", style(format!("Could not open browser: {err}")).dim());
             }
